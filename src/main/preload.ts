@@ -1,0 +1,47 @@
+// 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
+// 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
+import { contextBridge, ipcRenderer } from 'electron';
+import type { Macro, ExtractRow, RunResult } from '../core/macro-types';
+import type { LogMessage } from '../core/logger';
+import type { GenerateInput, GenerateResult, ProfileSummary } from '../core/ai-extract';
+
+/** AI 配置档列表返回结构 */
+export interface AiProfilesInfo {
+    profiles: ProfileSummary[];
+    defaultProfile: string;
+}
+type AiGenerateInput = GenerateInput;
+type AiGenerateResult = GenerateResult;
+
+const api = {
+    /** 获取 webview 录制 preload 的绝对路径 */
+    getWebviewPreloadPath: (): Promise<string> => ipcRenderer.invoke('get-webview-preload-path'),
+
+    /** 保存宏(弹出保存对话框),返回写入路径或 null(取消) */
+    saveMacro: (macro: Macro): Promise<string | null> => ipcRenderer.invoke('save-macro', macro),
+
+    /** 加载宏(弹出打开对话框),返回 Macro 或 null(取消) */
+    loadMacro: (): Promise<Macro | null> => ipcRenderer.invoke('load-macro'),
+
+    /** 运行宏,返回结构化结果 */
+    runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),
+
+    /** 导出 Excel(弹出保存对话框),返回文件路径或 null(取消) */
+    exportExcel: (rows: ExtractRow[]): Promise<string | null> => ipcRenderer.invoke('export-excel', rows),
+
+    /** 列出 AI 配置档 */
+    aiListProfiles: (): Promise<AiProfilesInfo> => ipcRenderer.invoke('ai-list-profiles'),
+
+    /** 调用 AI 生成提取规则 */
+    aiGenerateExtract: (input: AiGenerateInput): Promise<AiGenerateResult> =>
+        ipcRenderer.invoke('ai-generate-extract', input),
+
+    /** 订阅主进程日志推送 */
+    onLog: (callback: (msg: LogMessage) => void): void => {
+        ipcRenderer.on('log', (_event, msg: LogMessage) => callback(msg));
+    },
+};
+
+contextBridge.exposeInMainWorld('electronAPI', api);
+
+export type ElectronAPI = typeof api;

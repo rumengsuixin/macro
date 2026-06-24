@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# 运行时产物
+exports/
+errors/
+macros/
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db

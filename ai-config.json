@@ -1,0 +1,16 @@
+{
+    "defaultProfile": "webextract",
+    "profiles": [
+        {
+            "id": "webextract",
+            "label": "网页提取 Agent(webextract)",
+            "agentId": "webextract",
+            "sessionKeyPrefix": "agent:webextract:macro:extract",
+            "timeout": 120000
+        }
+    ],
+    "openclaw": {},
+    "systemPrompt": "只输出一个 JSON 对象作为网页提取规则,不要任何解释、前言或 Markdown 代码块标记。",
+    "promptTemplate": "采集需求:{requirement}\n\n网页 HTML:\n{html}",
+    "cleanHtml": true
+}

@@ -1,0 +1,145 @@
+// 宏 DSL 的 TypeScript 类型定义。
+// 所有宏均以 JSON 形式保存,不保存 JS 代码。
+
+/** 步骤类型 */
+export type StepType =
+    | 'goto'
+    | 'click'
+    | 'fill'
+    | 'press'
+    | 'scroll'
+    | 'waitForSelector';
+
+/** 打开网址 */
+export interface GotoStep {
+    type: 'goto';
+    url: string;
+}
+
+/** 点击元素 */
+export interface ClickStep {
+    type: 'click';
+    selector: string;
+}
+
+/** 输入文本 */
+export interface FillStep {
+    type: 'fill';
+    selector: string;
+    value: string;
+}
+
+/** 按键(如 Enter)。selector 可选:有则聚焦该元素后按键,无则全局按键 */
+export interface PressStep {
+    type: 'press';
+    selector?: string;
+    key: string;
+}
+
+/** 滚动到指定坐标(窗口滚动位置) */
+export interface ScrollStep {
+    type: 'scroll';
+    x: number;
+    y: number;
+}
+
+/** 等待元素出现 */
+export interface WaitForSelectorStep {
+    type: 'waitForSelector';
+    selector: string;
+    timeout?: number;
+}
+
+/** 翻页标记:可附加到任意步骤 */
+export interface StepFlags {
+    /** 标记为翻页动作:正常回放时跳过;提取翻页时按序执行 */
+    pagination?: boolean;
+    /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次);仅 pagination=true 时有效 */
+    pageCount?: number;
+}
+
+/** 步骤可辨识联合(交叉 StepFlags 以携带翻页标记,仍保持 type 可辨识) */
+export type Step = StepFlags & (
+    | GotoStep
+    | ClickStep
+    | FillStep
+    | PressStep
+    | ScrollStep
+    | WaitForSelectorStep
+);
+
+/** 字段提取类型 */
+export type FieldType = 'text' | 'html' | 'attr' | 'href' | 'src';
+
+/** 提取字段定义 */
+export interface ExtractField {
+    name: string;
+    /** 字段选择器;列表模式下留空则取列表项本身 */
+    selector: string;
+    type: FieldType;
+    /** 当 type 为 attr 时,指定要提取的属性名 */
+    attr?: string;
+}
+
+/** 单字段提取(整页) */
+export interface SingleExtractConfig {
+    mode: 'single';
+    fields: ExtractField[];
+}
+
+/** 列表提取(遍历列表项) */
+export interface ListExtractConfig {
+    mode: 'list';
+    listSelector: string;
+    fields: ExtractField[];
+}
+
+/** 列表+详情页提取:列表页取每项基础字段与详情链接,再逐个进详情页抓详情字段,合并成行 */
+export interface ListDetailExtractConfig {
+    mode: 'list-detail';
+    /** 列表项容器选择器 */
+    listSelector: string;
+    /** 列表页每项基础字段(可为空数组) */
+    fields: ExtractField[];
+    /** 列表项内详情链接选择器(取其 href);留空则取列表项自身 */
+    detailLinkSelector: string;
+    /** 详情页要抓取的字段(字段名勿与 fields 重名,否则会被覆盖) */
+    detailFields: ExtractField[];
+}
+
+/** 提取配置 */
+export type ExtractConfig = SingleExtractConfig | ListExtractConfig | ListDetailExtractConfig;
+
+/** 宏定义 */
+export interface Macro {
+    name: string;
+    version: number;
+    steps: Step[];
+    extract?: ExtractConfig;
+}
+
+/** 提取结果的一行 */
+export type ExtractRow = Record<string, string>;
+
+/** 回放出错时的结构化错误信息 */
+export interface RunError {
+    /** 失败步骤索引(从 0 开始) */
+    stepIndex: number;
+    /** 失败步骤类型 */
+    stepType: StepType;
+    /** 失败步骤的 selector(若有) */
+    selector?: string;
+    /** 失败时所在页面 URL */
+    url?: string;
+    /** 错误信息 */
+    message: string;
+    /** 错误截图路径(若成功保存) */
+    screenshot?: string;
+}
+
+/** 回放结果 */
+export interface RunResult {
+    ok: boolean;
+    rows?: ExtractRow[];
+    error?: RunError;
+}

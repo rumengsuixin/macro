@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <title>网页宏录制工具</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            height: 100%;
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            font-size: 13px;
+            color: #222;
+            background: #f3f4f6;
+        }
+
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .toolbar {
+            padding: 8px 10px;
+            background: #1f2937;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .row label {
+            color: #cbd5e1;
+            white-space: nowrap;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            border: 1px solid #4b5563;
+            border-radius: 4px;
+            background: #111827;
+            color: #f9fafb;
+        }
+
+        #macro-name {
+            flex: 0 0 220px;
+            min-width: 160px;
+        }
+
+        button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        button:disabled {
+            background: #6b7280;
+            cursor: not-allowed;
+        }
+
+        button.danger {
+            background: #dc2626;
+        }
+
+        button.danger:hover {
+            background: #b91c1c;
+        }
+
+        button.ok {
+            background: #059669;
+        }
+
+        button.ok:hover {
+            background: #047857;
+        }
+
+        .rec-indicator {
+            margin-left: auto;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #374151;
+            color: #9ca3af;
+            font-size: 12px;
+        }
+
+        .rec-indicator.on {
+            background: #7f1d1d;
+            color: #fecaca;
+        }
+
+        .main {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+
+        webview {
+            flex: 1;
+            border: none;
+            background: #fff;
+        }
+
+        .sidebar {
+            width: 360px;
+            flex: 0 0 360px;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid #d1d5db;
+            background: #fff;
+            min-height: 0;
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .panel-title {
+            padding: 6px 10px;
+            background: #e5e7eb;
+            font-weight: bold;
+            border-bottom: 1px solid #d1d5db;
+        }
+
+        /* 可折叠面板:标题可点,右侧箭头指示展开/收起状态 */
+        .collapsible > .panel-title {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .collapsible > .panel-title:hover {
+            background: #dbe1e8;
+        }
+
+        .collapsible > .panel-title::after {
+            content: "\25be";
+            float: right;
+            color: #6b7280;
+            transition: transform .15s;
+        }
+
+        .collapsible.collapsed > .panel-title::after {
+            transform: rotate(-90deg);
+        }
+
+        .collapsible.collapsed > #extract {
+            display: none;
+        }
+
+        #extract {
+            width: 100%;
+            height: 160px;
+            border: none;
+            padding: 8px 10px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+            resize: none;
+            outline: none;
+        }
+
+        .ai-panel {
+            border-bottom: 1px solid #d1d5db;
+            background: linear-gradient(180deg, #faf5ff 0%, #f8fafc 100%);
+        }
+
+        /* AI 面板标题:紫色左强调条 + 小圆点,点明 AI 身份 */
+        .ai-panel .panel-title {
+            border-left: 3px solid #7c3aed;
+        }
+
+        .ai-panel .panel-title::before {
+            content: "";
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            margin-right: 6px;
+            border-radius: 50%;
+            background: #7c3aed;
+            vertical-align: middle;
+        }
+
+        .ai-body {
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ai-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .ai-row label {
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        #ai-profile,
+        #ai-mode {
+            flex: 1;
+            padding: 4px 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background: #fff;
+            color: #222;
+            transition: border-color .15s, box-shadow .15s;
+        }
+
+        #ai-profile:focus,
+        #ai-mode:focus,
+        #ai-requirement:focus {
+            border-color: #7c3aed;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, .15);
+        }
+
+        #ai-requirement {
+            width: 100%;
+            height: 54px;
+            padding: 6px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            font-size: 12px;
+            resize: vertical;
+            outline: none;
+            transition: border-color .15s, box-shadow .15s;
+        }
+
+        #ai-generate {
+            background: #7c3aed;
+            box-shadow: 0 1px 2px rgba(124, 58, 237, .3);
+            transition: background .15s, transform .05s, box-shadow .15s;
+        }
+
+        #ai-generate:hover {
+            background: #6d28d9;
+        }
+
+        #ai-generate:active {
+            transform: translateY(1px);
+            box-shadow: 0 0 0 rgba(124, 58, 237, 0);
+        }
+
+        #ai-status {
+            display: inline-flex;
+            align-items: center;
+            color: #64748b;
+            font-size: 12px;
+            min-height: 16px;
+        }
+
+        /* 成功 / 失败状态分色 */
+        #ai-status.ok {
+            color: #059669;
+        }
+
+        #ai-status.err {
+            color: #dc2626;
+        }
+
+        /* AI 生成中:状态文字前的旋转加载圆环 */
+        #ai-status.ai-loading::before {
+            content: "";
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 6px;
+            border: 2px solid rgba(124, 58, 237, .25);
+            border-top-color: #7c3aed;
+            border-radius: 50%;
+            animation: ai-spin .6s linear infinite;
+        }
+
+        @keyframes ai-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .steps-panel {
+            flex: 1;
+            min-height: 0;
+        }
+
+        #steps {
+            flex: 1;
+            overflow: auto;
+            padding: 6px 10px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+        }
+
+        .step-line {
+            padding: 3px 6px;
+            border-bottom: 1px dashed #eee;
+            border-left: 2px solid transparent;
+            border-radius: 3px;
+            word-break: break-all;
+            cursor: context-menu;
+            transition: background .12s, border-left-color .12s;
+        }
+
+        /* 鼠标悬停:淡灰高亮 + 左侧浮现蓝竖条 */
+        .step-line:hover {
+            background: #f1f5f9;
+            border-left-color: #93c5fd;
+        }
+
+        /* 翻页标记行:左侧色条 + 淡色背景 */
+        .step-line.pagination-marked {
+            background: #fff7ed;
+            border-left: 3px solid #f59e0b;
+            padding-left: 5px;
+        }
+
+        /* 标记行 hover 时底色略加深,而非被覆盖 */
+        .step-line.pagination-marked:hover {
+            background: #ffedd5;
+            border-left-color: #d97706;
+        }
+
+        .pagination-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 8px;
+            border-radius: 9px;
+            background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 16px;
+            letter-spacing: .2px;
+            vertical-align: middle;
+            box-shadow: 0 1px 2px rgba(217, 119, 6, .35);
+        }
+
+        .pagination-badge::before {
+            content: "\00bb";
+            margin-right: 4px;
+            font-weight: 700;
+        }
+
+        /* 步骤右键菜单 */
+        .ctx-menu {
+            position: fixed;
+            z-index: 9999;
+            min-width: 160px;
+            background: #fff;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+            padding: 4px;
+            font-size: 13px;
+            user-select: none;
+        }
+
+        .ctx-menu-item {
+            padding: 6px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background .12s, color .12s;
+        }
+
+        .ctx-menu-item:hover {
+            background: #eef2ff;
+            color: #4338ca;
+        }
+
+        .ctx-menu-input {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px 10px;
+        }
+
+        .ctx-menu-label {
+            font-size: 12px;
+            color: #374151;
+        }
+
+        .ctx-menu-input input {
+            width: 100px;
+            padding: 4px 6px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            outline: none;
+            transition: border-color .15s, box-shadow .15s;
+        }
+
+        .ctx-menu-input input:focus {
+            border-color: #7c3aed;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, .15);
+        }
+
+        .ctx-menu-input button {
+            align-self: flex-start;
+            padding: 4px 12px;
+            border: none;
+            border-radius: 4px;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .logwrap {
+            height: 180px;
+            flex: 0 0 180px;
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid #d1d5db;
+            background: #0b1220;
+        }
+
+        .logwrap .panel-title {
+            background: #111827;
+            color: #e5e7eb;
+            border-bottom: 1px solid #1f2937;
+        }
+
+        #log {
+            flex: 1;
+            overflow: auto;
+            margin: 0;
+            padding: 6px 10px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+            color: #d1d5db;
+        }
+
+        .log-error {
+            color: #fca5a5;
+        }
+
+        .log-info {
+            color: #93c5fd;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="toolbar">
+            <div class="row">
+                <label>地址</label>
+                <input type="text" id="address" placeholder="输入网址,如 https://books.toscrape.com/" />
+                <button id="open">打开网页</button>
+                <span id="rec-indicator" class="rec-indicator">未录制</span>
+            </div>
+            <div class="row">
+                <label>宏名称</label>
+                <input type="text" id="macro-name" value="demo-task" />
+                <button id="start" class="danger">开始录制</button>
+                <button id="stop" disabled>停止录制</button>
+                <button id="run" class="ok">运行宏</button>
+                <button id="save">保存宏</button>
+                <button id="load">加载宏</button>
+                <button id="export" class="ok">导出 Excel</button>
+            </div>
+        </div>
+
+        <div class="main">
+            <webview id="view" src="about:blank"></webview>
+            <div class="sidebar">
+                <div class="panel collapsible collapsed" id="extract-panel">
+                    <div class="panel-title" id="extract-title">提取规则(extract,可编辑 JSON)</div>
+                    <textarea id="extract" spellcheck="false"></textarea>
+                </div>
+                <div class="panel ai-panel">
+                    <div class="panel-title">AI 提取(用 AI 自动生成上面的规则)</div>
+                    <div class="ai-body">
+                        <div class="ai-row">
+                            <label>引擎</label>
+                            <select id="ai-profile"></select>
+                        </div>
+                        <textarea id="ai-requirement" spellcheck="false"
+                            placeholder="用一句话描述要采集什么,例如:采集每个商品的标题、价格、详情链接"></textarea>
+                        <div class="ai-row">
+                            <label>目标模式</label>
+                            <select id="ai-mode">
+                                <option value="single">单条(single)</option>
+                                <option value="list" selected>列表(list)</option>
+                                <option value="list-detail">列表+详情(list-detail)</option>
+                            </select>
+                            <button id="ai-generate">AI 生成规则</button>
+                            <span id="ai-status"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel steps-panel">
+                    <div class="panel-title">录制步骤(<span id="step-count">0</span>)</div>
+                    <div id="steps"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="logwrap">
+            <div class="panel-title">日志</div>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script type="module" src="./renderer.js"></script>
+</body>
+</html>

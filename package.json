@@ -1,0 +1,33 @@
+{
+    "name": "macro-recorder",
+    "version": "1.0.0",
+    "description": "可视化网页宏录制 + 回放 + 数据提取 + 导出 Excel(MVP 第一版)",
+    "private": true,
+    "main": "dist/main/main.js",
+    "scripts": {
+        "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.mjs",
+        "start": "node scripts/start.mjs",
+        "dev": "npm run build && node scripts/start.mjs",
+        "postinstall": "playwright install chromium"
+    },
+    "keywords": [
+        "electron",
+        "playwright",
+        "macro",
+        "scraper",
+        "excel"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "exceljs": "^4.4.0",
+        "playwright": "^1.49.1",
+        "ws": "^8.21.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.10.2",
+        "@types/ws": "^8.18.1",
+        "electron": "^33.2.1",
+        "typescript": "^5.7.2"
+    }
+}
