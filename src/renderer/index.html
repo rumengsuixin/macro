@@ -229,6 +229,12 @@
             transition: border-color .15s, box-shadow .15s;
         }
 
+        #ai-mode {
+            flex: 0 1 auto;     /* 不再贪婪占满,允许收缩,不允许超内容增长 */
+            max-width: 160px;   /* 限制最大宽度,文字再长也不会撑大 */
+            min-width: 0;       /* 允许收缩到内容以下,避免顶出按钮 */
+        }
+
         #ai-profile:focus,
         #ai-mode:focus,
         #ai-requirement:focus {
@@ -250,6 +256,7 @@
         }
 
         #ai-generate {
+            flex-shrink: 0;     /* 防止按钮被同行 select 压缩或换行 */
             background: #7c3aed;
             box-shadow: 0 1px 2px rgba(124, 58, 237, .3);
             transition: background .15s, transform .05s, box-shadow .15s;
