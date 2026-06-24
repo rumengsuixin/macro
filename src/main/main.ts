@@ -7,7 +7,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
 import { generateExtract, listProfiles, type GenerateInput } from '../core/ai-extract';
-import type { Macro, ExtractRow, RunResult } from '../core/macro-types';
+import type { Macro, ExtractRow, RunResult, OnPause, PauseInfo } from '../core/macro-types';
 
 // 目录约定(相对于项目根目录;__dirname 运行时为 dist/main)
 const projectRoot = path.resolve(__dirname, '..', '..');
@@ -20,6 +20,9 @@ const examplesDir = path.join(projectRoot, 'examples');
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
 
 let mainWindow: BrowserWindow | null = null;
+
+// 每次运行宏分配递增 runId,用于隔离不同次运行的「继续」信号,避免串信号/误触发
+let runSeq = 0;
 
 /** 确保运行时目录存在 */
 function ensureDirs(): void {
@@ -109,14 +112,50 @@ function registerIpc(): void {
         }
     });
 
-    ipcMain.handle('run-macro', async (_e, macro: Macro): Promise<RunResult> => {
-        const runner = new MacroRunner(errorsDir);
+    ipcMain.handle('run-macro', async (e, macro: Macro): Promise<RunResult> => {
+        const runId = ++runSeq;
+        const wc = e.sender;
+        // 本次运行注册的 resume 监听器,finally 统一移除,防泄漏/串信号
+        const listeners: Array<() => void> = [];
+
+        // 人工介入暂停回调:通知渲染进程弹模态框,并等待匹配 runId 的「继续」信号
+        const onPause: OnPause = (info: PauseInfo) =>
+            new Promise<void>((resolve, reject) => {
+                const resumeListener = (_ev: unknown, id: number): void => {
+                    if (id !== runId) {
+                        return; // 非本次运行的信号,忽略
+                    }
+                    ipcMain.removeListener('resume-macro', resumeListener);
+                    resolve();
+                };
+                const destroyedListener = (): void => {
+                    ipcMain.removeListener('resume-macro', resumeListener);
+                    reject(new Error('回放暂停期间窗口被关闭,回放中断。'));
+                };
+                ipcMain.on('resume-macro', resumeListener);
+                wc.once('destroyed', destroyedListener);
+                listeners.push(() => {
+                    ipcMain.removeListener('resume-macro', resumeListener);
+                    wc.removeListener('destroyed', destroyedListener);
+                });
+                // 通知渲染进程:回放已暂停,显示模态框
+                if (!wc.isDestroyed()) {
+                    wc.send('macro-paused', { runId, ...info });
+                }
+            });
+
+        const runner = new MacroRunner(errorsDir, undefined, onPause);
         try {
             return await runner.run(macro);
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logError(`运行宏时发生未捕获错误:${message}`);
             return { ok: false, error: { stepIndex: -1, stepType: 'goto', message } };
+        } finally {
+            // 清理本次运行注册的所有监听器(单窗单跑场景已足够;并发多窗需按窗口隔离)
+            for (const off of listeners) {
+                off();
+            }
         }
     });
 

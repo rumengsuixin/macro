@@ -465,6 +465,99 @@
         .log-info {
             color: #93c5fd;
         }
+
+        /* 人工介入暂停步骤的行徽标 */
+        .step-line.pause-marked {
+            background: #ecfeff;
+            border-left-color: #0891b2;
+        }
+
+        .step-line.pause-marked:hover {
+            background: #cffafe;
+            border-left-color: #0e7490;
+        }
+
+        .pause-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 8px;
+            border-radius: 9px;
+            background: linear-gradient(180deg, #22d3ee 0%, #0891b2 100%);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 16px;
+            vertical-align: middle;
+            box-shadow: 0 1px 2px rgba(8, 145, 178, .35);
+        }
+
+        .pause-badge::before {
+            content: "\23F8";
+            margin-right: 4px;
+        }
+
+        /* 回放暂停模态框遮罩(仅盖主窗,不影响独立 Playwright 浏览器窗口) */
+        #pause-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, .55);
+        }
+
+        #pause-overlay.show {
+            display: flex;
+        }
+
+        .pause-modal {
+            width: 420px;
+            max-width: 90vw;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+            padding: 22px 24px;
+            font-size: 14px;
+        }
+
+        .pause-modal h3 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            color: #0e7490;
+        }
+
+        .pause-modal .pause-reason {
+            color: #374151;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .pause-modal .pause-hint {
+            margin-top: 10px;
+            color: #6b7280;
+            font-size: 12.5px;
+        }
+
+        .pause-modal .pause-actions {
+            margin-top: 18px;
+            text-align: right;
+        }
+
+        #pause-continue {
+            padding: 7px 18px;
+            border: none;
+            border-radius: 6px;
+            background: #0891b2;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        #pause-continue:hover {
+            background: #0e7490;
+        }
     </style>
 </head>
 <body>
@@ -484,6 +577,7 @@
                 <button id="run" class="ok">运行宏</button>
                 <button id="save">保存宏</button>
                 <button id="load">加载宏</button>
+                <button id="add-pause">插入暂停</button>
                 <button id="export" class="ok">导出 Excel</button>
             </div>
         </div>
@@ -526,6 +620,18 @@
         <div class="logwrap">
             <div class="panel-title">日志</div>
             <div id="log"></div>
+        </div>
+    </div>
+
+    <!-- 回放人工介入暂停模态框 -->
+    <div id="pause-overlay">
+        <div class="pause-modal">
+            <h3>回放已暂停 · 等待人工操作</h3>
+            <div class="pause-reason" id="pause-reason"></div>
+            <div class="pause-hint">请切换到弹出的浏览器窗口完成操作(如登录 / 验证码 / 扫码),完成后点击下方「继续」。</div>
+            <div class="pause-actions">
+                <button id="pause-continue">继续</button>
+            </div>
         </div>
     </div>
 

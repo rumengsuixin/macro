@@ -58,6 +58,13 @@ interface AiGenerateResult {
     elapsedMs: number;
 }
 
+interface PauseEvent {
+    runId: number;
+    stepIndex: number;
+    reason?: string;
+    timeout?: number;
+}
+
 interface ElectronAPI {
     getWebviewPreloadPath(): Promise<string>;
     saveMacro(macro: Macro): Promise<string | null>;
@@ -65,6 +72,8 @@ interface ElectronAPI {
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     onLog(cb: (msg: LogMessage) => void): void;
+    onMacroPaused(cb: (info: PauseEvent) => void): void;
+    resumeMacro(runId: number): void;
     aiListProfiles(): Promise<AiProfilesInfo>;
     aiGenerateExtract(input: {
         requirement: string;
@@ -118,7 +127,11 @@ const stopBtn = byId<HTMLButtonElement>('stop');
 const runBtn = byId<HTMLButtonElement>('run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
+const addPauseBtn = byId<HTMLButtonElement>('add-pause');
 const exportBtn = byId<HTMLButtonElement>('export');
+const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
+const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
+const pauseContinueBtn = byId<HTMLButtonElement>('pause-continue');
 const aiProfileSel = byId<HTMLSelectElement>('ai-profile');
 const aiModeSel = byId<HTMLSelectElement>('ai-mode');
 const aiRequirementInput = byId<HTMLTextAreaElement>('ai-requirement');
@@ -160,6 +173,8 @@ function describeStep(step: Step): string {
             return `scroll (${s.x}, ${s.y})`;
         case 'waitForSelector':
             return `waitForSelector ${s.selector}`;
+        case 'pause':
+            return `人工介入暂停${s.reason ? ' — ' + s.reason : ''}${s.timeout ? '(超时 ' + s.timeout + 'ms)' : ''}`;
         default:
             return step.type;
     }
@@ -178,6 +193,14 @@ function renderSteps(): void {
             badge.className = 'pagination-badge';
             const pages = typeof step.pageCount === 'number' ? step.pageCount : 1;
             badge.textContent = `翻页 · 共${pages}页`;
+            div.appendChild(badge);
+        }
+        // 人工介入暂停步骤:加高亮 class 与行尾徽标
+        if (step.type === 'pause') {
+            div.classList.add('pause-marked');
+            const badge = document.createElement('span');
+            badge.className = 'pause-badge';
+            badge.textContent = '人工介入';
             div.appendChild(badge);
         }
         // 右键弹出操作菜单
@@ -222,7 +245,13 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
 
-    if (step.pagination === true) {
+    // pause 步骤不提供翻页标记(回放主循环会跳过带 pagination 的步骤,二者互斥)
+    if (step.type === 'pause') {
+        const editPause = makeMenuItem('修改暂停提示文案', () => {
+            showPauseReasonInput(menu, index);
+        });
+        menu.appendChild(editPause);
+    } else if (step.pagination === true) {
         // 已标记:提供「修改总页数」与「取消翻页标记」
         const current = typeof step.pageCount === 'number' ? step.pageCount : 1;
         const editItem = makeMenuItem(`修改翻页总页数(当前 ${current})`, () => {
@@ -243,6 +272,21 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         });
         menu.appendChild(markItem);
     }
+
+    // 任意步骤都可在其前/后插入人工介入暂停步骤
+    menu.appendChild(makeMenuItem('在此前插入暂停', () => {
+        insertPause(index);
+    }));
+    menu.appendChild(makeMenuItem('在此后插入暂停', () => {
+        insertPause(index + 1);
+    }));
+    // 删除当前步骤
+    menu.appendChild(makeMenuItem('删除此步骤', () => {
+        steps.splice(index, 1);
+        closeStepContextMenu();
+        renderSteps();
+        logLocal(`已删除步骤 #${index + 1}。`);
+    }));
 
     document.body.appendChild(menu);
     ctxMenuEl = menu;
@@ -309,6 +353,60 @@ function showPageCountInput(menu: HTMLDivElement, index: number): void {
     input.select();
 }
 
+/** 在菜单内显示暂停提示文案输入框 */
+function showPauseReasonInput(menu: HTMLDivElement, index: number): void {
+    menu.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'ctx-menu-input';
+
+    const label = document.createElement('div');
+    label.className = 'ctx-menu-label';
+    label.textContent = '暂停提示文案(可留空):';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.style.width = '180px';
+    input.value = typeof steps[index].reason === 'string' ? (steps[index].reason as string) : '';
+
+    const confirm = (): void => {
+        const reason = input.value.trim();
+        if (reason) {
+            steps[index].reason = reason;
+        } else {
+            delete steps[index].reason;
+        }
+        closeStepContextMenu();
+        renderSteps();
+        logLocal(`步骤 #${index + 1} 暂停提示已更新。`);
+    };
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = '确定';
+    okBtn.addEventListener('click', confirm);
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            confirm();
+        }
+    });
+
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+    wrap.appendChild(okBtn);
+    menu.appendChild(wrap);
+    input.focus();
+    input.select();
+}
+
+/** 在指定位置插入一个人工介入暂停步骤 */
+function insertPause(at: number): void {
+    const clamped = Math.max(0, Math.min(at, steps.length));
+    steps.splice(clamped, 0, { type: 'pause' });
+    closeStepContextMenu();
+    renderSteps();
+    logLocal(`已在第 ${clamped + 1} 步位置插入人工介入暂停(可右键修改提示文案)。`);
+}
+
 function addStep(step: Step): void {
     steps.push(step);
     renderSteps();
@@ -327,6 +425,32 @@ function setBusy(busy: boolean): void {
     runBtn.disabled = busy;
     runBtn.textContent = busy ? '运行中…' : '运行宏';
 }
+
+// ===== 人工介入暂停模态框 =====
+let currentPauseRunId: number | null = null;
+
+function showPauseModal(info: PauseEvent): void {
+    currentPauseRunId = info.runId;
+    pauseReasonEl.textContent =
+        info.reason && info.reason.trim()
+            ? info.reason
+            : `回放执行到第 ${info.stepIndex + 1} 步,需要人工操作。`;
+    pauseOverlay.classList.add('show');
+    logLocal(`回放已暂停(第 ${info.stepIndex + 1} 步),等待人工操作……`);
+}
+
+function hidePauseModal(): void {
+    pauseOverlay.classList.remove('show');
+    currentPauseRunId = null;
+}
+
+pauseContinueBtn.addEventListener('click', () => {
+    if (currentPauseRunId !== null) {
+        window.electronAPI.resumeMacro(currentPauseRunId);
+        logLocal('已点击「继续」,恢复回放。');
+    }
+    hidePauseModal();
+});
 
 // ===== webview 操作 =====
 function normalizeUrl(input: string): string {
@@ -483,7 +607,12 @@ runBtn.addEventListener('click', async () => {
         logLocal('运行宏异常:' + (e as Error).message, 'error');
     } finally {
         setBusy(false);
+        hidePauseModal(); // 清理可能残留的暂停模态框(如超时失败返回时)
     }
+});
+
+addPauseBtn.addEventListener('click', () => {
+    insertPause(steps.length);
 });
 
 saveBtn.addEventListener('click', async () => {
@@ -692,6 +821,7 @@ function init(): void {
     addressInput.value = 'https://books.toscrape.com/';
     setRecordingUI(false);
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
+    window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     void loadAiProfiles();
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
 }

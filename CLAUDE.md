@@ -33,6 +33,7 @@
 - 入口:`dist/main/main.js`;启动:`npm run dev`
 - 运行时目录(自动创建):`macros/`(宏)、`exports/`(Excel)、`errors/`(错误截图)
 - 翻页标记:步骤行右键「标记翻页操作」可设总页数 N,步骤加 `pagination:true`/`pageCount:N` 字段;回放跳过该步骤,提取(list/list-detail)时按总页数逐页采集,每页采完执行翻页序列。list-detail 先跨所有页收完整列表再统一进详情
+- 人工介入暂停:步骤行右键「在此前/此后插入暂停」或工具栏「插入暂停」插入 `pause` 步骤(`{type:'pause',reason?,timeout?}`);回放到此停住,有头浏览器窗口保持可交互,用户手动完成登录/验证码/扫码后,在主窗模态框点「继续」恢复。机制:`MacroRunner(errorDir,timeoutMs?,onPause?)` 注入回调(core 不依赖 Electron,无回调默认放行);主进程 `run-macro` 用递增 `runId` 隔离 `resume-macro` 信号、`macro-paused` 事件通知渲染进程;`timeout` 防无人值守挂死(超时走出错截图)。**pause 与 `pagination` 互斥**(回放主循环跳过 pagination 步骤),UI 禁止对 pause 标翻页
 - 已知限制:`waitForSelector` 不自动录制,可手动加入 JSON;回放靠 Playwright auto-wait 兜底
 
 ## 常用命令

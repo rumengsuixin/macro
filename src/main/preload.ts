@@ -13,6 +13,14 @@ export interface AiProfilesInfo {
 type AiGenerateInput = GenerateInput;
 type AiGenerateResult = GenerateResult;
 
+/** 回放暂停事件:主进程在执行到 pause 步骤时推送 */
+export interface PauseEvent {
+    runId: number;
+    stepIndex: number;
+    reason?: string;
+    timeout?: number;
+}
+
 const api = {
     /** 获取 webview 录制 preload 的绝对路径 */
     getWebviewPreloadPath: (): Promise<string> => ipcRenderer.invoke('get-webview-preload-path'),
@@ -39,6 +47,16 @@ const api = {
     /** 订阅主进程日志推送 */
     onLog: (callback: (msg: LogMessage) => void): void => {
         ipcRenderer.on('log', (_event, msg: LogMessage) => callback(msg));
+    },
+
+    /** 订阅回放暂停事件(执行到 pause 步骤时触发) */
+    onMacroPaused: (callback: (info: PauseEvent) => void): void => {
+        ipcRenderer.on('macro-paused', (_event, info: PauseEvent) => callback(info));
+    },
+
+    /** 通知主进程「继续」回放(需带回对应的 runId) */
+    resumeMacro: (runId: number): void => {
+        ipcRenderer.send('resume-macro', runId);
     },
 };
 

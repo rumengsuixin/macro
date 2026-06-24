@@ -8,7 +8,8 @@ export type StepType =
     | 'fill'
     | 'press'
     | 'scroll'
-    | 'waitForSelector';
+    | 'waitForSelector'
+    | 'pause';
 
 /** 打开网址 */
 export interface GotoStep {
@@ -50,6 +51,15 @@ export interface WaitForSelectorStep {
     timeout?: number;
 }
 
+/** 人工介入暂停:回放到此步时停下,等用户在浏览器里手动操作(登录/验证码/扫码等)后点继续 */
+export interface PauseStep {
+    type: 'pause';
+    /** 提示文案,展示在暂停模态框里,如「请手动登录后点继续」 */
+    reason?: string;
+    /** 超时(毫秒):无人值守时的等待上限;省略则无限等待 */
+    timeout?: number;
+}
+
 /** 翻页标记:可附加到任意步骤 */
 export interface StepFlags {
     /** 标记为翻页动作:正常回放时跳过;提取翻页时按序执行 */
@@ -66,7 +76,18 @@ export type Step = StepFlags & (
     | PressStep
     | ScrollStep
     | WaitForSelectorStep
+    | PauseStep
 );
+
+/** 人工介入暂停的回调信息 */
+export interface PauseInfo {
+    stepIndex: number;
+    reason?: string;
+    timeout?: number;
+}
+
+/** 暂停回调:回放引擎执行到 pause 步骤时调用,promise resolve 表示用户已点继续 */
+export type OnPause = (info: PauseInfo) => Promise<void>;
 
 /** 字段提取类型 */
 export type FieldType = 'text' | 'html' | 'attr' | 'href' | 'src';
