@@ -112,12 +112,55 @@
             flex: 1;
             display: flex;
             min-height: 0;
+            padding: 6px;
+            gap: 6px;
+        }
+
+        /* 浏览器板块:整圈边框与其他板块隔离 + 头部标明所用浏览器 */
+        .browser-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        .browser-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #e5e7eb;
+            border-bottom: 1px solid #d1d5db;
+            border-left: 3px solid #2563eb;
+        }
+
+        .browser-icon {
+            width: 16px;
+            height: 16px;
+            flex: 0 0 auto;
+        }
+
+        .browser-name {
+            font-weight: bold;
+        }
+
+        .browser-tag {
+            padding: 1px 7px;
+            border-radius: 9px;
+            background: #d1d5db;
+            color: #6b7280;
+            font-size: 11px;
         }
 
         webview {
             flex: 1;
             border: none;
             background: #fff;
+            min-height: 0;
         }
 
         .sidebar {
@@ -583,7 +626,21 @@
         </div>
 
         <div class="main">
-            <webview id="view" src="about:blank"></webview>
+            <div class="browser-panel">
+                <div class="browser-header">
+                    <svg class="browser-icon" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <circle cx="24" cy="24" r="22" fill="#fff"/>
+                        <path d="M24 2a22 22 0 0 1 19.05 11H24a11 11 0 0 0-9.79 6.01L6.3 13.2A22 22 0 0 1 24 2z" fill="#ea4335"/>
+                        <path d="M6.3 13.2l7.91 5.81A11 11 0 0 0 17.6 33.5L9.4 41.7A22 22 0 0 1 6.3 13.2z" fill="#34a853"/>
+                        <path d="M43.05 13A22 22 0 0 1 24 46l8.2-14.2A11 11 0 0 0 35 24a10.9 10.9 0 0 0-2.1-6.5z" fill="#fbbc05"/>
+                        <circle cx="24" cy="24" r="9" fill="#fff"/>
+                        <circle cx="24" cy="24" r="7" fill="#4285f4"/>
+                    </svg>
+                    <span class="browser-name">Chromium</span>
+                    <span class="browser-tag">内置</span>
+                </div>
+                <webview id="view" src="about:blank"></webview>
+            </div>
             <div class="sidebar">
                 <div class="panel collapsible collapsed" id="extract-panel">
                     <div class="panel-title" id="extract-title">提取规则(extract,可编辑 JSON)</div>
