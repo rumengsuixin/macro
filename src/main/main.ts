@@ -79,6 +79,18 @@ function createWindow(): void {
         webPreferences.sandbox = false;
     });
 
+    // 拦截 webview 内的「新标签页」导航(target=_blank / window.open):
+    // Electron 默认会丢弃这类弹窗,导致录制时点击「没反应」、新页面操作无从记录。
+    // 这里拒绝新建窗口,改为在同一 webview 内打开,保证录制连续(后续操作正常录制)。
+    mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
+        guestContents.setWindowOpenHandler(({ url }) => {
+            if (url && url !== 'about:blank') {
+                void guestContents.loadURL(url);
+            }
+            return { action: 'deny' };
+        });
+    });
+
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
     mainWindow.webContents.on('did-finish-load', () => {

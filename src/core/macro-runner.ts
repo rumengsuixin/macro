@@ -41,6 +41,7 @@ export class MacroRunner {
         let browser: Browser | null = null;
         let context: BrowserContext | null = null;
         let page: Page | null = null;
+        let activePage: Page | null = null; // 当前活动页(跟随新标签页弹窗切换),供 catch 取 url/截图
         let currentStepIndex = -1;
         let currentStep: Step | null = null;
 
@@ -67,6 +68,17 @@ export class MacroRunner {
             page.setDefaultNavigationTimeout(this.timeoutMs); // 影响 goto 等导航
             logInfo(`回放默认超时已设为 ${this.timeoutMs} 毫秒。`);
 
+            // 跟随「新标签页」弹窗:录制时点击 target=_blank / window.open 会被重定向到同一视图,
+            // 回放时同样的点击会在 Playwright 中开新页(popup),这里自动切换为活动页继续回放。
+            // 初始页已创建完毕(挂监听前),故此后每次 page 事件都是弹窗。
+            activePage = page;
+            context.on('page', (popup) => {
+                activePage = popup;
+                popup.setDefaultTimeout(this.timeoutMs);
+                popup.setDefaultNavigationTimeout(this.timeoutMs);
+                logInfo('检测到新标签页弹窗,已切换为活动页继续回放。');
+            });
+
             for (let i = 0; i < macro.steps.length; i += 1) {
                 currentStepIndex = i;
                 currentStep = macro.steps[i];
@@ -77,7 +89,7 @@ export class MacroRunner {
                     continue;
                 }
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${describeStep(step)} —— 执行中`);
-                await this.executeStep(page, step, i);
+                await this.executeStep(activePage, step, i);
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${step.type} —— 完成`);
             }
 
@@ -94,7 +106,7 @@ export class MacroRunner {
                     logInfo(
                         `检测到 ${paginationSteps.length} 个翻页步骤,总页数设为 ${totalPages}。`
                     );
-                    const runPage = page;
+                    const runPage = activePage;
                     pagination = {
                         totalPages,
                         turnPage: async (): Promise<void> => {
@@ -105,7 +117,7 @@ export class MacroRunner {
                     };
                 }
                 logInfo('开始按提取规则提取数据……');
-                rows = await extract(page, macro.extract, pagination);
+                rows = await extract(activePage, macro.extract, pagination);
                 logInfo(`数据提取完成,共 ${rows.length} 行。`);
             } else {
                 logInfo('未配置提取规则,跳过数据提取。');
@@ -117,8 +129,8 @@ export class MacroRunner {
             const message = err instanceof Error ? err.message : String(err);
             const selector =
                 currentStep && 'selector' in currentStep ? currentStep.selector : undefined;
-            const url = page ? page.url() : undefined;
-            const screenshot = page ? await this.captureErrorScreenshot(page) : undefined;
+            const url = activePage ? activePage.url() : undefined;
+            const screenshot = activePage ? await this.captureErrorScreenshot(activePage) : undefined;
 
             const runError: RunError = {
                 stepIndex: currentStepIndex,
