@@ -7,7 +7,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
-import { generateExtract, listProfiles, type GenerateInput } from '../core/ai-extract';
+import { generateExtract, listProfiles, loadAiConfig, getConfigPath, type GenerateInput } from '../core/ai-extract';
 import type {
     Macro,
     ExtractRow,
@@ -20,6 +20,7 @@ import type {
 } from '../core/macro-types';
 
 // 目录约定:开发时用项目根;打包后(asar 只读)数据写到用户可写目录 userData
+// 注:打包态 userData 文件夹名取自 package.json 的 name=macro-recorder,即 %APPDATA%\macro-recorder
 const projectRoot = path.resolve(__dirname, '..', '..');
 const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
 
@@ -321,6 +322,13 @@ function timestamp(): string {
 
 app.whenReady().then(() => {
     ensureDirs();
+    // 启动即确保 ai-config.json 存在(不存在则写默认配置),并打出绝对路径便于定位
+    try {
+        loadAiConfig();
+        logInfo(`AI 配置文件路径:${getConfigPath()}`);
+    } catch (err) {
+        logError(`初始化 AI 配置文件失败:${(err as Error).message}`);
+    }
     registerIpc();
     createWindow();
 

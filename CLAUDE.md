@@ -15,6 +15,7 @@
 - `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`
 - `browser-profile/` — 持久化回放 profile 默认目录(已 gitignore)
 - `scripts/test-ai.mjs` — AI 自检脚本(验证对接 openclaw agent 整链能否跑通)
+- `打包指南.md` — Windows 安装包打包说明(自带 Chromium,`npm run dist` 一键打包,产物在 `release/`);安装态用户数据在 `%APPDATA%\macro-recorder\`,`ai-config.json` 首次启动自动生成
 - 规划阶段计划文档:`C:\Users\Administrator\.claude\plans\glimmering-brewing-hoare.md`、`...\happy-wishing-hamming.md`(AI 提取)
 
 ## AI 提取要点(对接 openclaw agent)
