@@ -1,4 +1,7 @@
 // Electron 主进程入口:创建窗口、注册 IPC、持有 Playwright 回放引擎。
+// 注:runtime-bootstrap 必须放在所有 import 最前(尤其在引入 macro-runner/playwright 之前),
+// 它负责在 playwright 初始化前设好 PLAYWRIGHT_BROWSERS_PATH,否则自带 Chromium 路径不生效。
+import './runtime-bootstrap';
 import { app, BrowserWindow, ipcMain, dialog, shell, session, type Cookie } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -24,11 +27,8 @@ import type {
 const projectRoot = path.resolve(__dirname, '..', '..');
 const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
 
-// 打包后:① 让 Playwright 用随安装包分发的浏览器;② 让 core 把 ai-config.json 写到可写目录
-if (app.isPackaged) {
-    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'ms-playwright');
-    process.env.MACRO_DATA_DIR = dataRoot;
-}
+// 注:打包态的环境变量(PLAYWRIGHT_BROWSERS_PATH / MACRO_DATA_DIR)已在 runtime-bootstrap 中
+// 于 playwright 初始化前提前设置,此处不再重复设置(dataRoot 与 bootstrap 取值一致)。
 
 const macrosDir = path.join(dataRoot, 'macros');
 const exportsDir = path.join(dataRoot, 'exports');
