@@ -5,6 +5,8 @@ dist/
 exports/
 errors/
 macros/
+browser-profile/
+browser-config.json
 
 # 日志与系统文件
 *.log

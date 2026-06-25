@@ -12,6 +12,8 @@
 - `开发计划.md` — 模块状态、待办、已知问题(每次任务后持续维护)
 - `examples/demo-macro.json` — 演示宏(books.toscrape.com,采集 标题 / 价格 / 链接)
 - `ai-config.json` — AI 提取配置(项目根,首次运行自动生成):openclaw agent 目标 profile 列表 + 系统/提示词模板
+- `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`
+- `browser-profile/` — 持久化回放 profile 默认目录(已 gitignore)
 - `scripts/test-ai.mjs` — AI 自检脚本(验证对接 openclaw agent 整链能否跑通)
 - 规划阶段计划文档:`C:\Users\Administrator\.claude\plans\glimmering-brewing-hoare.md`、`...\happy-wishing-hamming.md`(AI 提取)
 
@@ -34,7 +36,8 @@
 - 运行时目录(自动创建):`macros/`(宏)、`exports/`(Excel)、`errors/`(错误截图)
 - 翻页标记:步骤行右键「标记翻页操作」可设总页数 N,步骤加 `pagination:true`/`pageCount:N` 字段;回放跳过该步骤,提取(list/list-detail)时按总页数逐页采集,每页采完执行翻页序列。list-detail 先跨所有页收完整列表再统一进详情
 - 人工介入暂停:步骤行右键「在此前/此后插入暂停」或工具栏「插入暂停」插入 `pause` 步骤(`{type:'pause',reason?,timeout?}`);回放到此停住,有头浏览器窗口保持可交互,用户手动完成登录/验证码/扫码后,在主窗模态框点「继续」恢复。机制:`MacroRunner(errorDir,timeoutMs?,onPause?)` 注入回调(core 不依赖 Electron,无回调默认放行);主进程 `run-macro` 用递增 `runId` 隔离 `resume-macro` 信号、`macro-paused` 事件通知渲染进程;`timeout` 防无人值守挂死(超时走出错截图)。**pause 与 `pagination` 互斥**(回放主循环跳过 pagination 步骤),UI 禁止对 pause 标翻页
-- 已知限制:`waitForSelector` 不自动录制,可手动加入 JSON;回放靠 Playwright auto-wait 兜底
+- 登录态复用(回放/录制两浏览器引擎不同,无法严格共用同一目录,故用两条可叠加 UI 开关,默认关,存 `browser-config.json`):①**持久化回放 profile**——回放从临时 profile 改 `chromium.launchPersistentContext(userDataDir)`,跨次复用(含 cookie/localStorage),一次登录长期有效;②**录制→回放 cookie 注入**——回放前主进程从 `session.defaultSession`(webview 默认 session)导出 cookies,`toPlaywrightCookies` 转格式后 `context.addCookies` 注入。`MacroRunner(errorDir,timeoutMs?,onPause?,session?)` 第 4 参 `SessionOptions{userDataDir?,cookies?}`(core 不依赖 Electron,cookie 来源/转换全在主进程,同 onPause 依赖倒置);UI 在侧栏可折叠面板「浏览器登录态」(`#bc-persist`/`#bc-inject`/`#bc-choose`),IPC `get/set-browser-config`、`choose-user-data-dir`
+- 已知限制:`waitForSelector` 不自动录制,可手动加入 JSON;回放靠 Playwright auto-wait 兜底;localStorage 暂不跨录制→回放注入(靠持久 profile 兜底)
 
 ## 常用命令
 

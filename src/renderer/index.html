@@ -250,6 +250,52 @@
             gap: 6px;
         }
 
+        .browser-body {
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .bc-check {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #475569;
+            cursor: pointer;
+        }
+
+        .bc-check input {
+            cursor: pointer;
+        }
+
+        .bc-dir-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding-left: 22px;
+        }
+
+        .bc-dir {
+            flex: 1;
+            font-size: 12px;
+            color: #64748b;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            direction: rtl; /* 路径过长时优先保留尾部(目录名) */
+            text-align: left;
+        }
+
+        .bc-dir-row button {
+            white-space: nowrap;
+        }
+
+        .bc-dir-row.disabled {
+            opacity: .5;
+            pointer-events: none;
+        }
+
         .ai-row {
             display: flex;
             align-items: center;
@@ -665,6 +711,23 @@
                             <button id="ai-generate">AI 生成规则</button>
                             <span id="ai-status"></span>
                         </div>
+                    </div>
+                </div>
+                <div class="panel collapsible collapsed" id="browser-panel">
+                    <div class="panel-title" id="browser-title">浏览器登录态(回放复用)</div>
+                    <div class="browser-body">
+                        <label class="bc-check">
+                            <input type="checkbox" id="bc-persist" />
+                            <span>持久化回放 profile(复用 user-data-dir)</span>
+                        </label>
+                        <div class="bc-dir-row">
+                            <span class="bc-dir" id="bc-dir" title=""></span>
+                            <button id="bc-choose">选择目录</button>
+                        </div>
+                        <label class="bc-check">
+                            <input type="checkbox" id="bc-inject" />
+                            <span>回放前注入录制登录态(cookies)</span>
+                        </label>
                     </div>
                 </div>
                 <div class="panel steps-panel">

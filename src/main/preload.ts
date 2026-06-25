@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, ExtractRow, RunResult } from '../core/macro-types';
+import type { Macro, ExtractRow, RunResult, BrowserConfig } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary } from '../core/ai-extract';
 
@@ -43,6 +43,16 @@ const api = {
     /** 调用 AI 生成提取规则 */
     aiGenerateExtract: (input: AiGenerateInput): Promise<AiGenerateResult> =>
         ipcRenderer.invoke('ai-generate-extract', input),
+
+    /** 读取浏览器登录态复用配置 */
+    getBrowserConfig: (): Promise<BrowserConfig> => ipcRenderer.invoke('get-browser-config'),
+
+    /** 更新浏览器登录态复用配置(传 patch),返回最新配置 */
+    setBrowserConfig: (patch: Partial<BrowserConfig>): Promise<BrowserConfig> =>
+        ipcRenderer.invoke('set-browser-config', patch),
+
+    /** 弹目录对话框选择 profile 目录,返回路径或 null(取消) */
+    chooseUserDataDir: (): Promise<string | null> => ipcRenderer.invoke('choose-user-data-dir'),
 
     /** 订阅主进程日志推送 */
     onLog: (callback: (msg: LogMessage) => void): void => {

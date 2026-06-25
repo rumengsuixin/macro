@@ -164,3 +164,34 @@ export interface RunResult {
     rows?: ExtractRow[];
     error?: RunError;
 }
+
+/** 浏览器会话/登录态复用配置(存于项目根 browser-config.json) */
+export interface BrowserConfig {
+    /** 启用持久化回放 profile(Playwright launchPersistentContext) */
+    persistProfile: boolean;
+    /** profile 目录(默认 <projectRoot>/browser-profile) */
+    userDataDir: string;
+    /** 回放前注入录制 webview(默认 session)的 cookies */
+    injectRecordingSession: boolean;
+}
+
+/** Playwright addCookies 入参形状(由主进程从 Electron cookie 转换得到) */
+export interface BrowserCookie {
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
+    /** unix 秒,-1 表示会话 cookie */
+    expires?: number;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: 'Strict' | 'Lax' | 'None';
+}
+
+/** 回放时注入的会话选项(由主进程组装,core 层不依赖 Electron) */
+export interface SessionOptions {
+    /** 有值 → 用持久化 context(launchPersistentContext) */
+    userDataDir?: string;
+    /** 有值 → context 建好后 addCookies */
+    cookies?: BrowserCookie[];
+}

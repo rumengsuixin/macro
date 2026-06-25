@@ -1,10 +1,19 @@
 // 宏回放引擎:读取 JSON 宏,使用 Playwright 启动浏览器并逐步执行。
 // 每种 step 类型都有独立的处理方法;每一步执行前后打印中文日志;
 // 出错时截图保存到 errors/ 目录,并返回结构化错误信息。
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { Macro, Step, PauseStep, RunResult, RunError, ExtractRow, OnPause } from './macro-types';
+import type {
+    Macro,
+    Step,
+    PauseStep,
+    RunResult,
+    RunError,
+    ExtractRow,
+    OnPause,
+    SessionOptions,
+} from './macro-types';
 import { extract, type PaginationContext } from './extractor';
 import { logInfo, logError } from './logger';
 
@@ -13,13 +22,16 @@ export class MacroRunner {
     private timeoutMs: number;
     /** 人工介入暂停回调:由主进程注入,负责通知 UI 并等待用户点继续;无则默认立即放行 */
     private onPause: OnPause;
+    /** 会话选项:持久化目录 / 注入的 cookies;由主进程组装,缺省则用临时 profile、不注入 */
+    private session: SessionOptions;
 
-    constructor(errorDir: string, timeoutMs?: number, onPause?: OnPause) {
+    constructor(errorDir: string, timeoutMs?: number, onPause?: OnPause, session?: SessionOptions) {
         this.errorDir = errorDir;
         // 回放默认超时:默认 60 秒;可用环境变量 MACRO_TIMEOUT(毫秒)覆盖
         this.timeoutMs = timeoutMs ?? (Number(process.env.MACRO_TIMEOUT) || 60000);
         // 无回调(无头/单测场景)时立即放行,避免永久挂起
         this.onPause = onPause ?? (async (): Promise<void> => {});
+        this.session = session ?? {};
     }
 
     /** 回放整个宏 */
@@ -27,6 +39,7 @@ export class MacroRunner {
         logInfo(`开始回放宏「${macro.name}」,共 ${macro.steps.length} 个步骤。`);
 
         let browser: Browser | null = null;
+        let context: BrowserContext | null = null;
         let page: Page | null = null;
         let currentStepIndex = -1;
         let currentStep: Step | null = null;
@@ -34,9 +47,21 @@ export class MacroRunner {
         try {
             // 默认有头(回放可视);设置 MACRO_HEADLESS=1 可无头运行(便于自动化测试)
             const headless = process.env.MACRO_HEADLESS === '1';
-            browser = await chromium.launch({ headless });
-            const context = await browser.newContext();
-            page = await context.newPage();
+            if (this.session.userDataDir) {
+                // 持久化 profile:跨次回放复用同一目录(含 cookie/localStorage),实现登录态长期有效
+                context = await chromium.launchPersistentContext(this.session.userDataDir, { headless });
+                page = context.pages()[0] ?? (await context.newPage());
+                logInfo(`使用持久化浏览器目录:${this.session.userDataDir}`);
+            } else {
+                browser = await chromium.launch({ headless });
+                context = await browser.newContext();
+                page = await context.newPage();
+            }
+            // 注入录制 webview 的 cookies(把录制时登录的账号带进回放)
+            if (this.session.cookies && this.session.cookies.length > 0) {
+                await context.addCookies(this.session.cookies);
+                logInfo(`已注入录制会话 cookies:${this.session.cookies.length} 条`);
+            }
             // 提高默认超时,避免点击后慢页面导航等待("waiting for scheduled navigations")超时
             page.setDefaultTimeout(this.timeoutMs); // 影响 click/fill/waitForSelector 等动作(含 click 的导航等待)
             page.setDefaultNavigationTimeout(this.timeoutMs); // 影响 goto 等导航
@@ -114,8 +139,14 @@ export class MacroRunner {
             }
             return { ok: false, error: runError };
         } finally {
+            // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser
+            if (context) {
+                await context.close();
+            }
             if (browser) {
                 await browser.close();
+            }
+            if (context || browser) {
                 logInfo('浏览器已关闭。');
             }
         }

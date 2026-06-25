@@ -1,13 +1,23 @@
 // Electron 主进程入口:创建窗口、注册 IPC、持有 Playwright 回放引擎。
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, type Cookie } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
 import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
+import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { generateExtract, listProfiles, type GenerateInput } from '../core/ai-extract';
-import type { Macro, ExtractRow, RunResult, OnPause, PauseInfo } from '../core/macro-types';
+import type {
+    Macro,
+    ExtractRow,
+    RunResult,
+    OnPause,
+    PauseInfo,
+    BrowserConfig,
+    BrowserCookie,
+    SessionOptions,
+} from '../core/macro-types';
 
 // 目录约定(相对于项目根目录;__dirname 运行时为 dist/main)
 const projectRoot = path.resolve(__dirname, '..', '..');
@@ -15,6 +25,10 @@ const macrosDir = path.join(projectRoot, 'macros');
 const exportsDir = path.join(projectRoot, 'exports');
 const errorsDir = path.join(projectRoot, 'errors');
 const examplesDir = path.join(projectRoot, 'examples');
+
+// 浏览器登录态复用配置:文件路径与默认 profile 目录
+const browserConfigPath = path.join(projectRoot, 'browser-config.json');
+const defaultProfileDir = path.join(projectRoot, 'browser-profile');
 
 // webview 录制 preload 的绝对路径(与 main.js 同目录)
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
@@ -144,7 +158,9 @@ function registerIpc(): void {
                 }
             });
 
-        const runner = new MacroRunner(errorsDir, undefined, onPause);
+        // 运行前组装会话选项:持久化目录 + 录制 cookie 注入(均按 browser-config.json 开关)
+        const sessionOptions = await buildSessionOptions();
+        const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions);
         try {
             return await runner.run(macro);
         } catch (err) {
@@ -194,6 +210,95 @@ function registerIpc(): void {
         }
         return result;
     });
+
+    // 读取浏览器登录态复用配置(供渲染层回填面板)
+    ipcMain.handle('get-browser-config', (): BrowserConfig => {
+        return loadBrowserConfig(browserConfigPath, defaultProfileDir);
+    });
+
+    // 更新配置(渲染层传 patch,合并后写回并返回最新)
+    ipcMain.handle('set-browser-config', (_e, patch: Partial<BrowserConfig>): BrowserConfig => {
+        const current = loadBrowserConfig(browserConfigPath, defaultProfileDir);
+        const next: BrowserConfig = { ...current, ...(patch ?? {}) };
+        saveBrowserConfig(browserConfigPath, next);
+        logInfo(
+            `浏览器登录态配置已更新:持久化=${next.persistProfile ? '开' : '关'}、` +
+                `注入录制登录=${next.injectRecordingSession ? '开' : '关'}、目录=${next.userDataDir}`
+        );
+        return next;
+    });
+
+    // 选择 profile 目录(目录对话框),返回所选路径或 null(取消)
+    ipcMain.handle('choose-user-data-dir', async (): Promise<string | null> => {
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择浏览器 profile 目录',
+            defaultPath: loadBrowserConfig(browserConfigPath, defaultProfileDir).userDataDir,
+            properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        return result.filePaths[0];
+    });
+}
+
+/** 依据 browser-config.json 组装回放会话选项(持久化目录 + 录制 cookie 注入) */
+async function buildSessionOptions(): Promise<SessionOptions> {
+    const cfg = loadBrowserConfig(browserConfigPath, defaultProfileDir);
+    const options: SessionOptions = {};
+    if (cfg.persistProfile) {
+        // 兜底建目录,避免 launchPersistentContext 因目录不存在报错
+        if (!fs.existsSync(cfg.userDataDir)) {
+            fs.mkdirSync(cfg.userDataDir, { recursive: true });
+        }
+        options.userDataDir = cfg.userDataDir;
+        logInfo(`回放将复用持久化浏览器目录:${cfg.userDataDir}`);
+    }
+    if (cfg.injectRecordingSession) {
+        // webview 用默认 session,这里导出其全部 cookies 注入回放
+        const electronCookies = await session.defaultSession.cookies.get({});
+        const cookies = toPlaywrightCookies(electronCookies);
+        if (cookies.length > 0) {
+            options.cookies = cookies;
+            logInfo(`将注入录制会话 cookies:${cookies.length} 条`);
+        } else {
+            logInfo('录制会话无可注入的 cookies(默认 session 为空)。');
+        }
+    }
+    return options;
+}
+
+/** 把 Electron cookie 转成 Playwright addCookies 形状;无 domain 或转换失败的单条跳过 */
+function toPlaywrightCookies(electronCookies: Cookie[]): BrowserCookie[] {
+    const out: BrowserCookie[] = [];
+    for (const c of electronCookies) {
+        try {
+            if (!c.domain) {
+                continue; // Playwright 要求 domain+path(或 url),无 domain 无法定位
+            }
+            const cookie: BrowserCookie = {
+                name: c.name,
+                value: c.value,
+                domain: c.domain, // 允许前导「.」(通配子域),Playwright 接受
+                path: c.path || '/',
+                expires: c.expirationDate ?? -1, // 无过期则按会话 cookie
+                httpOnly: c.httpOnly,
+                secure: c.secure,
+            };
+            // sameSite 映射:unspecified 省略;None 但非 secure 时也省略(避免 addCookies 校验报错)
+            if (c.sameSite === 'strict') {
+                cookie.sameSite = 'Strict';
+            } else if (c.sameSite === 'lax') {
+                cookie.sameSite = 'Lax';
+            } else if (c.sameSite === 'no_restriction' && c.secure) {
+                cookie.sameSite = 'None';
+            }
+            out.push(cookie);
+        } catch {
+            // 单条转换异常跳过,不影响其余 cookies
+        }
+    }
+    return out;
 }
 
 /** 生成形如 20260622-153012 的时间戳 */

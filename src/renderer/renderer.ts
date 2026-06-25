@@ -65,6 +65,13 @@ interface PauseEvent {
     timeout?: number;
 }
 
+/** 浏览器登录态复用配置(与主进程 BrowserConfig 同构) */
+interface BrowserConfig {
+    persistProfile: boolean;
+    userDataDir: string;
+    injectRecordingSession: boolean;
+}
+
 interface ElectronAPI {
     getWebviewPreloadPath(): Promise<string>;
     saveMacro(macro: Macro): Promise<string | null>;
@@ -82,6 +89,9 @@ interface ElectronAPI {
         mode?: 'single' | 'list' | 'list-detail';
         baseRules?: unknown;
     }): Promise<AiGenerateResult>;
+    getBrowserConfig(): Promise<BrowserConfig>;
+    setBrowserConfig(patch: Partial<BrowserConfig>): Promise<BrowserConfig>;
+    chooseUserDataDir(): Promise<string | null>;
 }
 
 // <webview> 元素需要用到的 Electron 专有方法(DOM lib 未涵盖,这里最小声明)
@@ -688,6 +698,61 @@ extractTitle.addEventListener('click', () => {
     extractPanel.classList.toggle('collapsed');
 });
 
+// ===== 浏览器登录态(回放复用)=====
+const browserPanel = byId<HTMLDivElement>('browser-panel');
+const browserTitle = byId<HTMLElement>('browser-title');
+const bcPersist = byId<HTMLInputElement>('bc-persist');
+const bcInject = byId<HTMLInputElement>('bc-inject');
+const bcDir = byId<HTMLSpanElement>('bc-dir');
+const bcChooseBtn = byId<HTMLButtonElement>('bc-choose');
+const bcDirRow = bcChooseBtn.parentElement as HTMLDivElement;
+
+browserTitle.addEventListener('click', () => {
+    browserPanel.classList.toggle('collapsed');
+});
+
+/** 把配置回填到三个控件,并依持久化开关联动目录行可用性 */
+function applyBrowserConfig(cfg: BrowserConfig): void {
+    bcPersist.checked = cfg.persistProfile;
+    bcInject.checked = cfg.injectRecordingSession;
+    bcDir.textContent = cfg.userDataDir;
+    bcDir.title = cfg.userDataDir;
+    // 未开启持久化时,目录显示与选择按钮置灰
+    bcDirRow.classList.toggle('disabled', !cfg.persistProfile);
+}
+
+/** 加载并回填浏览器登录态配置 */
+async function loadBrowserConfig(): Promise<void> {
+    try {
+        const cfg = await window.electronAPI.getBrowserConfig();
+        applyBrowserConfig(cfg);
+    } catch (e) {
+        logLocal('加载浏览器登录态配置失败:' + (e as Error).message, 'error');
+    }
+}
+
+bcPersist.addEventListener('change', async () => {
+    const cfg = await window.electronAPI.setBrowserConfig({ persistProfile: bcPersist.checked });
+    applyBrowserConfig(cfg);
+});
+
+bcInject.addEventListener('change', async () => {
+    const cfg = await window.electronAPI.setBrowserConfig({
+        injectRecordingSession: bcInject.checked,
+    });
+    applyBrowserConfig(cfg);
+});
+
+bcChooseBtn.addEventListener('click', async () => {
+    const dir = await window.electronAPI.chooseUserDataDir();
+    if (!dir) {
+        return; // 取消
+    }
+    const cfg = await window.electronAPI.setBrowserConfig({ userDataDir: dir });
+    applyBrowserConfig(cfg);
+    logLocal('已设置浏览器 profile 目录:' + dir);
+});
+
 // ===== AI 提取 =====
 /** 加载配置档并填充下拉 */
 async function loadAiProfiles(): Promise<void> {
@@ -823,6 +888,7 @@ function init(): void {
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     void loadAiProfiles();
+    void loadBrowserConfig();
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
 }
 
