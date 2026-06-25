@@ -15,9 +15,6 @@
 - `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`
 - `browser-profile/` — 持久化回放 profile 默认目录(已 gitignore)
 - `scripts/test-ai.mjs` — AI 自检脚本(验证对接 openclaw agent 整链能否跑通)
-- `assets/icon.svg` — 应用品牌图标「二爪鱼」源文件(青色鱼身 + 两只金色爪子,呼应「爪取」数据)
-- `assets/icon.png`(256)/`icon.ico`(16~256 多尺寸)/`icon-{N}.png` — 由 svg 生成的位图图标,`icon.png` 用于 Electron 窗口、`icon.ico` 用于 Windows
-- `scripts/gen-icons.mjs` — 图标生成脚本:用 Playwright Chromium 把 `icon.svg` 渲染成多尺寸 PNG,再用纯 JS(Node zlib)打包 `.ico`;改图标后重跑 `node scripts/gen-icons.mjs`
 - 规划阶段计划文档:`C:\Users\Administrator\.claude\plans\glimmering-brewing-hoare.md`、`...\happy-wishing-hamming.md`(AI 提取)
 
 ## AI 提取要点(对接 openclaw agent)
