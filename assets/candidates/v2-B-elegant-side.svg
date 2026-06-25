@@ -1,0 +1,47 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- v2-B:优雅侧游鱼 + 精致蟹钳,扁平微渐变,留白,高级标志感 -->
+  <defs>
+    <linearGradient id="bgB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#155e75"/><stop offset="1" stop-color="#0c4a6e"/>
+    </linearGradient>
+    <linearGradient id="bodyB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a5f3fc"/><stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="clawB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdba74"/><stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bgB)"/>
+
+  <!-- 鱼(优雅侧面,朝右上游动) -->
+  <g transform="rotate(-12 256 256)">
+    <!-- 尾鳍(飘逸) -->
+    <path d="M150 256 Q96 196 78 168 Q104 214 120 240 Q96 256 120 272 Q104 298 78 344 Q96 316 150 256 Z" fill="#0891b2"/>
+    <!-- 背鳍 -->
+    <path d="M236 168 Q280 120 332 150 Q296 162 270 188 Z" fill="#0891b2"/>
+    <!-- 身体(流线橄榄形) -->
+    <path d="M150 256 Q176 168 280 164 Q372 162 408 256 Q372 350 280 348 Q176 344 150 256 Z" fill="url(#bodyB)"/>
+    <!-- 眼 -->
+    <circle cx="356" cy="234" r="15" fill="#0f172a"/><circle cx="361" cy="229" r="5" fill="#fff"/>
+  </g>
+
+  <!-- 两只精致蟹钳(从鱼腹伸出) -->
+  <g fill="url(#clawB)">
+    <!-- 左钳 -->
+    <g transform="translate(228 372) rotate(28) scale(0.9)">
+      <rect x="-44" y="-13" width="50" height="26" rx="13"/>
+      <ellipse cx="0" cy="0" rx="28" ry="25"/>
+      <path d="M14 10 Q52 16 60 2 Q54 -4 40 -3 Q26 2 14 10 Z"/>
+      <path d="M12 -10 Q46 -16 54 -30 Q46 -34 34 -28 Q22 -20 12 -10 Z"/>
+      <ellipse cx="-6" cy="-8" rx="9" ry="7" fill="#ffffff" fill-opacity="0.4"/>
+    </g>
+    <!-- 右钳 -->
+    <g transform="translate(300 372) rotate(-28) scale(0.9)">
+      <rect x="-6" y="-13" width="50" height="26" rx="13"/>
+      <ellipse cx="0" cy="0" rx="28" ry="25"/>
+      <path d="M-14 10 Q-52 16 -60 2 Q-54 -4 -40 -3 Q-26 2 -14 10 Z"/>
+      <path d="M-12 -10 Q-46 -16 -54 -30 Q-46 -34 -34 -28 Q-22 -20 -12 -10 Z"/>
+      <ellipse cx="6" cy="-8" rx="9" ry="7" fill="#ffffff" fill-opacity="0.4"/>
+    </g>
+  </g>
+</svg>

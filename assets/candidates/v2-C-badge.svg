@@ -1,0 +1,52 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- v2-C:圆形徽章 + 立体光影鱼与钳,精致拟物质感 -->
+  <defs>
+    <radialGradient id="bgC" cx="0.5" cy="0.4" r="0.75">
+      <stop offset="0" stop-color="#0e7490"/><stop offset="1" stop-color="#082f49"/>
+    </radialGradient>
+    <linearGradient id="ringC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="bodyC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cffafe"/><stop offset="0.5" stop-color="#22d3ee"/><stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="clawC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fed7aa"/><stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+    <filter id="softC" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#031820" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="#082f49"/>
+  <circle cx="256" cy="256" r="196" fill="url(#ringC)"/>
+  <circle cx="256" cy="256" r="178" fill="url(#bgC)"/>
+
+  <!-- 钳 -->
+  <g fill="url(#clawC)" filter="url(#softC)">
+    <g transform="translate(214 336) rotate(26)">
+      <rect x="-40" y="-13" width="46" height="26" rx="13"/>
+      <ellipse cx="0" cy="0" rx="27" ry="24"/>
+      <path d="M12 10 Q50 16 58 2 Q52 -4 38 -3 Q24 2 12 10 Z"/>
+      <path d="M10 -10 Q44 -16 52 -30 Q44 -34 32 -28 Q20 -20 10 -10 Z"/>
+      <ellipse cx="-6" cy="-8" rx="8" ry="6" fill="#fff" fill-opacity="0.45"/>
+    </g>
+    <g transform="translate(298 336) rotate(-26)">
+      <rect x="-6" y="-13" width="46" height="26" rx="13"/>
+      <ellipse cx="0" cy="0" rx="27" ry="24"/>
+      <path d="M-12 10 Q-50 16 -58 2 Q-52 -4 -38 -3 Q-24 2 -12 10 Z"/>
+      <path d="M-10 -10 Q-44 -16 -52 -30 Q-44 -34 -32 -28 Q-20 -20 -10 -10 Z"/>
+      <ellipse cx="6" cy="-8" rx="8" ry="6" fill="#fff" fill-opacity="0.45"/>
+    </g>
+  </g>
+
+  <!-- 鱼(立体,居中) -->
+  <g filter="url(#softC)">
+    <path d="M256 150 Q298 124 318 104 Q320 152 298 178 Z" fill="#0e7490"/>
+    <path d="M256 150 Q214 124 194 104 Q192 152 214 178 Z" fill="#0e7490"/>
+    <ellipse cx="256" cy="248" rx="112" ry="120" fill="url(#bodyC)"/>
+    <ellipse cx="224" cy="206" rx="40" ry="30" fill="#fff" fill-opacity="0.45"/>
+    <circle cx="222" cy="240" r="22" fill="#fff"/><circle cx="228" cy="244" r="11" fill="#0f172a"/><circle cx="232" cy="240" r="4" fill="#fff"/>
+    <circle cx="290" cy="240" r="22" fill="#fff"/><circle cx="296" cy="244" r="11" fill="#0f172a"/><circle cx="300" cy="240" r="4" fill="#fff"/>
+    <path d="M244 288 Q256 298 268 288" fill="none" stroke="#0e7490" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>
