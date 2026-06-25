@@ -28,6 +28,7 @@
         "@types/node": "^22.10.2",
         "@types/ws": "^8.18.1",
         "electron": "^33.2.1",
+        "electron-builder": "^26.15.3",
         "typescript": "^5.7.2"
     }
 }
