@@ -14,18 +14,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-/** OpenClaw 连接参数 */
-export interface OpenclawConnConfig {
-    /** 覆盖 WS 地址(默认 ws://127.0.0.1:{port}) */
-    url?: string;
-    /** 覆盖 gateway token(默认读 openclaw.json) */
-    token?: string;
-}
-
-interface OpenclawIdentity {
+/** Ed25519 设备身份(可放进 ai-config.json,免在目标机铺 ~/.openclaw) */
+export interface OpenclawIdentity {
     deviceId: string;
     publicKeyPem: string;
     privateKeyPem: string;
+}
+
+/** OpenClaw 连接参数 */
+export interface OpenclawConnConfig {
+    /** 覆盖 WS 地址(默认 ws://127.0.0.1:{port});连别人机器须填,如 ws://192.168.1.10:18799 */
+    url?: string;
+    /** 覆盖 gateway token(默认读 ~/.openclaw/openclaw.json) */
+    token?: string;
+    /** 内联设备身份(默认读 ~/.openclaw/identity/device.json);填全后目标机无需 ~/.openclaw */
+    identity?: OpenclawIdentity;
 }
 
 interface ResolvedConfig {
@@ -91,20 +94,43 @@ function buildSigningPayload(args: {
     ].join('|');
 }
 
-/** 读取 ~/.openclaw 配置与身份 */
+/**
+ * 解析连接配置:优先用 ai-config.json 的 openclaw 段(url/token/identity),
+ * 缺哪项才回退读本机 ~/.openclaw(openclaw.json / identity/device.json)。
+ * 这样本机开发(段为空)行为不变;目标机把 token+identity 填全则无需 ~/.openclaw。
+ */
 export function loadOpenclawConfig(override: OpenclawConnConfig = {}): ResolvedConfig {
     const home = os.homedir();
     const configPath = path.join(home, '.openclaw', 'openclaw.json');
     const identityPath = path.join(home, '.openclaw', 'identity', 'device.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8')) as OpenclawIdentity;
-    const port = config.gateway?.port ?? 18789;
-    const token = override.token ?? config.gateway?.auth?.token;
-    if (!token) {
-        throw new Error('未找到 gateway.auth.token,请检查 ~/.openclaw/openclaw.json');
+
+    // 本机文件作为兜底来源,读不到不致命(留给 override 提供)
+    let fileConfig: any = null;
+    let fileIdentity: OpenclawIdentity | null = null;
+    try {
+        fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch {
+        // 无本机配置:期望 override 提供 token(及 url)
     }
-    if (!identity.deviceId || !identity.privateKeyPem || !identity.publicKeyPem) {
-        throw new Error('身份文件缺字段,请检查 ~/.openclaw/identity/device.json');
+    try {
+        fileIdentity = JSON.parse(fs.readFileSync(identityPath, 'utf8')) as OpenclawIdentity;
+    } catch {
+        // 无本机身份:期望 override.identity 提供
+    }
+
+    const port = fileConfig?.gateway?.port ?? 18789;
+    const token = override.token ?? fileConfig?.gateway?.auth?.token;
+    const identity = override.identity ?? fileIdentity;
+
+    if (!token) {
+        throw new Error(
+            '未找到 gateway token:请在 ai-config.json 的 openclaw.token 填写,或确保本机 ~/.openclaw/openclaw.json 存在。'
+        );
+    }
+    if (!identity || !identity.deviceId || !identity.privateKeyPem || !identity.publicKeyPem) {
+        throw new Error(
+            '未找到设备身份:请在 ai-config.json 的 openclaw.identity 填写 deviceId/publicKeyPem/privateKeyPem,或确保本机 ~/.openclaw/identity/device.json 存在。'
+        );
     }
     return {
         url: override.url ?? `ws://127.0.0.1:${port}`,
