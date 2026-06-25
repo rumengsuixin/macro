@@ -19,16 +19,24 @@ import type {
     SessionOptions,
 } from '../core/macro-types';
 
-// 目录约定(相对于项目根目录;__dirname 运行时为 dist/main)
+// 目录约定:开发时用项目根;打包后(asar 只读)数据写到用户可写目录 userData
 const projectRoot = path.resolve(__dirname, '..', '..');
-const macrosDir = path.join(projectRoot, 'macros');
-const exportsDir = path.join(projectRoot, 'exports');
-const errorsDir = path.join(projectRoot, 'errors');
-const examplesDir = path.join(projectRoot, 'examples');
+const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
+
+// 打包后:① 让 Playwright 用随安装包分发的浏览器;② 让 core 把 ai-config.json 写到可写目录
+if (app.isPackaged) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'ms-playwright');
+    process.env.MACRO_DATA_DIR = dataRoot;
+}
+
+const macrosDir = path.join(dataRoot, 'macros');
+const exportsDir = path.join(dataRoot, 'exports');
+const errorsDir = path.join(dataRoot, 'errors');
+const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在程序目录内
 
 // 浏览器登录态复用配置:文件路径与默认 profile 目录
-const browserConfigPath = path.join(projectRoot, 'browser-config.json');
-const defaultProfileDir = path.join(projectRoot, 'browser-profile');
+const browserConfigPath = path.join(dataRoot, 'browser-config.json');
+const defaultProfileDir = path.join(dataRoot, 'browser-profile');
 
 // webview 录制 preload 的绝对路径(与 main.js 同目录)
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');

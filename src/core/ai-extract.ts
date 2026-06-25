@@ -97,7 +97,9 @@ const DEFAULT_CONFIG: AiConfig = {
 // ===== 配置读写 =====
 /** ai-config.json 的绝对路径(项目根目录) */
 export function getConfigPath(): string {
-    // 编译后位于 dist/core/ai-extract.js,向上两级即项目根
+    // 打包后主进程会设 MACRO_DATA_DIR 指向用户可写目录;开发时回退项目根
+    const base = process.env.MACRO_DATA_DIR;
+    if (base) return path.join(base, 'ai-config.json');
     return path.resolve(__dirname, '..', '..', 'ai-config.json');
 }
 

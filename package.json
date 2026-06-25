@@ -30,5 +30,29 @@
         "electron": "^33.2.1",
         "electron-builder": "^26.15.3",
         "typescript": "^5.7.2"
+    },
+    "build": {
+        "appId": "com.macro.recorder",
+        "productName": "网页宏录制工具",
+        "directories": {
+            "output": "release"
+        },
+        "extraResources": [
+            {
+                "from": "build/ms-playwright",
+                "to": "ms-playwright"
+            }
+        ],
+        "asar": true,
+        "win": {
+            "target": "nsis"
+        },
+        "nsis": {
+            "oneClick": false,
+            "perMachine": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true
+        }
     }
 }

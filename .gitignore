@@ -8,6 +8,10 @@ macros/
 browser-profile/
 browser-config.json
 
+# 打包产物
+release/
+build/ms-playwright/
+
 # 日志与系统文件
 *.log
 .DS_Store
