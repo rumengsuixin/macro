@@ -143,6 +143,168 @@ export function resolveProfile(cfg: AiConfig, id?: string): AiProfile | null {
     return cfg.profiles.find((p) => p.id === target) ?? cfg.profiles[0] ?? null;
 }
 
+// ===== 上传配置:格式校验 + 导入生效 =====
+/** 校验结果 */
+export interface ValidateResult {
+    ok: boolean;
+    /** 失败原因(中文,直接展示给用户) */
+    error?: string;
+    /** 校验通过后规范化的配置 */
+    config?: AiConfig;
+}
+
+/** 导入结果 */
+export interface ImportResult {
+    ok: boolean;
+    error?: string;
+    /** 成功时:导入的配置档数量 */
+    profileCount?: number;
+}
+
+function isNonEmptyString(v: unknown): v is string {
+    return typeof v === 'string' && v.trim().length > 0;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+    return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * 严格校验上传的 ai-config 内容(已 JSON.parse 后的对象)。
+ * 通过则返回规范化的 AiConfig(回填默认值,与 loadAiConfig 一致);否则返回中文错误。
+ */
+export function validateAiConfig(raw: unknown): ValidateResult {
+    if (!isPlainObject(raw)) {
+        return { ok: false, error: '配置根必须是一个 JSON 对象。' };
+    }
+
+    // profiles:非空数组,每项字段齐全且类型正确,id 不重复
+    if (!Array.isArray(raw.profiles) || raw.profiles.length === 0) {
+        return { ok: false, error: 'profiles 必须是非空数组(至少配置一个 AI 配置档)。' };
+    }
+    const ids = new Set<string>();
+    const profiles: AiProfile[] = [];
+    for (let i = 0; i < raw.profiles.length; i++) {
+        const p = raw.profiles[i] as Record<string, unknown>;
+        const at = `profiles[${i}]`;
+        if (!isPlainObject(p)) {
+            return { ok: false, error: `${at} 必须是对象。` };
+        }
+        for (const key of ['id', 'label', 'agentId', 'sessionKeyPrefix'] as const) {
+            if (!isNonEmptyString(p[key])) {
+                return { ok: false, error: `${at}.${key} 必须是非空字符串。` };
+            }
+        }
+        if (p.timeout !== undefined && (typeof p.timeout !== 'number' || !(p.timeout > 0))) {
+            return { ok: false, error: `${at}.timeout 必须是正数(毫秒)。` };
+        }
+        const id = (p.id as string).trim();
+        if (ids.has(id)) {
+            return { ok: false, error: `profiles 中存在重复的 id:「${id}」。` };
+        }
+        ids.add(id);
+        profiles.push({
+            id,
+            label: (p.label as string).trim(),
+            agentId: (p.agentId as string).trim(),
+            sessionKeyPrefix: (p.sessionKeyPrefix as string).trim(),
+            ...(p.timeout !== undefined ? { timeout: p.timeout as number } : {}),
+        });
+    }
+
+    // defaultProfile:字符串且存在于 profiles
+    if (!isNonEmptyString(raw.defaultProfile)) {
+        return { ok: false, error: 'defaultProfile 必须是非空字符串。' };
+    }
+    const defaultProfile = (raw.defaultProfile as string).trim();
+    if (!ids.has(defaultProfile)) {
+        return { ok: false, error: `defaultProfile「${defaultProfile}」不在 profiles 的 id 列表中。` };
+    }
+
+    // 提示词
+    if (!isNonEmptyString(raw.systemPrompt)) {
+        return { ok: false, error: 'systemPrompt 必须是非空字符串。' };
+    }
+    if (!isNonEmptyString(raw.promptTemplate)) {
+        return { ok: false, error: 'promptTemplate 必须是非空字符串。' };
+    }
+
+    // openclaw:可选;若存在须为对象,identity 三字段齐全,url/token 为字符串
+    let openclaw: OpenclawConnConfig | undefined;
+    if (raw.openclaw !== undefined) {
+        if (!isPlainObject(raw.openclaw)) {
+            return { ok: false, error: 'openclaw 必须是对象。' };
+        }
+        const oc = raw.openclaw;
+        if (oc.url !== undefined && typeof oc.url !== 'string') {
+            return { ok: false, error: 'openclaw.url 必须是字符串。' };
+        }
+        if (oc.token !== undefined && typeof oc.token !== 'string') {
+            return { ok: false, error: 'openclaw.token 必须是字符串。' };
+        }
+        if (oc.identity !== undefined) {
+            if (!isPlainObject(oc.identity)) {
+                return { ok: false, error: 'openclaw.identity 必须是对象。' };
+            }
+            for (const key of ['deviceId', 'publicKeyPem', 'privateKeyPem'] as const) {
+                if (!isNonEmptyString(oc.identity[key])) {
+                    return { ok: false, error: `openclaw.identity.${key} 必须是非空字符串。` };
+                }
+            }
+        }
+        openclaw = oc as OpenclawConnConfig;
+    }
+
+    // cleanHtml:可选;若存在须为布尔
+    if (raw.cleanHtml !== undefined && typeof raw.cleanHtml !== 'boolean') {
+        return { ok: false, error: 'cleanHtml 必须是布尔值。' };
+    }
+
+    const config: AiConfig = {
+        defaultProfile,
+        profiles,
+        openclaw: openclaw ?? {},
+        systemPrompt: (raw.systemPrompt as string),
+        promptTemplate: (raw.promptTemplate as string),
+        cleanHtml: raw.cleanHtml !== false,
+    };
+    return { ok: true, config };
+}
+
+/**
+ * 导入上传的 ai-config.json:读取 → 校验 → 通过则覆盖写入生效路径。
+ * 覆盖前把旧文件备份为同目录下 ai-config.json.bak。
+ */
+export function importAiConfig(srcPath: string): ImportResult {
+    let text: string;
+    try {
+        text = fs.readFileSync(srcPath, 'utf8');
+    } catch (err) {
+        return { ok: false, error: `读取文件失败:${(err as Error).message}` };
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch (err) {
+        return { ok: false, error: `不是合法的 JSON 文件:${(err as Error).message}` };
+    }
+    const v = validateAiConfig(parsed);
+    if (!v.ok || !v.config) {
+        return { ok: false, error: v.error || '配置校验未通过。' };
+    }
+    const dest = getConfigPath();
+    try {
+        // 覆盖前备份旧配置(若存在),便于回滚
+        if (fs.existsSync(dest)) {
+            fs.copyFileSync(dest, `${dest}.bak`);
+        }
+        fs.writeFileSync(dest, JSON.stringify(v.config, null, 4), 'utf8');
+    } catch (err) {
+        return { ok: false, error: `写入生效配置失败:${(err as Error).message}` };
+    }
+    return { ok: true, profileCount: v.config.profiles.length };
+}
+
 // ===== HTML 清洗(降噪,不做长度截断,保证数据完整) =====
 export function cleanHtml(html: string): string {
     return html

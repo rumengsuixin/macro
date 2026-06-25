@@ -44,6 +44,10 @@ const api = {
     aiGenerateExtract: (input: AiGenerateInput): Promise<AiGenerateResult> =>
         ipcRenderer.invoke('ai-generate-extract', input),
 
+    /** 上传并校验 ai-config.json,通过则覆盖生效 */
+    importAiConfig: (): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }> =>
+        ipcRenderer.invoke('import-ai-config'),
+
     /** 读取浏览器登录态复用配置 */
     getBrowserConfig: (): Promise<BrowserConfig> => ipcRenderer.invoke('get-browser-config'),
 

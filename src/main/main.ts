@@ -10,7 +10,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
-import { generateExtract, listProfiles, loadAiConfig, getConfigPath, type GenerateInput } from '../core/ai-extract';
+import { generateExtract, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput } from '../core/ai-extract';
 import type {
     Macro,
     ExtractRow,
@@ -205,6 +205,26 @@ function registerIpc(): void {
     // 列出 AI 配置档(供渲染进程下拉选择)
     ipcMain.handle('ai-list-profiles', async () => {
         return listProfiles();
+    });
+
+    // 上传 ai-config.json:弹打开对话框选文件 → 校验格式 → 通过则覆盖生效
+    ipcMain.handle('import-ai-config', async () => {
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择 ai-config.json 文件',
+            defaultPath: getConfigPath(),
+            properties: ['openFile'],
+            filters: [{ name: 'JSON 配置文件', extensions: ['json'] }],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return { ok: false, canceled: true };
+        }
+        const r = importAiConfig(result.filePaths[0]);
+        if (r.ok) {
+            logInfo(`ai-config.json 已导入并生效:${result.filePaths[0]}(共 ${r.profileCount} 个配置档)`);
+        } else {
+            logError(`导入 ai-config.json 失败:${r.error}`);
+        }
+        return r;
     });
 
     // 调用 AI 生成提取规则

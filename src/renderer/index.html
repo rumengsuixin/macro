@@ -418,7 +418,7 @@
             border-left: 2px solid transparent;
             border-radius: 3px;
             word-break: break-all;
-            cursor: context-menu;
+            cursor: grab;
             transition: background .12s, border-left-color .12s;
         }
 
@@ -426,6 +426,21 @@
         .step-line:hover {
             background: #f1f5f9;
             border-left-color: #93c5fd;
+        }
+
+        /* 拖拽中:半透明 + 抓取手势 */
+        .step-line.dragging {
+            opacity: .45;
+            cursor: grabbing;
+        }
+
+        /* 拖放指示线:将插入到目标行之前/之后 */
+        .step-line.drop-before {
+            border-top: 2px solid #6366f1;
+        }
+
+        .step-line.drop-after {
+            border-bottom: 2px solid #6366f1;
         }
 
         /* 翻页标记行:左侧色条 + 淡色背景 */
@@ -701,6 +716,7 @@
                         <div class="ai-row">
                             <label>引擎</label>
                             <select id="ai-profile"></select>
+                            <button id="ai-import" title="上传 ai-config.json,校验通过后覆盖生效">上传配置</button>
                         </div>
                         <textarea id="ai-requirement" spellcheck="false"
                             placeholder="用一句话描述要采集什么,例如:采集每个商品的标题、价格、详情链接"></textarea>

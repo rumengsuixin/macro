@@ -89,6 +89,7 @@ interface ElectronAPI {
         mode?: 'single' | 'list' | 'list-detail';
         baseRules?: unknown;
     }): Promise<AiGenerateResult>;
+    importAiConfig(): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }>;
     getBrowserConfig(): Promise<BrowserConfig>;
     setBrowserConfig(patch: Partial<BrowserConfig>): Promise<BrowserConfig>;
     chooseUserDataDir(): Promise<string | null>;
@@ -146,6 +147,7 @@ const aiProfileSel = byId<HTMLSelectElement>('ai-profile');
 const aiModeSel = byId<HTMLSelectElement>('ai-mode');
 const aiRequirementInput = byId<HTMLTextAreaElement>('ai-requirement');
 const aiGenerateBtn = byId<HTMLButtonElement>('ai-generate');
+const aiImportBtn = byId<HTMLButtonElement>('ai-import');
 const aiStatusEl = byId<HTMLSpanElement>('ai-status');
 
 // ===== 状态 =====
@@ -218,9 +220,76 @@ function renderSteps(): void {
             e.preventDefault();
             showStepContextMenu(e.clientX, e.clientY, i);
         });
+        // 拖拽排序:每一行可上下拖动调整顺序
+        div.draggable = true;
+        div.dataset.index = String(i);
+        div.addEventListener('dragstart', (e) => {
+            dragFromIndex = i;
+            div.classList.add('dragging');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(i)); // 兼容部分浏览器要求有数据才触发 drop
+            }
+        });
+        div.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'move';
+            }
+            if (dragFromIndex === null || dragFromIndex === i) {
+                return; // 拖到自身不显示指示线
+            }
+            clearDropIndicators();
+            const rect = div.getBoundingClientRect();
+            const before = e.clientY < rect.top + rect.height / 2;
+            div.classList.add(before ? 'drop-before' : 'drop-after');
+        });
+        div.addEventListener('dragleave', () => {
+            div.classList.remove('drop-before', 'drop-after');
+        });
+        div.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (dragFromIndex === null) {
+                return;
+            }
+            const rect = div.getBoundingClientRect();
+            const before = e.clientY < rect.top + rect.height / 2;
+            const to = before ? i : i + 1; // 插入到目标行之前/之后
+            moveStep(dragFromIndex, to);
+        });
+        div.addEventListener('dragend', () => {
+            div.classList.remove('dragging');
+            clearDropIndicators();
+            dragFromIndex = null;
+        });
         stepsEl.appendChild(div);
     });
     stepCountEl.textContent = String(steps.length);
+}
+
+// ===== 步骤拖拽排序 =====
+let dragFromIndex: number | null = null;
+
+/** 清除所有步骤行上的拖放指示类 */
+function clearDropIndicators(): void {
+    stepsEl.querySelectorAll('.drop-before, .drop-after').forEach((el) => {
+        el.classList.remove('drop-before', 'drop-after');
+    });
+}
+
+/** 把第 from 步移动到目标插入位置 to(to 为移除前的目标下标) */
+function moveStep(from: number, to: number): void {
+    if (from < 0 || from >= steps.length) {
+        return;
+    }
+    const dest = from < to ? to - 1 : to; // 移除后修正目标下标
+    if (dest === from) {
+        return; // 原地不动
+    }
+    const [item] = steps.splice(from, 1);
+    steps.splice(dest, 0, item);
+    renderSteps();
+    logLocal(`已将步骤 #${from + 1} 移动到第 ${dest + 1} 步。`);
 }
 
 // ===== 步骤右键菜单 =====
@@ -848,6 +917,33 @@ aiGenerateBtn.addEventListener('click', async () => {
         logLocal('AI 提取调用异常:' + (e as Error).message, 'error');
     } finally {
         setAiBusy(false);
+    }
+});
+
+// 上传 ai-config.json:主进程弹文件框 + 校验,通过则覆盖生效并刷新下拉
+aiImportBtn.addEventListener('click', async () => {
+    aiImportBtn.disabled = true;
+    try {
+        const res = await window.electronAPI.importAiConfig();
+        if (res.canceled) {
+            return; // 用户取消,静默
+        }
+        if (res.ok) {
+            await loadAiProfiles();
+            aiStatusEl.classList.remove('err');
+            aiStatusEl.classList.add('ok');
+            aiStatusEl.textContent = `配置已更新(共 ${res.profileCount} 个配置档)。`;
+            logLocal(`AI 配置已更新并生效,共 ${res.profileCount} 个配置档。`);
+        } else {
+            aiStatusEl.classList.remove('ok');
+            aiStatusEl.classList.add('err');
+            aiStatusEl.textContent = '上传配置校验失败,详见日志。';
+            logLocal('上传的 ai-config.json 校验失败:' + (res.error ?? '未知错误'), 'error');
+        }
+    } catch (e) {
+        logLocal('上传 ai-config.json 异常:' + (e as Error).message, 'error');
+    } finally {
+        aiImportBtn.disabled = false;
     }
 });
 
