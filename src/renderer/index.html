@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8" />
-    <title>网页宏录制工具</title>
+    <title>二爪鱼</title>
+    <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
     <style>
         * {
             box-sizing: border-box;
@@ -171,12 +172,14 @@
             border-left: 1px solid #d1d5db;
             background: #fff;
             min-height: 0;
+            overflow-y: auto; /* 内容总高超过可用高度时整体可上下滚动 */
         }
 
         .panel {
             display: flex;
             flex-direction: column;
             min-height: 0;
+            flex-shrink: 0; /* 不被挤压,保持自然高度,把超高转为 sidebar 滚动而非内容重叠 */
         }
 
         .panel-title {
@@ -207,7 +210,8 @@
             transform: rotate(-90deg);
         }
 
-        .collapsible.collapsed > #extract {
+        .collapsible.collapsed > #extract,
+        .collapsible.collapsed > .browser-body {
             display: none;
         }
 
@@ -398,7 +402,7 @@
 
         .steps-panel {
             flex: 1;
-            min-height: 0;
+            min-height: 160px; /* 空间紧张时步骤区不塌成 0,多出的高度交给 sidebar 滚动 */
         }
 
         #steps {
@@ -652,6 +656,11 @@
 <body>
     <div class="app">
         <div class="toolbar">
+            <div class="brand">
+                <img src="../assets/icon.svg" alt="二爪鱼" />
+                <span class="brand-name">二爪鱼</span>
+                <span class="brand-sub">网页宏录制 · 回放 · 数据爪取</span>
+            </div>
             <div class="row">
                 <label>地址</label>
                 <input type="text" id="address" placeholder="输入网址,如 https://books.toscrape.com/" />
