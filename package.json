@@ -8,6 +8,8 @@
         "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.mjs",
         "start": "node scripts/start.mjs",
         "dev": "npm run build && node scripts/start.mjs",
+        "pack:browser": "node scripts/copy-playwright-browser.mjs",
+        "dist": "npm run build && npm run pack:browser && electron-builder --win nsis",
         "postinstall": "playwright install chromium"
     },
     "keywords": [
