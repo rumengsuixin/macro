@@ -190,6 +190,8 @@ export interface BrowserConfig {
     userDataDir: string;
     /** 回放前注入录制 webview(默认 session)的 cookies */
     injectRecordingSession: boolean;
+    /** 回放前注入录制 webview 当前页面 origin 的 localStorage(仅当前页 origin) */
+    injectRecordingLocalStorage: boolean;
     /** 优先使用本机真 Chrome/Edge 内核回放(反检测);找不到时回退捆绑 Chromium */
     useSystemChrome: boolean;
 }
@@ -213,6 +215,8 @@ export interface SessionOptions {
     userDataDir?: string;
     /** 有值 → context 建好后 addCookies */
     cookies?: BrowserCookie[];
+    /** 有值 → 导航前 addInitScript 按 origin 注入 localStorage;键为 origin,值为该 origin 的 {key:value} 表 */
+    localStorage?: Record<string, Record<string, string>>;
     /** 真 → 优先用本机 Chrome/Edge 内核(反检测),失败回退捆绑 Chromium */
     preferSystemChrome?: boolean;
 }

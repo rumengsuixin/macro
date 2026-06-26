@@ -168,6 +168,28 @@ export class MacroRunner {
                 await context.addCookies(this.session.cookies);
                 logInfo(`已注入录制会话 cookies:${this.session.cookies.length} 条`);
             }
+            // 注入录制 localStorage(按 origin 隔离):用独立 addInitScript,在导航前注册,
+            // 脚本内按 window.location.origin 精准命中目标站,不污染其它 origin。
+            if (this.session.localStorage && Object.keys(this.session.localStorage).length > 0) {
+                await context.addInitScript((store: Record<string, Record<string, string>>) => {
+                    try {
+                        const items = store[window.location.origin];
+                        if (!items) {
+                            return; // 当前页 origin 无对应数据,跳过
+                        }
+                        for (const [key, val] of Object.entries(items)) {
+                            try {
+                                window.localStorage.setItem(key, val);
+                            } catch {
+                                /* 配额超限等单条异常跳过 */
+                            }
+                        }
+                    } catch {
+                        /* localStorage 不可用(如 about:blank)时静默跳过 */
+                    }
+                }, this.session.localStorage);
+                logInfo(`已注入录制会话 localStorage:${Object.keys(this.session.localStorage).length} 个 origin`);
+            }
             // 提高默认超时,避免点击后慢页面导航等待("waiting for scheduled navigations")超时
             page.setDefaultTimeout(this.timeoutMs); // 影响 click/fill/waitForSelector 等动作(含 click 的导航等待)
             page.setDefaultNavigationTimeout(this.timeoutMs); // 影响 goto 等导航

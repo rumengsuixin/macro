@@ -71,6 +71,7 @@ interface BrowserConfig {
     persistProfile: boolean;
     userDataDir: string;
     injectRecordingSession: boolean;
+    injectRecordingLocalStorage: boolean;
     useSystemChrome: boolean;
 }
 
@@ -791,6 +792,7 @@ const browserTitle = byId<HTMLElement>('browser-title');
 const bcChrome = byId<HTMLInputElement>('bc-chrome');
 const bcPersist = byId<HTMLInputElement>('bc-persist');
 const bcInject = byId<HTMLInputElement>('bc-inject');
+const bcLocalStorage = byId<HTMLInputElement>('bc-localstorage');
 const bcDir = byId<HTMLSpanElement>('bc-dir');
 const bcChooseBtn = byId<HTMLButtonElement>('bc-choose');
 const bcDirRow = bcChooseBtn.parentElement as HTMLDivElement;
@@ -804,6 +806,7 @@ function applyBrowserConfig(cfg: BrowserConfig): void {
     bcChrome.checked = cfg.useSystemChrome;
     bcPersist.checked = cfg.persistProfile;
     bcInject.checked = cfg.injectRecordingSession;
+    bcLocalStorage.checked = cfg.injectRecordingLocalStorage;
     bcDir.textContent = cfg.userDataDir;
     bcDir.title = cfg.userDataDir;
     // 未开启持久化时,目录显示与选择按钮置灰
@@ -833,6 +836,13 @@ bcPersist.addEventListener('change', async () => {
 bcInject.addEventListener('change', async () => {
     const cfg = await window.electronAPI.setBrowserConfig({
         injectRecordingSession: bcInject.checked,
+    });
+    applyBrowserConfig(cfg);
+});
+
+bcLocalStorage.addEventListener('change', async () => {
+    const cfg = await window.electronAPI.setBrowserConfig({
+        injectRecordingLocalStorage: bcLocalStorage.checked,
     });
     applyBrowserConfig(cfg);
 });

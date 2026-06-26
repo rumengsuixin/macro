@@ -8,6 +8,7 @@ function defaultConfig(defaultDir: string): BrowserConfig {
         persistProfile: false,
         userDataDir: defaultDir,
         injectRecordingSession: false,
+        injectRecordingLocalStorage: false,
         useSystemChrome: true,
     };
 }
@@ -35,6 +36,10 @@ export function loadBrowserConfig(filePath: string, defaultDir: string): Browser
                 typeof raw.injectRecordingSession === 'boolean'
                     ? raw.injectRecordingSession
                     : fallback.injectRecordingSession,
+            injectRecordingLocalStorage:
+                typeof raw.injectRecordingLocalStorage === 'boolean'
+                    ? raw.injectRecordingLocalStorage
+                    : fallback.injectRecordingLocalStorage,
             useSystemChrome:
                 typeof raw.useSystemChrome === 'boolean' ? raw.useSystemChrome : fallback.useSystemChrome,
         };

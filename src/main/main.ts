@@ -2,7 +2,7 @@
 // 注:runtime-bootstrap 必须放在所有 import 最前(尤其在引入 macro-runner/playwright 之前),
 // 它负责在 playwright 初始化前设好 PLAYWRIGHT_BROWSERS_PATH,否则自带 Chromium 路径不生效。
 import './runtime-bootstrap';
-import { app, BrowserWindow, ipcMain, dialog, shell, session, type Cookie } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, type Cookie, type WebContents } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
@@ -44,6 +44,10 @@ const defaultProfileDir = path.join(dataRoot, 'browser-profile');
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
 
 let mainWindow: BrowserWindow | null = null;
+
+// 录制 <webview> 的 guest webContents 引用:用于回放前读取其当前页 origin 的 localStorage
+// (localStorage 无 session 级 API,只能在页面上下文里读,故经此引用 executeJavaScript)
+let recordingWebContents: WebContents | null = null;
 
 // 每次运行宏分配递增 runId,用于隔离不同次运行的「继续」信号,避免串信号/误触发
 let runSeq = 0;
@@ -88,6 +92,13 @@ function createWindow(): void {
     // Electron 默认会丢弃这类弹窗,导致录制时点击「没反应」、新页面操作无从记录。
     // 这里拒绝新建窗口,改为在同一 webview 内打开,保证录制连续(后续操作正常录制)。
     mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
+        // 持有 guest 引用供回放前读取 localStorage;webview 销毁时置回 null 防失效引用
+        recordingWebContents = guestContents;
+        guestContents.once('destroyed', () => {
+            if (recordingWebContents === guestContents) {
+                recordingWebContents = null;
+            }
+        });
         guestContents.setWindowOpenHandler(({ url }) => {
             if (url && url !== 'about:blank') {
                 void guestContents.loadURL(url);
@@ -329,7 +340,50 @@ async function buildSessionOptions(): Promise<SessionOptions> {
             logInfo('录制会话无可注入的 cookies(默认 session 为空)。');
         }
     }
+    if (cfg.injectRecordingLocalStorage) {
+        // localStorage 无 session 级 API,只能在录制 webview 页面上下文里读;且按 origin 隔离,
+        // 实时 webview 只能拿到「当前页面所在 origin」的 localStorage(已在文档注明此限制)。
+        const ls = await captureRecordingLocalStorage();
+        if (ls) {
+            options.localStorage = { [ls.origin]: ls.items };
+            logInfo(`将注入录制 localStorage:origin ${ls.origin},共 ${Object.keys(ls.items).length} 条`);
+        } else {
+            logInfo('录制会话无可注入的 localStorage(当前页非 http(s) 或为空)。');
+        }
+    }
     return options;
+}
+
+/**
+ * 读取录制 webview 当前页面 origin 的 localStorage。
+ * 仅当存在 guest webContents、其未销毁、且当前页 origin 为 http(s) 且 localStorage 非空时返回数据,
+ * 否则返回 null(异常一律吞掉,不阻断回放)。
+ */
+async function captureRecordingLocalStorage(): Promise<{ origin: string; items: Record<string, string> } | null> {
+    const wc = recordingWebContents;
+    if (!wc || wc.isDestroyed()) {
+        return null;
+    }
+    try {
+        const result = (await wc.executeJavaScript(
+            `(() => {
+                try {
+                    const origin = location.origin;
+                    if (!origin || !/^https?:/.test(origin)) return null;
+                    const items = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k !== null) items[k] = localStorage.getItem(k);
+                    }
+                    return Object.keys(items).length > 0 ? { origin, items } : null;
+                } catch (e) { return null; }
+            })()`
+        )) as { origin: string; items: Record<string, string> } | null;
+        return result;
+    } catch (err) {
+        logError(`读取录制 localStorage 失败:${(err as Error).message}`);
+        return null;
+    }
 }
 
 /** 把 Electron cookie 转成 Playwright addCookies 形状;无 domain 或转换失败的单条跳过 */
