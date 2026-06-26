@@ -33,6 +33,7 @@ const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
 const macrosDir = path.join(dataRoot, 'macros');
 const exportsDir = path.join(dataRoot, 'exports');
 const errorsDir = path.join(dataRoot, 'errors');
+const downloadsDir = path.join(dataRoot, 'downloads');
 const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在程序目录内
 
 // 浏览器登录态复用配置:文件路径与默认 profile 目录
@@ -49,7 +50,7 @@ let runSeq = 0;
 
 /** 确保运行时目录存在 */
 function ensureDirs(): void {
-    for (const dir of [macrosDir, exportsDir, errorsDir]) {
+    for (const dir of [macrosDir, exportsDir, errorsDir, downloadsDir]) {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -189,10 +190,17 @@ function registerIpc(): void {
             });
 
         // 运行前组装会话选项:持久化目录 + 录制 cookie 注入(均按 browser-config.json 开关)
+        ensureDirs();
         const sessionOptions = await buildSessionOptions();
-        const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions);
+        const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions, downloadsDir);
         try {
-            return await runner.run(macro);
+            const result = await runner.run(macro);
+            // 有捕获到下载文件时给即时反馈:日志 + 在文件管理器中定位
+            if (result.ok && result.downloads && result.downloads.length > 0) {
+                logInfo(`已下载 ${result.downloads.length} 个文件到:${downloadsDir}`);
+                shell.showItemInFolder(result.downloads[0]);
+            }
+            return result;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logError(`运行宏时发生未捕获错误:${message}`);

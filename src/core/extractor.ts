@@ -1,13 +1,15 @@
 // 数据提取器:根据 ExtractConfig 从 Playwright 页面提取数据。
-// 支持单字段(single)、列表(list)、列表+详情页(list-detail)三种模式。
+// 支持单字段(single)、列表(list)、列表+详情页(list-detail)、列表逐项动作(list-action)四种模式。
 import type { Page, Locator } from 'playwright';
 import type {
     ExtractConfig,
     ListExtractConfig,
     ListDetailExtractConfig,
+    ListActionExtractConfig,
     ExtractField,
     ExtractRow,
 } from './macro-types';
+import type { DownloadManager } from './download-manager';
 import { logInfo, logError } from './logger';
 
 /** 翻页上下文:由回放引擎构造,提取流程在采完一页后驱动翻页 */
@@ -23,12 +25,15 @@ export interface PaginationContext {
  * - single:对每个字段取首个匹配元素,返回单行(翻页不适用)。
  * - list:逐页遍历列表项,在每项内提取各字段,返回多行。
  * - list-detail:先跨所有页采集每项基础字段与详情链接,再逐个进详情页抓详情字段,合并成行。
+ * - list-action:逐页遍历列表项,逐项点击其中按钮(常用于每点一次触发一次下载),无数据行。
  * pagination 缺省时按单页处理(totalPages=1),行为与无翻页一致。
+ * downloads 仅 list-action 用到(逐项节流);其它 mode 忽略。
  */
 export async function extract(
     page: Page,
     config: ExtractConfig,
-    pagination?: PaginationContext
+    pagination?: PaginationContext,
+    downloads?: DownloadManager
 ): Promise<ExtractRow[]> {
     if (config.mode === 'single') {
         const row: ExtractRow = {};
@@ -40,6 +45,10 @@ export async function extract(
 
     if (config.mode === 'list-detail') {
         return extractListDetail(page, config, pagination);
+    }
+
+    if (config.mode === 'list-action') {
+        return extractListAction(page, config, pagination, downloads);
     }
 
     // list 模式:逐页采集
@@ -74,6 +83,65 @@ async function collectListRows(page: Page, config: ListExtractConfig): Promise<E
         rows.push(row);
     }
     return rows;
+}
+
+/**
+ * list-action 模式:逐页遍历列表项,逐项点击其中按钮(常为下载按钮)。
+ * 不产出数据行;下载由 context 层的 DownloadManager 通用捕获并落盘。
+ * 每点一项后等这次下载开始(waitForNext)再点下一项,避免点太快;
+ * 超时只告警并继续(晚到的下载仍会被全局 handler 保存,稳健)。
+ */
+async function extractListAction(
+    page: Page,
+    config: ListActionExtractConfig,
+    pagination?: PaginationContext,
+    downloads?: DownloadManager
+): Promise<ExtractRow[]> {
+    const actionTimeout = config.actionTimeout ?? 30000;
+    const totalPages = pagination ? pagination.totalPages : 1;
+    let clicked = 0;
+    for (let p = 1; p <= totalPages; p += 1) {
+        const items = page.locator(config.listSelector);
+        const count = await items.count();
+        logInfo(`第 ${p}/${totalPages} 页发现 ${count} 个列表项,开始逐项点击……`);
+        for (let i = 0; i < count; i += 1) {
+            const item = items.nth(i);
+            // 动作选择器留空时,直接点列表项本身
+            const target = config.actionSelector
+                ? item.locator(config.actionSelector).first()
+                : item;
+            try {
+                if ((await target.count()) === 0) {
+                    logError(`第 ${p} 页第 ${i + 1} 项未找到可点击的按钮,跳过。`);
+                    continue;
+                }
+                await target.click();
+                clicked += 1;
+                // 等这次下载开始再继续;无下载管理器或超时则不阻塞下一项
+                if (downloads) {
+                    const saved = await downloads.waitForNext(actionTimeout);
+                    if (!saved) {
+                        logError(
+                            `第 ${p} 页第 ${i + 1} 项点击后 ${actionTimeout} 毫秒内未捕获到下载` +
+                                `(若为非下载动作可忽略;晚到的下载仍会被保存)。`
+                        );
+                    }
+                }
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                logError(`第 ${p} 页第 ${i + 1} 项点击失败:${message},继续下一项。`);
+            }
+        }
+        if (p < totalPages && pagination) {
+            logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
+            await pagination.turnPage();
+            await page.waitForSelector(config.listSelector);
+        }
+    }
+    logInfo(
+        `列表逐项动作完成:共点击 ${clicked} 项,捕获保存下载 ${downloads ? downloads.count() : 0} 个。`
+    );
+    return [];
 }
 
 /** 采集当前页每项的基础字段 + 详情链接(绝对化),返回待进详情的条目 */

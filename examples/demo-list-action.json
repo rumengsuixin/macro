@@ -1,0 +1,19 @@
+{
+    "name": "demo-list-action",
+    "version": 1,
+    "steps": [
+        {
+            "type": "goto",
+            "url": "https://example.com/列表页"
+        },
+        {
+            "type": "waitForSelector",
+            "selector": ".list-item"
+        }
+    ],
+    "extract": {
+        "mode": "list-action",
+        "listSelector": ".list-item",
+        "actionSelector": "button.download"
+    }
+}

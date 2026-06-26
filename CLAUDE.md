@@ -11,6 +11,7 @@
 - `README.md` — 安装、运行、使用步骤、宏 DSL 与提取规则说明
 - `开发计划.md` — 模块状态、待办、已知问题(每次任务后持续维护)
 - `examples/demo-macro.json` — 演示宏(books.toscrape.com,采集 标题 / 价格 / 链接)
+- `examples/demo-list-action.json` — 演示宏(list-action 模式:列表逐项点击下载按钮,占位选择器需按实际页面替换)
 - `ai-config.json` — AI 提取配置(项目根,首次运行自动生成):openclaw agent 目标 profile 列表 + 系统/提示词模板
 - `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`/`useSystemChrome`(反检测·默认开)
 - `browser-profile/` — 持久化回放 profile 默认目录(已 gitignore)
@@ -35,7 +36,9 @@
 - 安全:Playwright 仅在主进程,渲染进程通过 IPC + contextBridge 访问
 - 构建:纯 tsc 双 tsconfig(主进程 CommonJS + 渲染进程 ESM)+ `scripts/copy-assets.mjs`
 - 入口:`dist/main/main.js`;启动:`npm run dev`
-- 运行时目录(自动创建):`macros/`(宏)、`exports/`(Excel)、`errors/`(错误截图)
+- 运行时目录(自动创建):`macros/`(宏)、`exports/`(Excel)、`errors/`(错误截图)、`downloads/`(回放捕获的下载文件)
+- 提取模式(`ExtractConfig.mode`):`single`(整页单行)、`list`(逐项采字段)、`list-detail`(逐项进详情页采字段)、`list-action`(逐项点击按钮,不采数据)。前三种产出 `ExtractRow[]`→Excel;`list-action` 产出下载文件
+- 通用下载捕获 + 列表逐项动作(list-action):①**通用捕获(context 级原语,对所有 mode 生效)**——回放 context 统一加 `acceptDownloads:true`,新增 `src/core/download-manager.ts` 的 `DownloadManager` 挂 `context.on('download')`,用 `download.suggestedFilename()` 落盘到 `downloads/`,重名加 `(1)/(2)` 去重(保存失败 try/catch 不致命);暴露 `savedPaths`/`count()`/`waitForNext(timeoutMs)`(pending-resolver 队列,FIFO 唤醒)。单个下载按钮等普通场景也直接受益。②**list-action 模式(`extractor.ts` 的 `extractListAction`,与 list/list-detail 并列)**——遍历 `listSelector`,逐项点 `actionSelector`(留空点项本身),每点一项 `await downloads.waitForNext(actionTimeout??30000)` 等这次下载开始再点下一项(超时只告警继续,晚到下载仍被全局 handler 保存);复用现有 `PaginationContext` 翻页;返回 `[]`,下载结果经 `DownloadManager.savedPaths` 由 runner 回传到 `RunResult.downloads`。③**贯通**:`MacroRunner` 构造函数追加可选末参 `downloadDir`(`new MacroRunner(errorDir,timeoutMs?,onPause?,session?,downloadDir?)`,缺省回退 errorDir 同级 downloads);`extract()` 加可选第 4 参 `downloads?:DownloadManager`(仅 list-action 用);主进程 `main.ts` 加 `downloadsDir` 入 `ensureDirs`、传入 runner,`run-macro` 返回若 `downloads.length>0` 则 `shell.showItemInFolder` 定位;UI `#ai-mode` 加 `list-action` 选项,回放后按 `RunResult.downloads` 显示「已下载 N 个文件」。④**AI 一等支持**:`ai-extract.ts` 的 `GenerateInput.mode` 与 `buildModeHint` 加 `list-action` 分支(hint 直接喂结构 `{mode,listSelector,actionSelector}`,无需改 webextract 的 SOUL.md;不需 baseRules)
 - 翻页标记:步骤行右键「标记翻页操作」可设总页数 N,步骤加 `pagination:true`/`pageCount:N` 字段;回放跳过该步骤,提取(list/list-detail)时按总页数逐页采集,每页采完执行翻页序列。list-detail 先跨所有页收完整列表再统一进详情
 - 人工介入暂停:步骤行右键「在此前/此后插入暂停」或工具栏「插入暂停」插入 `pause` 步骤(`{type:'pause',reason?,timeout?}`);回放到此停住,有头浏览器窗口保持可交互,用户手动完成登录/验证码/扫码后,在主窗模态框点「继续」恢复。机制:`MacroRunner(errorDir,timeoutMs?,onPause?)` 注入回调(core 不依赖 Electron,无回调默认放行);主进程 `run-macro` 用递增 `runId` 隔离 `resume-macro` 信号、`macro-paused` 事件通知渲染进程;`timeout` 防无人值守挂死(超时走出错截图)。**pause 与 `pagination` 互斥**(回放主循环跳过 pagination 步骤),UI 禁止对 pause 标翻页
 - 登录态复用(回放/录制两浏览器引擎不同,无法严格共用同一目录,故用两条可叠加 UI 开关,默认关,存 `browser-config.json`):①**持久化回放 profile**——回放从临时 profile 改 `chromium.launchPersistentContext(userDataDir)`,跨次复用(含 cookie/localStorage),一次登录长期有效;②**录制→回放 cookie 注入**——回放前主进程从 `session.defaultSession`(webview 默认 session)导出 cookies,`toPlaywrightCookies` 转格式后 `context.addCookies` 注入。`MacroRunner(errorDir,timeoutMs?,onPause?,session?)` 第 4 参 `SessionOptions{userDataDir?,cookies?}`(core 不依赖 Electron,cookie 来源/转换全在主进程,同 onPause 依赖倒置);UI 在侧栏可折叠面板「浏览器登录态」(`#bc-persist`/`#bc-inject`/`#bc-choose`),IPC `get/set-browser-config`、`choose-user-data-dir`

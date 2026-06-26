@@ -325,7 +325,20 @@ function fillTemplate(template: string, requirement: string, html: string): stri
  * 按目标 mode 动态构造一段「模式前提」,拼进发给 agent 的 message。
  * 不传 mode 时返回空串(旧路径行为不变);list-detail 时完整内嵌作为基础的 list 规则(不截断)。
  */
-function buildModeHint(mode?: 'single' | 'list' | 'list-detail', baseRules?: ExtractConfig): string {
+function buildModeHint(
+    mode?: 'single' | 'list' | 'list-detail' | 'list-action',
+    baseRules?: ExtractConfig
+): string {
+    if (mode === 'list-action') {
+        return [
+            '【目标模式前提】请输出 mode="list-action" 的「列表逐项动作」规则:',
+            '结构为 { "mode": "list-action", "listSelector": "...", "actionSelector": "..." }。',
+            'listSelector 是页面上重复出现的列表项容器选择器;',
+            'actionSelector 是【每个列表项内部】要点击的按钮选择器(通常是下载/操作按钮,相对列表项查找)。',
+            '只输出这两个选择器,不要 fields、不要详情结构、不要其它字段。',
+            '适用场景:列表每一项都有一个按钮需要逐项点击(如每点一次触发一次文件下载)。',
+        ].join('\n');
+    }
     if (mode === 'single') {
         return [
             '【目标模式前提】请输出 mode="single" 的整页提取规则:',
@@ -386,7 +399,7 @@ export interface GenerateInput {
     html: string;
     profileId?: string;
     /** 目标提取模式;不传则维持现状(由 agent 自行判断结构) */
-    mode?: 'single' | 'list' | 'list-detail';
+    mode?: 'single' | 'list' | 'list-detail' | 'list-action';
     /** mode=list-detail 时携带的现有 list 规则,作为补全 detail 的基础 */
     baseRules?: ExtractConfig;
 }

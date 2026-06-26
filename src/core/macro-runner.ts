@@ -15,6 +15,7 @@ import type {
     SessionOptions,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
+import { DownloadManager } from './download-manager';
 import { logInfo, logError } from './logger';
 
 export class MacroRunner {
@@ -24,14 +25,23 @@ export class MacroRunner {
     private onPause: OnPause;
     /** 会话选项:持久化目录 / 注入的 cookies;由主进程组装,缺省则用临时 profile、不注入 */
     private session: SessionOptions;
+    /** 下载文件保存目录;缺省回退到 errorDir 同级的 downloads */
+    private downloadDir: string;
 
-    constructor(errorDir: string, timeoutMs?: number, onPause?: OnPause, session?: SessionOptions) {
+    constructor(
+        errorDir: string,
+        timeoutMs?: number,
+        onPause?: OnPause,
+        session?: SessionOptions,
+        downloadDir?: string
+    ) {
         this.errorDir = errorDir;
         // 回放默认超时:默认 60 秒;可用环境变量 MACRO_TIMEOUT(毫秒)覆盖
         this.timeoutMs = timeoutMs ?? (Number(process.env.MACRO_TIMEOUT) || 60000);
         // 无回调(无头/单测场景)时立即放行,避免永久挂起
         this.onPause = onPause ?? (async (): Promise<void> => {});
         this.session = session ?? {};
+        this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
     }
 
     /** 回放整个宏 */
@@ -73,6 +83,9 @@ export class MacroRunner {
                 viewport: { width: 1280, height: 800 },
             };
 
+            // 通用下载捕获:允许下载;落盘由 DownloadManager 统一处理(对所有 mode 生效)
+            const downloadContextOptions = { acceptDownloads: true };
+
             let lastErr: unknown = null;
             for (const channel of channelChain) {
                 const isBundled = !channel;
@@ -87,12 +100,16 @@ export class MacroRunner {
                         // 持久化 profile:跨次回放复用同一目录(含 cookie/localStorage),登录态长期有效
                         context = await chromium.launchPersistentContext(this.session.userDataDir, {
                             ...launchOpts,
+                            ...downloadContextOptions,
                             ...(isBundled ? bundledContextOptions : {}),
                         });
                         page = context.pages()[0] ?? (await context.newPage());
                     } else {
                         browser = await chromium.launch(launchOpts);
-                        context = await browser.newContext(isBundled ? bundledContextOptions : {});
+                        context = await browser.newContext({
+                            ...downloadContextOptions,
+                            ...(isBundled ? bundledContextOptions : {}),
+                        });
                         page = await context.newPage();
                     }
                     logInfo(
@@ -167,6 +184,9 @@ export class MacroRunner {
                 logInfo('检测到新标签页弹窗,已切换为活动页继续回放。');
             });
 
+            // 通用下载捕获:挂在 context 上,回放过程中任何触发的下载都落盘
+            const downloadManager = new DownloadManager(context, this.downloadDir);
+
             for (let i = 0; i < macro.steps.length; i += 1) {
                 currentStepIndex = i;
                 currentStep = macro.steps[i];
@@ -205,14 +225,18 @@ export class MacroRunner {
                     };
                 }
                 logInfo('开始按提取规则提取数据……');
-                rows = await extract(activePage, macro.extract, pagination);
+                rows = await extract(activePage, macro.extract, pagination, downloadManager);
                 logInfo(`数据提取完成,共 ${rows.length} 行。`);
             } else {
                 logInfo('未配置提取规则,跳过数据提取。');
             }
 
             logInfo('宏回放成功。');
-            return { ok: true, rows };
+            const downloads = downloadManager.savedPaths;
+            if (downloads.length > 0) {
+                logInfo(`本次回放共保存下载文件 ${downloads.length} 个,目录:${this.downloadDir}`);
+            }
+            return { ok: true, rows, downloads: downloads.length > 0 ? downloads : undefined };
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             const selector =

@@ -128,8 +128,23 @@ export interface ListDetailExtractConfig {
     detailFields: ExtractField[];
 }
 
+/** 列表逐项动作:遍历列表项,逐项点击其中按钮(常用于每点一次触发一次文件下载) */
+export interface ListActionExtractConfig {
+    mode: 'list-action';
+    /** 列表项容器选择器 */
+    listSelector: string;
+    /** 列表项内要点击的按钮选择器;留空则点列表项本身 */
+    actionSelector: string;
+    /** 每次点击后等待下载开始的超时(毫秒);省略沿用全局默认 */
+    actionTimeout?: number;
+}
+
 /** 提取配置 */
-export type ExtractConfig = SingleExtractConfig | ListExtractConfig | ListDetailExtractConfig;
+export type ExtractConfig =
+    | SingleExtractConfig
+    | ListExtractConfig
+    | ListDetailExtractConfig
+    | ListActionExtractConfig;
 
 /** 宏定义 */
 export interface Macro {
@@ -162,6 +177,8 @@ export interface RunError {
 export interface RunResult {
     ok: boolean;
     rows?: ExtractRow[];
+    /** list-action 等模式下捕获并保存的下载文件绝对路径(无数据行时用它反馈) */
+    downloads?: string[];
     error?: RunError;
 }
 

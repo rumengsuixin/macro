@@ -33,6 +33,7 @@ interface RunError {
 interface RunResult {
     ok: boolean;
     rows?: Record<string, string>[];
+    downloads?: string[];
     error?: RunError;
 }
 
@@ -87,7 +88,7 @@ interface ElectronAPI {
         requirement: string;
         html: string;
         profileId?: string;
-        mode?: 'single' | 'list' | 'list-detail';
+        mode?: 'single' | 'list' | 'list-detail' | 'list-action';
         baseRules?: unknown;
     }): Promise<AiGenerateResult>;
     importAiConfig(): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }>;
@@ -673,7 +674,13 @@ runBtn.addEventListener('click', async () => {
         const result = await window.electronAPI.runMacro(macro);
         if (result.ok) {
             lastRows = result.rows ?? [];
-            logLocal(`运行成功,提取到 ${lastRows.length} 行数据。可点击「导出 Excel」。`);
+            const dlCount = result.downloads?.length ?? 0;
+            if (dlCount > 0) {
+                // list-action 等模式:产出是下载文件而非数据行
+                logLocal(`运行成功,已下载 ${dlCount} 个文件(已在文件管理器中定位)。`);
+            } else {
+                logLocal(`运行成功,提取到 ${lastRows.length} 行数据。可点击「导出 Excel」。`);
+            }
         } else {
             const err = result.error;
             logLocal(
@@ -886,7 +893,7 @@ aiGenerateBtn.addEventListener('click', async () => {
 
     const requirement = aiRequirementInput.value.trim();
     const profileId = aiProfileSel.value || undefined;
-    const mode = aiModeSel.value as 'single' | 'list' | 'list-detail';
+    const mode = aiModeSel.value as 'single' | 'list' | 'list-detail' | 'list-action';
 
     // list-detail 必须以现有合法 list 规则为基础;生成时兜底校验
     let baseRules: Record<string, unknown> | undefined;
