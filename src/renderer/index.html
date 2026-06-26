@@ -163,6 +163,25 @@
             min-height: 0;
         }
 
+        /* 左右分隔条:可拖动调整左右宽度 */
+        .main-divider {
+            flex: 0 0 6px;
+            cursor: col-resize;
+            background: #e5e7eb;
+            border-radius: 3px;
+            transition: background .12s;
+        }
+
+        .main-divider:hover,
+        .main-divider.dragging {
+            background: #93c5fd;
+        }
+
+        /* 拖拽期间盖住 webview,避免 webview 吞掉 mousemove 导致拖动卡死 */
+        .main.resizing webview {
+            pointer-events: none;
+        }
+
         .sidebar {
             width: 360px;
             flex: 0 0 360px;
@@ -739,6 +758,7 @@
                 </div>
                 <webview id="view" src="about:blank" allowpopups></webview>
             </div>
+            <div class="main-divider" id="main-divider" title="拖动调整左右宽度"></div>
             <div class="sidebar">
                 <div class="panel collapsible collapsed" id="extract-panel">
                     <div class="panel-title" id="extract-title">提取规则(extract,可编辑 JSON)</div>

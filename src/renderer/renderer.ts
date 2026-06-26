@@ -990,6 +990,55 @@ webview.addEventListener('did-navigate', (e: any) => {
     }
 });
 
+// ===== 左右宽度拖动 =====
+const SIDEBAR_WIDTH_KEY = 'macro.sidebarWidth';
+const SIDEBAR_MIN = 240; // 右栏最窄
+const SIDEBAR_MAX_RATIO = 0.75; // 右栏最宽不超过 .main 宽度的 75%,保证浏览器可见
+
+/** 把右栏宽度写到样式(同时设 flex-basis 与 width,覆盖 CSS 固定值) */
+function applySidebarWidth(sidebar: HTMLElement, w: number): void {
+    sidebar.style.flex = '0 0 ' + w + 'px';
+    sidebar.style.width = w + 'px';
+}
+
+/** 初始化分隔条拖动:鼠标按下→移动→松开实时调整右栏宽度,松开后存 localStorage */
+function setupMainDivider(): void {
+    const divider = document.getElementById('main-divider');
+    const main = document.querySelector<HTMLElement>('.main');
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    if (!divider || !main || !sidebar) return;
+
+    // 启动时恢复上次宽度(合法才应用)
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(saved) && saved >= SIDEBAR_MIN) {
+        const max = main.getBoundingClientRect().width * SIDEBAR_MAX_RATIO;
+        applySidebarWidth(sidebar, Math.min(saved, max || saved));
+    }
+
+    const onMove = (e: MouseEvent): void => {
+        const rect = main.getBoundingClientRect();
+        const max = rect.width * SIDEBAR_MAX_RATIO;
+        let w = rect.right - e.clientX;
+        w = Math.max(SIDEBAR_MIN, Math.min(w, max));
+        applySidebarWidth(sidebar, w);
+    };
+    const onUp = (): void => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        main.classList.remove('resizing');
+        divider.classList.remove('dragging');
+        // 保存当前实际宽度
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(sidebar.getBoundingClientRect().width)));
+    };
+    divider.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        main.classList.add('resizing');
+        divider.classList.add('dragging');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
 // ===== 初始化 =====
 /** 隐藏启动加载遮罩(淡出后移除,失败也不影响界面) */
 function hideBootOverlay(): void {
@@ -1005,6 +1054,7 @@ async function init(): Promise<void> {
     refreshAiModeOptions();
     addressInput.value = 'https://books.toscrape.com/';
     setRecordingUI(false);
+    setupMainDivider();
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
