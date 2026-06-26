@@ -637,11 +637,21 @@ addressInput.addEventListener('keydown', (e) => {
 });
 
 startBtn.addEventListener('click', () => {
-    steps = [];
-    renderSteps();
+    // 保留现场:不再清空已有步骤,新动作追加到末尾
     const url = safeGetUrl();
     if (url && url !== 'about:blank') {
-        addStep({ type: 'goto', url });
+        // 取已录制步骤中最后一条 goto 的 url,做去重
+        let lastGotoUrl: string | undefined;
+        for (let i = steps.length - 1; i >= 0; i--) {
+            if (steps[i].type === 'goto') {
+                lastGotoUrl = (steps[i] as { url?: string }).url;
+                break;
+            }
+        }
+        // steps 为空 → 补首个 goto;非空 → 仅当当前页与上次跳转目标不同才补
+        if (steps.length === 0 || lastGotoUrl !== url) {
+            addStep({ type: 'goto', url });
+        }
     }
     recording = true;
     armRecorder(true);
