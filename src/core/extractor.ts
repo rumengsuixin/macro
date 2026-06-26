@@ -110,16 +110,26 @@ async function extractListAction(
             const target = config.actionSelector
                 ? item.locator(config.actionSelector).first()
                 : item;
+            // 逐项进度日志:让 UI 实时可见、能定位卡在第几项(此前循环内零日志,易被误判卡死)
+            logInfo(
+                `第 ${p} 页 ${i + 1}/${count} 项:点击 ${config.actionSelector || '列表项本身'}……`
+            );
             try {
                 if ((await target.count()) === 0) {
                     logError(`第 ${p} 页第 ${i + 1} 项未找到可点击的按钮,跳过。`);
                     continue;
                 }
-                await target.click();
+                // 下载等待须在点击前注册,确保等待者先于 download 事件就位,不漏接快下载(修注册竞态)
+                const waitPromise = downloads ? downloads.waitForNext(actionTimeout) : null;
+                // 动作点击用专属较短超时(actionTimeout),坏选择器在此超时内快速暴露而非静默等满全局 60s
+                await target.click({ timeout: actionTimeout });
                 clicked += 1;
                 // 等这次下载开始再继续;无下载管理器或超时则不阻塞下一项
-                if (downloads) {
-                    const saved = await downloads.waitForNext(actionTimeout);
+                if (waitPromise) {
+                    logInfo(
+                        `第 ${p} 页第 ${i + 1} 项已点击,等待下载开始(最多 ${actionTimeout} 毫秒)……`
+                    );
+                    const saved = await waitPromise;
                     if (!saved) {
                         logError(
                             `第 ${p} 页第 ${i + 1} 项点击后 ${actionTimeout} 毫秒内未捕获到下载` +
