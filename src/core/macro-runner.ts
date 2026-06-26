@@ -48,16 +48,104 @@ export class MacroRunner {
         try {
             // 默认有头(回放可视);设置 MACRO_HEADLESS=1 可无头运行(便于自动化测试)
             const headless = process.env.MACRO_HEADLESS === '1';
-            if (this.session.userDataDir) {
-                // 持久化 profile:跨次回放复用同一目录(含 cookie/localStorage),实现登录态长期有效
-                context = await chromium.launchPersistentContext(this.session.userDataDir, { headless });
-                page = context.pages()[0] ?? (await context.newPage());
-                logInfo(`使用持久化浏览器目录:${this.session.userDataDir}`);
-            } else {
-                browser = await chromium.launch({ headless });
-                context = await browser.newContext();
-                page = await context.newPage();
+
+            // 反检测加固:去掉自动化开关与 infobar,抑制 navigator.webdriver(对所有内核生效)
+            const hardenedArgs = [
+                '--disable-blink-features=AutomationControlled',
+                '--no-first-run',
+                '--no-default-browser-check',
+            ];
+            const ignoreDefaultArgs = ['--enable-automation'];
+
+            // 内核优选回退链:优先本机真 Chrome → 本机 Edge → 捆绑 Chromium(undefined)。
+            // 真品牌内核(Chrome/Edge)指纹更接近真实用户;Windows 10 必带 Edge,故几乎总能命中真品牌。
+            const channelChain: Array<string | undefined> = this.session.preferSystemChrome
+                ? ['chrome', 'msedge', undefined]
+                : [undefined];
+
+            // 仅在回退到捆绑 Chromium 时规整 context(其默认指纹偏「测试版」);
+            // 真 Chrome/Edge 自身 UA 已是合法品牌串,覆盖反而易与 Sec-CH-UA 等版本错配,故不动。
+            const bundledContextOptions = {
+                userAgent:
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                locale: 'zh-CN',
+                viewport: { width: 1280, height: 800 },
+            };
+
+            let lastErr: unknown = null;
+            for (const channel of channelChain) {
+                const isBundled = !channel;
+                const launchOpts = {
+                    headless,
+                    args: hardenedArgs,
+                    ignoreDefaultArgs,
+                    ...(channel ? { channel } : {}),
+                };
+                try {
+                    if (this.session.userDataDir) {
+                        // 持久化 profile:跨次回放复用同一目录(含 cookie/localStorage),登录态长期有效
+                        context = await chromium.launchPersistentContext(this.session.userDataDir, {
+                            ...launchOpts,
+                            ...(isBundled ? bundledContextOptions : {}),
+                        });
+                        page = context.pages()[0] ?? (await context.newPage());
+                    } else {
+                        browser = await chromium.launch(launchOpts);
+                        context = await browser.newContext(isBundled ? bundledContextOptions : {});
+                        page = await context.newPage();
+                    }
+                    logInfo(
+                        `回放浏览器内核:${channel ?? '捆绑 Chromium'}` +
+                            `${this.session.userDataDir ? '(持久化目录)' : ''}。`
+                    );
+                    lastErr = null;
+                    break;
+                } catch (err) {
+                    // 该内核不可用(如未装 Chrome)→ 清理半开资源,尝试下一个回退
+                    lastErr = err;
+                    logInfo(`内核 ${channel ?? '捆绑 Chromium'} 启动失败,尝试下一回退:${(err as Error).message}`);
+                    if (browser) {
+                        try {
+                            await browser.close();
+                        } catch {
+                            /* 忽略清理异常 */
+                        }
+                        browser = null;
+                    }
+                    context = null;
+                    page = null;
+                }
             }
+            if (!context || !page) {
+                throw lastErr ?? new Error('所有浏览器内核均启动失败。');
+            }
+
+            // 反检测注入脚本(必须在任何导航前注册;早于 cookie 注入):抹掉自动化痕迹、补齐常见浏览器特征
+            await context.addInitScript(() => {
+                // navigator.webdriver 兜底置空(即便已用 --disable-blink-features 抑制)
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                // 补 window.chrome runtime(部分检测脚本据此判定是否真 Chrome)
+                const w = window as unknown as { chrome?: unknown };
+                if (!w.chrome) {
+                    w.chrome = { runtime: {} };
+                }
+                // permissions.query 对 notifications 返回与真实浏览器一致的状态(自动化常暴露此处不一致)
+                const perms = window.navigator.permissions;
+                const origQuery = perms.query.bind(perms);
+                perms.query = (params: PermissionDescriptor): Promise<PermissionStatus> =>
+                    params && (params as { name?: string }).name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
+                        : origQuery(params);
+                // languages / plugins 非空(无头/测试内核常为空,易被识别)
+                if (!navigator.languages || navigator.languages.length === 0) {
+                    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+                }
+                if (!navigator.plugins || navigator.plugins.length === 0) {
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                }
+            });
+
             // 注入录制 webview 的 cookies(把录制时登录的账号带进回放)
             if (this.session.cookies && this.session.cookies.length > 0) {
                 await context.addCookies(this.session.cookies);

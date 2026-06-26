@@ -173,6 +173,8 @@ export interface BrowserConfig {
     userDataDir: string;
     /** 回放前注入录制 webview(默认 session)的 cookies */
     injectRecordingSession: boolean;
+    /** 优先使用本机真 Chrome/Edge 内核回放(反检测);找不到时回退捆绑 Chromium */
+    useSystemChrome: boolean;
 }
 
 /** Playwright addCookies 入参形状(由主进程从 Electron cookie 转换得到) */
@@ -194,4 +196,6 @@ export interface SessionOptions {
     userDataDir?: string;
     /** 有值 → context 建好后 addCookies */
     cookies?: BrowserCookie[];
+    /** 真 → 优先用本机 Chrome/Edge 内核(反检测),失败回退捆绑 Chromium */
+    preferSystemChrome?: boolean;
 }

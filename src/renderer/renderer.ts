@@ -70,6 +70,7 @@ interface BrowserConfig {
     persistProfile: boolean;
     userDataDir: string;
     injectRecordingSession: boolean;
+    useSystemChrome: boolean;
 }
 
 interface ElectronAPI {
@@ -770,6 +771,7 @@ extractTitle.addEventListener('click', () => {
 // ===== 浏览器登录态(回放复用)=====
 const browserPanel = byId<HTMLDivElement>('browser-panel');
 const browserTitle = byId<HTMLElement>('browser-title');
+const bcChrome = byId<HTMLInputElement>('bc-chrome');
 const bcPersist = byId<HTMLInputElement>('bc-persist');
 const bcInject = byId<HTMLInputElement>('bc-inject');
 const bcDir = byId<HTMLSpanElement>('bc-dir');
@@ -782,6 +784,7 @@ browserTitle.addEventListener('click', () => {
 
 /** 把配置回填到三个控件,并依持久化开关联动目录行可用性 */
 function applyBrowserConfig(cfg: BrowserConfig): void {
+    bcChrome.checked = cfg.useSystemChrome;
     bcPersist.checked = cfg.persistProfile;
     bcInject.checked = cfg.injectRecordingSession;
     bcDir.textContent = cfg.userDataDir;
@@ -799,6 +802,11 @@ async function loadBrowserConfig(): Promise<void> {
         logLocal('加载浏览器登录态配置失败:' + (e as Error).message, 'error');
     }
 }
+
+bcChrome.addEventListener('change', async () => {
+    const cfg = await window.electronAPI.setBrowserConfig({ useSystemChrome: bcChrome.checked });
+    applyBrowserConfig(cfg);
+});
 
 bcPersist.addEventListener('change', async () => {
     const cfg = await window.electronAPI.setBrowserConfig({ persistProfile: bcPersist.checked });

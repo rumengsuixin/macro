@@ -273,7 +273,8 @@ function registerIpc(): void {
         saveBrowserConfig(browserConfigPath, next);
         logInfo(
             `浏览器登录态配置已更新:持久化=${next.persistProfile ? '开' : '关'}、` +
-                `注入录制登录=${next.injectRecordingSession ? '开' : '关'}、目录=${next.userDataDir}`
+                `注入录制登录=${next.injectRecordingSession ? '开' : '关'}、` +
+                `本机 Chrome 内核=${next.useSystemChrome ? '开' : '关'}、目录=${next.userDataDir}`
         );
         return next;
     });
@@ -296,6 +297,11 @@ function registerIpc(): void {
 async function buildSessionOptions(): Promise<SessionOptions> {
     const cfg = loadBrowserConfig(browserConfigPath, defaultProfileDir);
     const options: SessionOptions = {};
+    // 优先用本机真 Chrome/Edge 内核回放(反检测);core 层据此走内核回退链
+    options.preferSystemChrome = cfg.useSystemChrome;
+    if (cfg.useSystemChrome) {
+        logInfo('回放将优先尝试本机 Chrome/Edge 内核(反检测),失败回退捆绑 Chromium。');
+    }
     if (cfg.persistProfile) {
         // 兜底建目录,避免 launchPersistentContext 因目录不存在报错
         if (!fs.existsSync(cfg.userDataDir)) {

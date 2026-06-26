@@ -8,6 +8,7 @@ function defaultConfig(defaultDir: string): BrowserConfig {
         persistProfile: false,
         userDataDir: defaultDir,
         injectRecordingSession: false,
+        useSystemChrome: true,
     };
 }
 
@@ -34,6 +35,8 @@ export function loadBrowserConfig(filePath: string, defaultDir: string): Browser
                 typeof raw.injectRecordingSession === 'boolean'
                     ? raw.injectRecordingSession
                     : fallback.injectRecordingSession,
+            useSystemChrome:
+                typeof raw.useSystemChrome === 'boolean' ? raw.useSystemChrome : fallback.useSystemChrome,
         };
     } catch {
         // 坏 JSON 等异常:回退默认,不阻断启动

@@ -12,7 +12,7 @@
 - `开发计划.md` — 模块状态、待办、已知问题(每次任务后持续维护)
 - `examples/demo-macro.json` — 演示宏(books.toscrape.com,采集 标题 / 价格 / 链接)
 - `ai-config.json` — AI 提取配置(项目根,首次运行自动生成):openclaw agent 目标 profile 列表 + 系统/提示词模板
-- `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`
+- `browser-config.json` — 浏览器登录态复用配置(项目根,首次设置时生成,已 gitignore):`persistProfile`/`userDataDir`/`injectRecordingSession`/`useSystemChrome`(反检测·默认开)
 - `browser-profile/` — 持久化回放 profile 默认目录(已 gitignore)
 - `scripts/test-ai.mjs` — AI 自检脚本(验证对接 openclaw agent 整链能否跑通)
 - `打包指南.md` — Windows 安装包打包说明(自带 Chromium,`npm run dist` 一键打包,产物在 `release/`);安装态用户数据在 `%APPDATA%\macro-recorder\`,`ai-config.json` 首次启动自动生成
@@ -31,6 +31,7 @@
 ## 项目要点
 
 - 录制:Electron `<webview>`(内置 Chromium);回放/提取:独立 Playwright Chromium
+- 回放反检测加固(因 Playwright 自带的「Chromium for Testing」易被反爬识别:`navigator.webdriver`、`--enable-automation` infobar、缺 Chrome 品牌组件):①**加固启动**——`launch`/`launchPersistentContext` 统一加 `args:['--disable-blink-features=AutomationControlled','--no-first-run','--no-default-browser-check']` + `ignoreDefaultArgs:['--enable-automation']`;②**内核优选回退链**——`preferSystemChrome` 为真时依次试 `channel:'chrome'`→`channel:'msedge'`→捆绑 Chromium(undefined),try/catch 逐个回退并 `logInfo` 实际命中内核(Windows 10 必带 Edge,几乎总命中真品牌);③**addInitScript**(导航前、cookie 注入前)——置空 `navigator.webdriver`、补 `window.chrome.runtime`、修正 `permissions.query(notifications)`、补 `languages`/`plugins` 非空;④仅**回退到捆绑 Chromium** 时才设 `userAgent`(Chrome/131 串)+`locale:zh-CN`+`viewport`(真 Chrome/Edge 不覆盖 UA,免与 Sec-CH-UA 版本错配)。开关 `browser-config.json.useSystemChrome`(默认开)经 `SessionOptions.preferSystemChrome` 传入 core;UI 在「浏览器登录态」面板 `#bc-chrome`。**后续若遇 Cloudflare/DataDome 等深度 CDP 指纹检测,再升级 patchright(drop-in 替换 playwright,需改 `copy-playwright-browser.mjs` 下载命令)**
 - 安全:Playwright 仅在主进程,渲染进程通过 IPC + contextBridge 访问
 - 构建:纯 tsc 双 tsconfig(主进程 CommonJS + 渲染进程 ESM)+ `scripts/copy-assets.mjs`
 - 入口:`dist/main/main.js`;启动:`npm run dev`
