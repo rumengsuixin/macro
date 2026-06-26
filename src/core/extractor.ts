@@ -85,6 +85,99 @@ async function collectListRows(page: Page, config: ListExtractConfig): Promise<E
     return rows;
 }
 
+/** 日志限长:单条诊断日志里的属性/文本最多保留这么多字符,超出截断标注(仅展示用,不影响数据) */
+const DIAG_TEXT_MAX = 120;
+/** 诊断时最多逐个列出多少个按钮,避免刷屏 */
+const DIAG_BUTTON_MAX = 8;
+/** 结构性伪类:这类伪类在 element-plus 这类包裹结构里最容易把匹配卡成 0 */
+const STRUCTURAL_PSEUDO = /:(?:first-of-type|last-of-type|first-child|last-child|nth-child\([^)]*\)|nth-of-type\([^)]*\)|only-child|only-of-type)\s*$/i;
+
+/** 把可能很长的文本压成一行并限长,供诊断日志展示 */
+function clip(text: string): string {
+    const oneLine = text.replace(/\s+/g, ' ').trim();
+    return oneLine.length > DIAG_TEXT_MAX ? `${oneLine.slice(0, DIAG_TEXT_MAX)}…` : oneLine;
+}
+
+/**
+ * 诊断 list-action 某项「未找到可点击的按钮」的原因(全只读,绝不点击/改页面)。
+ * 依次输出:①项内 button 概览(总数 + 各 class/文本)②选择器分段探测(第一处归零层级)
+ * ③结构性伪类剥离重测。全程 try/catch,诊断本身出错也不影响回放。
+ */
+async function diagnoseMissingTarget(
+    item: Locator,
+    actionSelector: string | undefined,
+    p: number,
+    i: number
+): Promise<void> {
+    const tag = `第 ${p} 页第 ${i + 1} 项诊断`;
+    // ① 项内按钮概览:让用户直接看到"正确的按钮长什么样"
+    try {
+        const buttons = item.locator('button');
+        const btnCount = await buttons.count();
+        logInfo(`${tag}:项内共有 ${btnCount} 个 <button>。`);
+        const show = Math.min(btnCount, DIAG_BUTTON_MAX);
+        for (let b = 0; b < show; b += 1) {
+            const btn = buttons.nth(b);
+            const cls = (await btn.getAttribute('class')) ?? '(无 class)';
+            let txt = '';
+            try {
+                txt = await btn.innerText();
+            } catch {
+                txt = '';
+            }
+            logInfo(`${tag}:button[${b}] class="${clip(cls)}" 文本="${clip(txt)}"`);
+        }
+        if (btnCount > show) {
+            logInfo(`${tag}:……还有 ${btnCount - show} 个 button 未列出。`);
+        }
+    } catch (err) {
+        logInfo(`${tag}:统计项内 button 失败(${err instanceof Error ? err.message : String(err)})。`);
+    }
+
+    if (!actionSelector) {
+        return;
+    }
+
+    // ② 选择器分段探测:按空格拆成后代层级,逐级累积前缀,定位第一处归零的层级
+    try {
+        const segs = actionSelector.split(/\s+/).filter(Boolean);
+        let prefix = '';
+        let brokeAt = -1;
+        for (let s = 0; s < segs.length; s += 1) {
+            prefix = prefix ? `${prefix} ${segs[s]}` : segs[s];
+            const n = await item.locator(prefix).count();
+            logInfo(`${tag}:分段「${prefix}」命中 ${n} 个。`);
+            if (n === 0) {
+                brokeAt = s;
+                break;
+            }
+        }
+        if (brokeAt >= 0) {
+            logInfo(`${tag}:首处归零在第 ${brokeAt + 1} 段「${segs[brokeAt]}」,问题大概率出在这一段。`);
+        }
+    } catch (err) {
+        logInfo(`${tag}:分段探测失败(${err instanceof Error ? err.message : String(err)})。`);
+    }
+
+    // ③ 结构性伪类剥离重测:去掉末段结构性伪类后若能命中,则伪类即元凶
+    try {
+        if (STRUCTURAL_PSEUDO.test(actionSelector)) {
+            const stripped = actionSelector.replace(STRUCTURAL_PSEUDO, '');
+            const n = await item.locator(stripped).count();
+            if (n > 0) {
+                logInfo(
+                    `${tag}:去掉结构性伪类后「${stripped}」命中 ${n} 个 —— ` +
+                        `伪类导致 0 匹配,建议移除伪类或改用 .first()。`
+                );
+            } else {
+                logInfo(`${tag}:去掉结构性伪类后仍 0 匹配,问题不在伪类。`);
+            }
+        }
+    } catch (err) {
+        logInfo(`${tag}:伪类剥离重测失败(${err instanceof Error ? err.message : String(err)})。`);
+    }
+}
+
 /**
  * list-action 模式:逐页遍历列表项,逐项点击其中按钮(常为下载按钮)。
  * 不产出数据行;下载由 context 层的 DownloadManager 通用捕获并落盘。
@@ -117,6 +210,8 @@ async function extractListAction(
             try {
                 if ((await target.count()) === 0) {
                     logError(`第 ${p} 页第 ${i + 1} 项未找到可点击的按钮,跳过。`);
+                    // 补一组只读诊断,帮助判断未命中的具体原因(哪一段断了/伪类元凶/项内实际按钮)
+                    await diagnoseMissingTarget(item, config.actionSelector, p, i);
                     continue;
                 }
                 // 下载等待须在点击前注册,确保等待者先于 download 事件就位,不漏接快下载(修注册竞态)
