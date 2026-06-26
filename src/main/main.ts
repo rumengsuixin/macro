@@ -61,6 +61,10 @@ function createWindow(): void {
         width: 1280,
         height: 860,
         title: '网页宏录制工具',
+        // 与 index.html body 背景一致,消除窗口首帧白底闪烁
+        backgroundColor: '#f3f4f6',
+        // 先不显示,等首帧可绘制(ready-to-show)再显示,避免白屏
+        show: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -92,6 +96,11 @@ function createWindow(): void {
     });
 
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+    // 首帧可绘制后再显示窗口,避免「先白屏后跳出界面」
+    mainWindow.once('ready-to-show', () => {
+        mainWindow?.show();
+    });
 
     mainWindow.webContents.on('did-finish-load', () => {
         if (mainWindow) {

@@ -399,6 +399,40 @@
             }
         }
 
+        /* 启动加载遮罩:随页面首帧立即出现,界面就绪后淡出,消除白屏 */
+        #boot-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            background: #f3f4f6;
+            transition: opacity .25s ease;
+        }
+
+        #boot-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .boot-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(124, 58, 237, .2);
+            border-top-color: #7c3aed;
+            border-radius: 50%;
+            animation: ai-spin .7s linear infinite;
+        }
+
+        .boot-text {
+            font-size: 14px;
+            color: #6b7280;
+            letter-spacing: 1px;
+        }
+
         .steps-panel {
             flex: 1;
             min-height: 160px; /* 空间紧张时步骤区不塌成 0,多出的高度交给 sidebar 滚动 */
@@ -760,6 +794,12 @@
             <div class="panel-title">日志</div>
             <div id="log"></div>
         </div>
+    </div>
+
+    <!-- 启动加载遮罩(界面就绪后由 renderer.js 淡出) -->
+    <div id="boot-overlay">
+        <div class="boot-spinner"></div>
+        <div class="boot-text">正在启动…</div>
     </div>
 
     <!-- 回放人工介入暂停模态框 -->

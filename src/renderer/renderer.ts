@@ -976,16 +976,26 @@ webview.addEventListener('did-navigate', (e: any) => {
 });
 
 // ===== 初始化 =====
-function init(): void {
+/** 隐藏启动加载遮罩(淡出后移除,失败也不影响界面) */
+function hideBootOverlay(): void {
+    const overlay = document.getElementById('boot-overlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    // 等淡出过渡结束后彻底移除,避免残留遮罩拦截点击
+    setTimeout(() => overlay.remove(), 300);
+}
+
+async function init(): Promise<void> {
     extractInput.value = DEFAULT_EXTRACT;
     refreshAiModeOptions();
     addressInput.value = 'https://books.toscrape.com/';
     setRecordingUI(false);
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
-    void loadAiProfiles();
-    void loadBrowserConfig();
+    // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
+    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
+    hideBootOverlay();
 }
 
-init();
+void init();

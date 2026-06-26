@@ -6,7 +6,9 @@
 //   否则会装成别的平台、产出坏包 → 直接报错退出。
 // - 用项目本地 playwright 的 cli.js(不走 npx,避免无 node_modules 时联网拉最新版导致版本错配),
 //   下载的 Chromium 版本与运行时 playwright 必然一致。
-// - 下载前清空目标目录:避免升级 playwright 后旧版本浏览器残留、一起被打进包。
+// - 缓存复用(幂等):用 build/ms-playwright/.pw-version 标记已下载的版本。
+//   版本未变且 chrome.exe 在位 → 直接跳过下载,复用上次结果(多次打包 0 下载)。
+//   仅首次打包或升级 playwright 后,才清空目录并重新下载,避免旧版本浏览器残留被打进包。
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -36,12 +38,40 @@ try {
     process.exit(1);
 }
 
-// 3) 清空目标目录,保证只含当前版本浏览器
 const dest = path.resolve('build', 'ms-playwright');
+const versionMark = path.join(dest, '.pw-version');
+
+// 校验产物:确认 Windows Chromium 主程序确实就位,返回 chrome.exe 路径(找不到返回 null)
+function findChromeExe() {
+    if (!fs.existsSync(dest)) return null;
+    return fs
+        .readdirSync(dest)
+        .filter((d) => d.startsWith('chromium-'))
+        .map((d) => path.join(dest, d, 'chrome-win64', 'chrome.exe'))
+        .find((p) => fs.existsSync(p));
+}
+
+// 3) 快路径:版本标记匹配且 chrome.exe 在位 → 复用缓存,跳过下载
+if (fs.existsSync(versionMark)) {
+    const cachedVersion = fs.readFileSync(versionMark, 'utf8').trim();
+    const chromeExe = findChromeExe();
+    if (cachedVersion === pwVersion && chromeExe) {
+        console.log(
+            `[打包浏览器] 已是当前版本 ${pwVersion} 且 Chromium 在位,复用缓存,跳过下载:\n` +
+                `            ${chromeExe}`
+        );
+        process.exit(0);
+    }
+    console.log(
+        `[打包浏览器] 缓存版本(${cachedVersion || '空'})与当前 playwright(${pwVersion})不一致或产物缺失,重新下载。`
+    );
+}
+
+// 4) 慢路径:清空目标目录,保证只含当前版本浏览器
 fs.rmSync(dest, { recursive: true, force: true });
 fs.mkdirSync(dest, { recursive: true });
 
-// 4) 用本地 playwright 下载 Chromium 到指定目录(自带 ffmpeg 等依赖)
+// 5) 用本地 playwright 下载 Chromium 到指定目录(自带 ffmpeg 等依赖)
 console.log(`[打包浏览器] 用本地 playwright ${pwVersion} 下载 Chromium 到 ${dest} ...`);
 try {
     execFileSync(process.execPath, [cliPath, 'install', 'chromium'], {
@@ -56,14 +86,13 @@ try {
     process.exit(1);
 }
 
-// 5) 校验产物:确认 Windows Chromium 主程序确实就位
-const chromeExe = fs
-    .readdirSync(dest)
-    .filter((d) => d.startsWith('chromium-'))
-    .map((d) => path.join(dest, d, 'chrome-win64', 'chrome.exe'))
-    .find((p) => fs.existsSync(p));
+// 6) 校验产物:确认 Windows Chromium 主程序确实就位
+const chromeExe = findChromeExe();
 if (!chromeExe) {
     console.error('[打包浏览器] 错误:下载完成但未找到 chrome.exe,产物异常,终止。');
     process.exit(1);
 }
-console.log(`[打包浏览器] 完成,已就位:${chromeExe}`);
+
+// 7) 写入版本标记,供下次打包判断是否可复用
+fs.writeFileSync(versionMark, pwVersion, 'utf8');
+console.log(`[打包浏览器] 完成,已就位:${chromeExe}(已记录版本 ${pwVersion})`);
