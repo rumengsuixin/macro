@@ -158,6 +158,8 @@ const aiRequirementInput = byId<HTMLTextAreaElement>('ai-requirement');
 const aiGenerateBtn = byId<HTMLButtonElement>('ai-generate');
 const aiImportBtn = byId<HTMLButtonElement>('ai-import');
 const aiStatusEl = byId<HTMLSpanElement>('ai-status');
+const aiDetailLinkRow = byId<HTMLDivElement>('ai-detail-link-row');
+const aiDetailLinkFieldSel = byId<HTMLSelectElement>('ai-detail-link-field');
 
 // ===== 状态 =====
 let recording = false;
@@ -606,6 +608,36 @@ function parseValidListRules(): Record<string, unknown> | null {
 const aiListDetailOption = aiModeSel.querySelector<HTMLOptionElement>('option[value="list-detail"]')!;
 const LIST_DETAIL_LABEL = '列表+详情(list-detail)';
 
+/**
+ * 详情页入口字段下拉:仅在 list-detail 模式显示,选项来自现有 list 规则的 fields[].name。
+ * 用户选定后由生成流程写入 detailLinkField(取代 AI 生成的 detailLinkSelector)。
+ * 刷新时尽量保留当前选中项,避免编辑规则框时选择被重置。
+ */
+function refreshDetailLinkFieldOptions(): void {
+    const isListDetail = aiModeSel.value === 'list-detail';
+    aiDetailLinkRow.style.display = isListDetail ? '' : 'none';
+    if (!isListDetail) {
+        return;
+    }
+    const base = parseValidListRules();
+    const fields = base && Array.isArray(base.fields) ? (base.fields as Array<{ name?: unknown }>) : [];
+    const names = fields
+        .map((f) => (f && typeof f.name === 'string' ? f.name : ''))
+        .filter((n) => n);
+    const prev = aiDetailLinkFieldSel.value;
+    aiDetailLinkFieldSel.innerHTML = '';
+    for (const name of names) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        aiDetailLinkFieldSel.appendChild(opt);
+    }
+    // 尽量沿用上次选择;否则默认选第一个
+    if (prev && names.includes(prev)) {
+        aiDetailLinkFieldSel.value = prev;
+    }
+}
+
 /** 依据「提取规则」框是否为合法 list 规则,启用/禁用 list-detail 选项 */
 function refreshAiModeOptions(): void {
     const ready = parseValidListRules() !== null;
@@ -617,10 +649,13 @@ function refreshAiModeOptions(): void {
     if (!ready && aiModeSel.value === 'list-detail') {
         aiModeSel.value = 'list';
     }
+    refreshDetailLinkFieldOptions();
 }
 
-// 用户手动编辑「提取规则」框时,实时联动 list-detail 选项可用性
+// 用户手动编辑「提取规则」框时,实时联动 list-detail 选项可用性与详情入口字段下拉
 extractInput.addEventListener('input', refreshAiModeOptions);
+// 切换目标模式时刷新详情入口字段下拉的显隐与选项
+aiModeSel.addEventListener('change', refreshDetailLinkFieldOptions);
 
 // ===== 按钮事件 =====
 openBtn.addEventListener('click', () => {
@@ -911,6 +946,10 @@ interface SelectorCheckResult {
     invalid: boolean;
     /** scope=item 但 listSelector 未命中、无列表项可测 */
     noItem?: boolean;
+    /** 该检查项需要额外校验首项元素能否取到非空 href(list-detail 详情入口字段) */
+    wantHref?: boolean;
+    /** wantHref 时:首项命中元素是否取得到非空 href */
+    hasHref?: boolean;
 }
 
 /**
@@ -923,14 +962,15 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
         mode?: string;
         listSelector?: string;
         actionSelector?: string;
-        detailLinkSelector?: string;
+        detailLinkField?: string;
         fields?: Array<{ name?: string; selector?: string }>;
     };
     if (!cfg || typeof cfg !== 'object') {
         return [];
     }
     const listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector.trim() : '';
-    const checks: Array<{ key: string; selector: string; scope: 'page' | 'item' }> = [];
+    const checks: Array<{ key: string; selector: string; scope: 'page' | 'item'; wantHref?: boolean }> =
+        [];
     const mode = cfg.mode;
     // 字段选择器:single 在整页测,其它(list/list-detail)在项内测;留空=容器本身,跳过
     const fieldScope: 'page' | 'item' = mode === 'single' ? 'page' : 'item';
@@ -944,9 +984,20 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
     if (mode === 'list-action' && typeof cfg.actionSelector === 'string' && cfg.actionSelector.trim()) {
         checks.push({ key: 'actionSelector', selector: cfg.actionSelector.trim(), scope: 'item' });
     }
-    // 详情链接:留空=取列表项自身,跳过;detailFields 在详情页、列表页测不了,略
-    if (mode === 'list-detail' && typeof cfg.detailLinkSelector === 'string' && cfg.detailLinkSelector.trim()) {
-        checks.push({ key: 'detailLinkSelector', selector: cfg.detailLinkSelector.trim(), scope: 'item' });
+    // 详情入口:list-detail 用用户选定的字段(detailLinkField)的 selector 在首项取 href;
+    // 额外校验能否取到非空 href(detailFields 在详情页、列表页测不了,略)。
+    if (mode === 'list-detail' && typeof cfg.detailLinkField === 'string' && cfg.detailLinkField) {
+        const linkField = (cfg.fields ?? []).find((f) => f && f.name === cfg.detailLinkField);
+        const sel =
+            linkField && typeof linkField.selector === 'string' ? linkField.selector.trim() : '';
+        if (sel) {
+            checks.push({
+                key: `详情入口「${cfg.detailLinkField}」`,
+                selector: sel,
+                scope: 'item',
+                wantHref: true,
+            });
+        }
     }
 
     const params = { listSelector, checks };
@@ -960,9 +1011,11 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
         'out.push({key:"listSelector",selector:p.listSelector,scope:"page",count:lr.count||0,invalid:!!lr.invalid});' +
         'if(!lr.invalid){try{item=document.querySelector(p.listSelector);}catch(e){item=null;}}}' +
         'p.checks.forEach(function(c){' +
-        'if(c.scope==="item"&&!item){out.push({key:c.key,selector:c.selector,scope:c.scope,count:0,invalid:false,noItem:true});return;}' +
+        'if(c.scope==="item"&&!item){out.push({key:c.key,selector:c.selector,scope:c.scope,count:0,invalid:false,noItem:true,wantHref:!!c.wantHref});return;}' +
         'var root=c.scope==="item"?item:document;var r=sc(root,c.selector);' +
-        'out.push({key:c.key,selector:c.selector,scope:c.scope,count:r.count||0,invalid:!!r.invalid});});' +
+        'var rec={key:c.key,selector:c.selector,scope:c.scope,count:r.count||0,invalid:!!r.invalid,wantHref:!!c.wantHref};' +
+        'if(c.wantHref&&!r.invalid&&r.count){try{var el=root.querySelector(c.selector);var h=el?el.getAttribute("href"):null;rec.hasHref=!!(h&&h.trim());}catch(e){rec.hasHref=false;}}' +
+        'out.push(rec);});' +
         'return out;})()';
     try {
         const raw = await webview.executeJavaScript(code);
@@ -983,7 +1036,8 @@ function summarizeChecks(checks: SelectorCheckResult[]): string {
             const where = c.scope === 'item' ? '项内' : '整页';
             if (c.invalid) return `${c.key}(${where})非法选择器`;
             if (c.noItem) return `${c.key}(${where})无列表项可测`;
-            return `${c.key}(${where})命中 ${c.count}`;
+            const hrefNote = c.wantHref ? (c.hasHref ? ',取到 href' : ',无 href') : '';
+            return `${c.key}(${where})命中 ${c.count}${hrefNote}`;
         })
         .join(';');
 }
@@ -1061,6 +1115,7 @@ aiGenerateBtn.addEventListener('click', async () => {
 
     // list-detail 必须以现有合法 list 规则为基础;生成时兜底校验
     let baseRules: Record<string, unknown> | undefined;
+    let detailLinkField = '';
     if (mode === 'list-detail') {
         const base = parseValidListRules();
         if (!base) {
@@ -1068,6 +1123,12 @@ aiGenerateBtn.addEventListener('click', async () => {
             return;
         }
         baseRules = base;
+        // 详情入口字段由用户从 fields 中选定(取代 AI 生成的详情链接选择器)
+        detailLinkField = aiDetailLinkFieldSel.value || '';
+        if (!detailLinkField) {
+            logLocal('「列表+详情」模式需要先在「详情页入口字段」下拉中选择一个指向详情页链接的字段,生成已取消。', 'error');
+            return;
+        }
     }
 
     aiStatusEl.classList.remove('ok', 'err');
@@ -1112,7 +1173,15 @@ aiGenerateBtn.addEventListener('click', async () => {
             lastRules = res.rules;
             lastLabel = res.profileLabel;
 
-            const checks = await verifySelectors(res.rules);
+            // list-detail:把用户选定的详情入口字段写入规则(AI 不再生成详情链接),
+            // 并清掉模型可能误输出的旧字段,保证实测与落地的都是新结构。
+            if (mode === 'list-detail' && lastRules && typeof lastRules === 'object') {
+                const r = lastRules as Record<string, unknown>;
+                r.detailLinkField = detailLinkField;
+                delete r.detailLinkSelector;
+            }
+
+            const checks = await verifySelectors(lastRules);
             lastChecks = checks;
             logLocal('选择器实测:' + summarizeChecks(checks));
             const evald = evaluateChecks(checks);
@@ -1127,6 +1196,17 @@ aiGenerateBtn.addEventListener('click', async () => {
         if (lastRules) {
             extractInput.value = JSON.stringify(lastRules, null, 4);
             refreshAiModeOptions();
+        }
+        // list-detail:详情入口字段 href 非致命提醒(用户选错字段时提示换一个,不阻断保存)
+        if (mode === 'list-detail') {
+            const dl = lastChecks.find((c) => c.wantHref);
+            if (dl && (dl.noItem || dl.invalid || dl.count === 0 || dl.hasHref === false)) {
+                logLocal(
+                    `提醒:详情页入口字段「${detailLinkField}」在首个列表项内取不到有效 href,` +
+                        '回放将无法进入详情页。请改选一个指向详情页链接(<a href>)的字段后重试。',
+                    'error'
+                );
+            }
         }
         if (passed) {
             aiStatusEl.classList.add('ok');

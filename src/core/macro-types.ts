@@ -141,8 +141,8 @@ export interface ListDetailExtractConfig {
     listSelector: string;
     /** 列表页每项基础字段(可为空数组) */
     fields: ExtractField[];
-    /** 列表项内详情链接选择器(取其 href);留空则取列表项自身 */
-    detailLinkSelector: string;
+    /** fields 中作为详情页入口的字段名(取其元素 href 进详情页);留空则取列表项自身 */
+    detailLinkField: string;
     /** 详情页要抓取的字段(字段名勿与 fields 重名,否则会被覆盖) */
     detailFields: ExtractField[];
 }

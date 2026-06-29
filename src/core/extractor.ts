@@ -265,10 +265,12 @@ async function collectListDetailPage(
             const target = field.selector ? item.locator(field.selector).first() : item;
             row[field.name] = await extractFieldValue(target, field);
         }
-        // 取详情链接 href 并绝对化(相对当前列表页 URL)
-        const linkLoc = config.detailLinkSelector
-            ? item.locator(config.detailLinkSelector).first()
-            : item;
+        // 取详情链接 href 并绝对化(相对当前列表页 URL)。
+        // 详情入口由用户从 fields 中选定(detailLinkField),用该字段的 selector 在项内取 href;
+        // 字段缺失/留空时取列表项自身(沿用原语义)。
+        const linkField = config.fields.find((f) => f.name === config.detailLinkField);
+        const linkLoc =
+            linkField && linkField.selector ? item.locator(linkField.selector).first() : item;
         const href = (await linkLoc.count()) ? (await linkLoc.getAttribute('href')) ?? '' : '';
         let detailUrl = '';
         if (href) {
