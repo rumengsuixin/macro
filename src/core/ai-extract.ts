@@ -60,6 +60,8 @@ export interface GenerateResult {
     raw?: string;
     /** 失败原因 */
     error?: string;
+    /** 本次实际使用的会话 key(调用方可在自检回路重生成时回传以复用同一 agent 会话) */
+    sessionKey?: string;
     /** 耗时(毫秒) */
     elapsedMs: number;
 }
@@ -67,6 +69,22 @@ export interface GenerateResult {
 // ===== 默认配置(首次运行自动写入项目根 ai-config.json) =====
 // 注:详细的提取规则结构(list/single、type 含义)由专用 agent 的 SOUL.md 持有,
 // 这里只负责传入「需求 + HTML」并保留一句「只输出 JSON」的安全兜底,提示词尽量精简。
+// 通用选择器质量准则:与具体框架无关,凡生成规则一律注入,从源头降低「选错选择器」概率。
+// 不专项 hack 某个组件库——下面的框架名只作举例,核心是「避免动态/脆弱选择器、注意克隆 DOM」。
+const SELECTOR_QUALITY_GUIDE = [
+    '【选择器质量准则(务必遵守)】',
+    '1. 优先用稳定锚点:data-* 属性、id、name、aria-label、有语义的稳定 class、可见文本;',
+    '2. 严禁使用框架运行时生成的动态类名/属性,它们每次渲染都可能变,例如:',
+    '   element-plus 的 el-table_<数字>_column_<数字>、Vue scoped 的 v-xxxxxxx、',
+    '   CSS-Modules 哈希类名、antd 等生成的动态 id;改用稳定类、属性或文本定位;',
+    '3. 慎用结构性伪类(:first-of-type / :nth-child 等),它们随 DOM 包裹层级极易失配,',
+    '   能用类/属性/文本就不用伪类;',
+    '4. UI 组件库对「固定列 / 虚拟滚动」常渲染重复或克隆的 DOM(如固定列会复制一份带',
+    '   .el-table__fixed-right / .el-table__fixed 之类的克隆子树),要定位或点击的可见元素',
+    '   往往在克隆子树里——请选「可见、可交互」的那一份,不要选被隐藏(is-hidden)的副本;',
+    '5. actionSelector 必须能在【每个列表项内部】定位到真实可点击的元素。',
+].join('\n');
+
 const DEFAULT_SYSTEM_PROMPT =
     '只输出一个 JSON 对象作为网页提取规则,不要任何解释、前言或 Markdown 代码块标记。';
 
@@ -402,6 +420,10 @@ export interface GenerateInput {
     mode?: 'single' | 'list' | 'list-detail' | 'list-action';
     /** mode=list-detail 时携带的现有 list 规则,作为补全 detail 的基础 */
     baseRules?: ExtractConfig;
+    /** 上一轮选择器实测反馈(自检回路重生成时附带,告知 agent 哪些选择器 0 命中需修正) */
+    feedback?: string;
+    /** 指定会话 key(多轮修复复用同一 agent 会话以保留上下文);不传则新建一次性会话 */
+    sessionKey?: string;
 }
 
 /** 调用 openclaw agent 生成提取规则 */
@@ -422,11 +444,20 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
     const html = cfg.cleanHtml === false ? input.html : cleanHtml(input.html);
     const body = fillTemplate(cfg.promptTemplate, input.requirement, html);
     const modeHint = buildModeHint(input.mode, input.baseRules);
+    // 选择器质量准则无条件注入(不依赖用户既有 ai-config.json,老装机也即时生效)。
+    // feedback 段放最后:重生成时把「上一轮哪些选择器 0 命中」直接喂回,要求据此修正。
+    const feedbackBlock = input.feedback
+        ? '【上一轮选择器实测反馈】以下选择器在当前页未命中,请据此修正后重新输出完整规则:\n' +
+          input.feedback
+        : '';
     const message =
         (cfg.systemPrompt ? cfg.systemPrompt + '\n\n' : '') +
+        SELECTOR_QUALITY_GUIDE + '\n\n' +
         (modeHint ? modeHint + '\n\n' : '') +
-        body;
-    const sessionKey = `${profile.sessionKeyPrefix}:${randomUUID()}`;
+        body +
+        (feedbackBlock ? '\n\n' + feedbackBlock : '');
+    // 多轮修复复用同一会话以保留上下文;首轮不传则新建一次性会话
+    const sessionKey = input.sessionKey ?? `${profile.sessionKeyPrefix}:${randomUUID()}`;
     const timeout = profile.timeout ?? 120000;
 
     let client: OpenclawClient | null = null;
@@ -442,6 +473,7 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
                 profileLabel: profile.label,
                 raw: reply,
                 error: '模型未返回可解析的 JSON 规则',
+                sessionKey,
                 elapsedMs: Date.now() - start,
             };
         }
@@ -451,6 +483,7 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
             profileLabel: profile.label,
             rules: rules as ExtractConfig,
             raw: reply,
+            sessionKey,
             elapsedMs: Date.now() - start,
         };
     } catch (err) {

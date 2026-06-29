@@ -56,6 +56,8 @@ interface AiGenerateResult {
     rules?: unknown;
     raw?: string;
     error?: string;
+    /** 本次实际使用的会话 key(自检回路重生成时回传以复用同一 agent 会话) */
+    sessionKey?: string;
     elapsedMs: number;
 }
 
@@ -91,6 +93,10 @@ interface ElectronAPI {
         profileId?: string;
         mode?: 'single' | 'list' | 'list-detail' | 'list-action';
         baseRules?: unknown;
+        /** 上一轮选择器实测反馈(自检回路重生成时附带) */
+        feedback?: string;
+        /** 复用同一 agent 会话的 key(多轮修复保留上下文) */
+        sessionKey?: string;
     }): Promise<AiGenerateResult>;
     importAiConfig(): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }>;
     getBrowserConfig(): Promise<BrowserConfig>;
@@ -893,6 +899,144 @@ function setAiBusy(busy: boolean): void {
     aiStatusEl.classList.toggle('ai-loading', busy);
 }
 
+/** 单个选择器在录制 webview 内的实测结果 */
+interface SelectorCheckResult {
+    /** 展示用标签(如 listSelector / actionSelector / 字段「标题」) */
+    key: string;
+    selector: string;
+    /** page=整页测;item=在首个列表项内测(镜像 extractor 的 item.locator(...).first()) */
+    scope: 'page' | 'item';
+    count: number;
+    /** 选择器语法非法(querySelectorAll 抛错) */
+    invalid: boolean;
+    /** scope=item 但 listSelector 未命中、无列表项可测 */
+    noItem?: boolean;
+}
+
+/**
+ * 在录制 webview 内实测生成规则里的关键选择器命中数(DOM 与 AI 所见一致)。
+ * 镜像 extractor 运行时语义:列表项内字段/动作/详情链接以「首个列表项」为根测。
+ * 非法选择器记 invalid;执行失败返回空数组(不阻断生成,按非致命处理)。
+ */
+async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
+    const cfg = rules as {
+        mode?: string;
+        listSelector?: string;
+        actionSelector?: string;
+        detailLinkSelector?: string;
+        fields?: Array<{ name?: string; selector?: string }>;
+    };
+    if (!cfg || typeof cfg !== 'object') {
+        return [];
+    }
+    const listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector.trim() : '';
+    const checks: Array<{ key: string; selector: string; scope: 'page' | 'item' }> = [];
+    const mode = cfg.mode;
+    // 字段选择器:single 在整页测,其它(list/list-detail)在项内测;留空=容器本身,跳过
+    const fieldScope: 'page' | 'item' = mode === 'single' ? 'page' : 'item';
+    (cfg.fields ?? []).forEach((f) => {
+        const sel = f && typeof f.selector === 'string' ? f.selector.trim() : '';
+        if (sel) {
+            checks.push({ key: `字段「${f.name ?? sel}」`, selector: sel, scope: fieldScope });
+        }
+    });
+    // 动作按钮:留空=点列表项本身,跳过
+    if (mode === 'list-action' && typeof cfg.actionSelector === 'string' && cfg.actionSelector.trim()) {
+        checks.push({ key: 'actionSelector', selector: cfg.actionSelector.trim(), scope: 'item' });
+    }
+    // 详情链接:留空=取列表项自身,跳过;detailFields 在详情页、列表页测不了,略
+    if (mode === 'list-detail' && typeof cfg.detailLinkSelector === 'string' && cfg.detailLinkSelector.trim()) {
+        checks.push({ key: 'detailLinkSelector', selector: cfg.detailLinkSelector.trim(), scope: 'item' });
+    }
+
+    const params = { listSelector, checks };
+    // 注入一段自执行脚本:整页测 listSelector,再以首个列表项为根测各项内选择器
+    const code =
+        '(function(){' +
+        'var p=' + JSON.stringify(params) + ';' +
+        'function sc(root,sel){try{return{count:root.querySelectorAll(sel).length};}catch(e){return{invalid:true};}}' +
+        'var out=[];var item=null;' +
+        'if(p.listSelector){var lr=sc(document,p.listSelector);' +
+        'out.push({key:"listSelector",selector:p.listSelector,scope:"page",count:lr.count||0,invalid:!!lr.invalid});' +
+        'if(!lr.invalid){try{item=document.querySelector(p.listSelector);}catch(e){item=null;}}}' +
+        'p.checks.forEach(function(c){' +
+        'if(c.scope==="item"&&!item){out.push({key:c.key,selector:c.selector,scope:c.scope,count:0,invalid:false,noItem:true});return;}' +
+        'var root=c.scope==="item"?item:document;var r=sc(root,c.selector);' +
+        'out.push({key:c.key,selector:c.selector,scope:c.scope,count:r.count||0,invalid:!!r.invalid});});' +
+        'return out;})()';
+    try {
+        const raw = await webview.executeJavaScript(code);
+        return Array.isArray(raw) ? (raw as SelectorCheckResult[]) : [];
+    } catch (e) {
+        logLocal('选择器实测执行失败(按非致命处理):' + (e as Error).message, 'error');
+        return [];
+    }
+}
+
+/** 把实测结果汇成一行中文摘要(日志用) */
+function summarizeChecks(checks: SelectorCheckResult[]): string {
+    if (!checks.length) {
+        return '(无可测选择器)';
+    }
+    return checks
+        .map((c) => {
+            const where = c.scope === 'item' ? '项内' : '整页';
+            if (c.invalid) return `${c.key}(${where})非法选择器`;
+            if (c.noItem) return `${c.key}(${where})无列表项可测`;
+            return `${c.key}(${where})命中 ${c.count}`;
+        })
+        .join(';');
+}
+
+/**
+ * 判定实测是否通过,并在未通过时给出喂回 AI 的中文反馈。
+ * 规则:listSelector 必须命中>0;任何非法选择器算失败;
+ * 有 listSelector 且命中时,项内选择器需至少一个命中;single 模式各字段需至少一个命中。
+ */
+function evaluateChecks(checks: SelectorCheckResult[]): { passed: boolean; feedback: string } {
+    const fails: string[] = [];
+    const listCheck = checks.find((c) => c.key === 'listSelector');
+    if (listCheck) {
+        if (listCheck.invalid) {
+            fails.push(`listSelector \`${listCheck.selector}\` 是非法选择器`);
+        } else if (listCheck.count === 0) {
+            fails.push(`listSelector \`${listCheck.selector}\` 在当前页命中 0 个列表项`);
+        }
+    }
+    // 非法的项内/整页选择器一律算失败
+    checks
+        .filter((c) => c.key !== 'listSelector' && c.invalid)
+        .forEach((c) => fails.push(`${c.key} \`${c.selector}\` 是非法选择器`));
+
+    const itemChecks = checks.filter((c) => c.scope === 'item');
+    const listOk = !listCheck || (!listCheck.invalid && listCheck.count > 0);
+    if (listOk && itemChecks.length > 0) {
+        const anyHit = itemChecks.some((c) => !c.invalid && !c.noItem && c.count > 0);
+        if (!anyHit) {
+            const det = itemChecks.map((c) => `${c.key} \`${c.selector}\` 命中 0`).join(';');
+            fails.push(`列表项内的选择器全部 0 命中(${det})`);
+        }
+    }
+    // single 模式无 listSelector,各整页字段需至少一个命中
+    if (!listCheck) {
+        const pageChecks = checks.filter((c) => c.scope === 'page');
+        if (pageChecks.length > 0 && !pageChecks.some((c) => !c.invalid && c.count > 0)) {
+            fails.push('所有字段选择器在当前页 0 命中');
+        }
+    }
+
+    if (!fails.length) {
+        return { passed: true, feedback: '' };
+    }
+    const feedback = [
+        '本轮各选择器实测:' + summarizeChecks(checks),
+        '需修正:',
+        ...fails.map((f) => '- ' + f),
+        '请保持已命中的选择器尽量不变,只修正上面命中 0 / 非法的选择器,重新输出完整规则 JSON。',
+    ].join('\n');
+    return { passed: false, feedback };
+}
+
 aiGenerateBtn.addEventListener('click', async () => {
     const url = safeGetUrl();
     if (!url || url === 'about:blank') {
@@ -931,20 +1075,70 @@ aiGenerateBtn.addEventListener('click', async () => {
     aiStatusEl.textContent = '正在请求 AI,请稍候……';
     logLocal(`AI 提取:已抓取页面 HTML(${html.length} 字符),目标模式「${mode}」,提交「${profileId ?? '默认'}」生成规则……`);
     try {
-        const res = await window.electronAPI.aiGenerateExtract({ requirement, html, profileId, mode, baseRules });
-        if (res.ok && res.rules) {
-            extractInput.value = JSON.stringify(res.rules, null, 4);
+        // 自检回路:生成 → 在录制 webview 内实测选择器 → 未命中则带反馈复用同一会话重生成
+        const maxAttempts = 3; // 首轮 + 最多 2 次修复
+        let feedback: string | undefined;
+        let sessionKey: string | undefined;
+        let lastRules: unknown = null;
+        let lastLabel = '';
+        let lastChecks: SelectorCheckResult[] = [];
+        let passed = false;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (attempt > 1) {
+                aiStatusEl.textContent = `选择器实测未通过,正在反馈重生成(第 ${attempt - 1} 次修复)……`;
+                logLocal(`选择器实测未全部命中,带反馈请求 AI 修正(第 ${attempt - 1} 次)……`);
+            }
+            const res = await window.electronAPI.aiGenerateExtract({
+                requirement,
+                html,
+                profileId,
+                mode,
+                baseRules,
+                feedback,
+                sessionKey,
+            });
+            if (!res.ok || !res.rules) {
+                // 生成本身失败(网络/解析等):不再重试,直接报错退出
+                aiStatusEl.classList.add('err');
+                aiStatusEl.textContent = '生成失败,详见日志。';
+                logLocal(`AI 提取失败:${res.error ?? '未知错误'}`, 'error');
+                if (res.raw) {
+                    logLocal('模型原始回复:' + res.raw.slice(0, 500), 'error');
+                }
+                return; // finally 复位忙态
+            }
+            sessionKey = res.sessionKey ?? sessionKey; // 复用同一 agent 会话,保留修复上下文
+            lastRules = res.rules;
+            lastLabel = res.profileLabel;
+
+            const checks = await verifySelectors(res.rules);
+            lastChecks = checks;
+            logLocal('选择器实测:' + summarizeChecks(checks));
+            const evald = evaluateChecks(checks);
+            if (evald.passed) {
+                passed = true;
+                break;
+            }
+            feedback = evald.feedback;
+        }
+
+        // 落地:无论是否通过都填入最后一版(失败不致命,便于人工接力修改)
+        if (lastRules) {
+            extractInput.value = JSON.stringify(lastRules, null, 4);
             refreshAiModeOptions();
+        }
+        if (passed) {
             aiStatusEl.classList.add('ok');
-            aiStatusEl.textContent = `已生成(${res.profileLabel},${res.elapsedMs}ms),规则已填入上方。`;
-            logLocal(`AI 提取成功(${res.profileLabel}),规则已填入「提取规则」,可直接点「运行宏」。`);
+            aiStatusEl.textContent = `已生成并实测通过(${lastLabel}),规则已填入上方。`;
+            logLocal(`AI 提取成功且选择器实测通过(${lastLabel}),规则已填入「提取规则」,可直接点「运行宏」。`);
         } else {
             aiStatusEl.classList.add('err');
-            aiStatusEl.textContent = '生成失败,详见日志。';
-            logLocal(`AI 提取失败:${res.error ?? '未知错误'}`, 'error');
-            if (res.raw) {
-                logLocal('模型原始回复:' + res.raw.slice(0, 500), 'error');
-            }
+            aiStatusEl.textContent = '已生成但选择器实测未全部命中,已填入上方,请人工核对。';
+            logLocal(
+                `选择器实测在 ${maxAttempts} 次内仍未全部命中,已填入最后一版规则,请人工核对选择器(末轮实测:${summarizeChecks(lastChecks)})`,
+                'error'
+            );
         }
     } catch (e) {
         aiStatusEl.classList.add('err');
