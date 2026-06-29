@@ -1,7 +1,7 @@
 // 宏回放引擎:读取 JSON 宏,使用 Playwright 启动浏览器并逐步执行。
 // 每种 step 类型都有独立的处理方法;每一步执行前后打印中文日志;
 // 出错时截图保存到 errors/ 目录,并返回结构化错误信息。
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs';
 import type {
@@ -13,6 +13,7 @@ import type {
     ExtractRow,
     OnPause,
     SessionOptions,
+    ElementFingerprint,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
@@ -243,6 +244,12 @@ export class MacroRunner {
                             for (const s of paginationSteps) {
                                 await this.executeStep(runPage, s);
                             }
+                            // 翻页点击常触发整页导航;等页面加载稳定再交回提取流程,
+                            // 避免「在旧页/半载页上采集(少采)或读到旧分页器(误判命中数)」的竞态。
+                            // 纯 JS 换内容(无导航)时此调用即时返回,由提取端 waitForSelector 兜底。
+                            await runPage
+                                .waitForLoadState('domcontentloaded')
+                                .catch(() => undefined);
                         },
                     };
                 }
@@ -305,7 +312,7 @@ export class MacroRunner {
                 await this.handleGoto(page, step.url);
                 break;
             case 'click':
-                await this.handleClick(page, step.selector);
+                await this.handleClick(page, step.selector, step.fingerprint);
                 break;
             case 'fill':
                 await this.handleFill(page, step.selector, step.value);
@@ -334,8 +341,94 @@ export class MacroRunner {
         await page.goto(url, { waitUntil: 'domcontentloaded' });
     }
 
-    private async handleClick(page: Page, selector: string): Promise<void> {
+    private async handleClick(
+        page: Page,
+        selector: string,
+        fingerprint?: ElementFingerprint
+    ): Promise<void> {
+        const loc = page.locator(selector);
+        let n = -1; // -1 表示选择器非法
+        try {
+            n = await loc.count();
+        } catch {
+            n = -1;
+        }
+        if (n === 1) {
+            // 主路径:选择器唯一命中,信任录制结果
+            await loc.first().click();
+            return;
+        }
+        // 命中 0 个 / 多个 / 非法 → 用语义指纹通用重定位(不限分页器)
+        if (fingerprint) {
+            const hit = await this.relocateByFingerprint(page, fingerprint);
+            if (hit) {
+                logInfo(
+                    `主选择器「${selector}」命中 ${n < 0 ? '非法' : n} 个,` +
+                        `已用语义指纹(${hit.strategy})重定位点击。`
+                );
+                await hit.locator.click();
+                return;
+            }
+        }
+        // 无指纹或重定位失败 → 回退原生 click,沿用既有失败路径(严格模式报错/超时 → 出错截图)
         await page.click(selector);
+    }
+
+    /**
+     * 用语义指纹在当前页通用重定位:按可靠性逐条尝试,返回首个唯一可见可用的元素。
+     * 与位置无关,适用于任意 click(分页器只是其中一例)。
+     */
+    private async relocateByFingerprint(
+        page: Page,
+        fp: ElementFingerprint
+    ): Promise<{ locator: Locator; strategy: string } | null> {
+        const tag = fp.tag && /^[a-z][a-z0-9]*$/i.test(fp.tag) ? fp.tag : '';
+        const candidates: Array<{ strategy: string; locator: Locator }> = [];
+
+        // 1) anchor 缩小(最稳):在稳定祖先范围内按 tag(+文本)定位
+        if (fp.anchor) {
+            try {
+                let inner = page.locator(fp.anchor).locator(tag || '*');
+                if (fp.text) {
+                    const narrowed = inner.filter({ hasText: fp.text });
+                    if ((await narrowed.count().catch(() => 0)) > 0) {
+                        inner = narrowed;
+                    }
+                }
+                candidates.push({ strategy: 'anchor', locator: inner });
+            } catch {
+                /* 非法 anchor 选择器,跳过 */
+            }
+        }
+        // 2) 文本精确
+        if (fp.text) {
+            candidates.push({
+                strategy: 'text',
+                locator: page.locator(tag || 'a, button, [role="button"]', { hasText: fp.text }),
+            });
+        }
+        // 3) aria-label
+        if (fp.ariaLabel) {
+            candidates.push({
+                strategy: 'aria',
+                locator: page.locator(`[aria-label="${cssAttrEscape(fp.ariaLabel)}"]`),
+            });
+        }
+        // 4) href 精确(最弱:翻页等动态 href 会变,仅作兜底)
+        if (fp.href) {
+            candidates.push({
+                strategy: 'href',
+                locator: page.locator(`${tag || 'a'}[href="${cssAttrEscape(fp.href)}"]`),
+            });
+        }
+
+        for (const c of candidates) {
+            const visible = await firstVisible(c.locator);
+            if (visible) {
+                return { locator: visible, strategy: c.strategy };
+            }
+        }
+        return null;
     }
 
     private async handleFill(page: Page, selector: string, value: string): Promise<void> {
@@ -430,6 +523,37 @@ function describeStep(step: Step): string {
         default:
             return '未知步骤';
     }
+}
+
+/** 在候选 locator 中返回首个可见元素(用于指纹重定位时挑出唯一可点目标);均不可见返回 null */
+async function firstVisible(loc: Locator): Promise<Locator | null> {
+    let count = 0;
+    try {
+        count = await loc.count();
+    } catch {
+        return null;
+    }
+    if (count === 0) {
+        return null;
+    }
+    // 限制扫描数量,避免极端页面遍历过多
+    const max = Math.min(count, 20);
+    for (let i = 0; i < max; i += 1) {
+        const item = loc.nth(i);
+        try {
+            if (await item.isVisible()) {
+                return item;
+            }
+        } catch {
+            /* 个别元素判定失败,继续下一个 */
+        }
+    }
+    return null;
+}
+
+/** 转义属性值中的双引号,用于 [attr="value"] */
+function cssAttrEscape(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 /** 生成形如 20260622-153012 的时间戳 */

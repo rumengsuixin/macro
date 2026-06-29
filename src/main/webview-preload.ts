@@ -4,7 +4,7 @@
 // 运行在 guest 页面的隔离世界(主进程已为 webview 关闭 sandbox,故可 require 本地模块)。
 // 不向页面主世界暴露任何对象,仅监听 DOM 事件。
 import { ipcRenderer } from 'electron';
-import { generateSelector } from '../core/selector-generator';
+import { generateSelector, buildFingerprint } from '../core/selector-generator';
 import type { Step } from '../core/macro-types';
 
 let recording = false;
@@ -60,7 +60,8 @@ document.addEventListener(
         const el = resolveClickable(target);
         const selector = generateSelector(el);
         if (selector) {
-            sendStep({ type: 'click', selector });
+            // 附语义指纹:回放时主选择器命中 ≠1 可据此通用重定位
+            sendStep({ type: 'click', selector, fingerprint: buildFingerprint(el) });
         }
     },
     true

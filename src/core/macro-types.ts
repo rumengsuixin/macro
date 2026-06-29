@@ -17,10 +17,29 @@ export interface GotoStep {
     url: string;
 }
 
+/**
+ * 元素语义指纹:录制时随 click 步骤一并保存,供回放时「主选择器命中数 ≠1」时通用重定位。
+ * 全部可选,旧宏(无此字段)照常解析与运行。
+ */
+export interface ElementFingerprint {
+    /** 标签名(小写) */
+    tag?: string;
+    /** 归一化可见文本(截断) */
+    text?: string;
+    /** aria-label */
+    ariaLabel?: string;
+    /** 原始 href attribute(翻页等动态 href 仅作最弱信号) */
+    href?: string;
+    /** 最近一个带稳定锚点(id、data-* 属性、稳定 class、aria)的祖先选择器,如 li.next */
+    anchor?: string;
+}
+
 /** 点击元素 */
 export interface ClickStep {
     type: 'click';
     selector: string;
+    /** 语义指纹:回放时主选择器命中 ≠1 时用于通用重定位;旧宏可缺省 */
+    fingerprint?: ElementFingerprint;
 }
 
 /** 输入文本 */

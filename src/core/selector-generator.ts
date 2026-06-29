@@ -6,6 +6,8 @@
 //
 // 优先级:data-testid > id > name > aria-label > role+文本 > class > css path > xpath 兜底。
 
+import type { ElementFingerprint } from './macro-types';
+
 /**
  * 为给定元素生成稳定的 selector。
  * 每个候选都会校验唯一性(CSS 用 querySelectorAll,XPath 用 document.evaluate),命中唯一即返回。
@@ -77,6 +79,76 @@ export function generateSelector(el: Element): string {
 
     // 8. 绝对 XPath 兜底
     return `xpath=${buildAbsoluteXpath(el)}`;
+}
+
+/**
+ * 为被点击元素生成语义指纹,随 click 步骤保存。回放时主选择器命中数 ≠1(页面结构漂移、
+ * 录制后增减兄弟元素等)时,用这些与位置无关的语义信息通用重定位,不限分页器。
+ */
+export function buildFingerprint(el: Element): ElementFingerprint {
+    const fp: ElementFingerprint = {};
+    if (!el || el.nodeType !== 1) {
+        return fp;
+    }
+    fp.tag = el.tagName.toLowerCase();
+    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text) {
+        fp.text = text.length > 80 ? text.slice(0, 80) : text;
+    }
+    const aria = el.getAttribute('aria-label');
+    if (aria) {
+        fp.ariaLabel = aria;
+    }
+    const href = el.getAttribute('href');
+    if (href) {
+        fp.href = href;
+    }
+    const anchor = findStableAnchorSelector(el);
+    if (anchor) {
+        fp.anchor = anchor;
+    }
+    return fp;
+}
+
+/** 从元素向上(不含自身)找最近一个能被稳定锚点唯一标识的祖先,返回其选择器 */
+function findStableAnchorSelector(el: Element): string | null {
+    let node: Element | null = el.parentElement;
+    let depth = 0;
+    while (node && node.nodeType === 1 && node.tagName.toLowerCase() !== 'html' && depth < 6) {
+        // id
+        if (node.id && !/\s/.test(node.id)) {
+            const sel = `#${cssEscape(node.id)}`;
+            if (isUniqueCss(sel, node)) {
+                return sel;
+            }
+        }
+        // data-*
+        for (const attr of ['data-testid', 'data-test', 'data-cy']) {
+            const val = node.getAttribute(attr);
+            if (val) {
+                const sel = `[${attr}="${escapeAttrValue(val)}"]`;
+                if (isUniqueCss(sel, node)) {
+                    return sel;
+                }
+            }
+        }
+        // aria-label
+        const aria = node.getAttribute('aria-label');
+        if (aria) {
+            const sel = `[aria-label="${escapeAttrValue(aria)}"]`;
+            if (isUniqueCss(sel, node)) {
+                return sel;
+            }
+        }
+        // 稳定 class 组合(如 li.next)
+        const classSel = buildClassSelector(node);
+        if (classSel && isUniqueCss(classSel, node)) {
+            return classSel;
+        }
+        node = node.parentElement;
+        depth += 1;
+    }
+    return null;
 }
 
 /** 校验 CSS 选择器是否唯一命中该元素 */
@@ -159,7 +231,12 @@ function isStableClass(cls: string): boolean {
     return true;
 }
 
-/** 构造 CSS path:从目标向上,遇到唯一 id 的祖先则截断 */
+/**
+ * 构造 CSS path:从目标向上,遇到唯一 id 的祖先则截断。
+ * 每个 segment 在可用时携带稳定 class(如 li.next),`:nth-of-type` 仅在 class 仍无法
+ * 区分同标签兄弟时才追加。这样选择器锚定语义稳定的 class 而非纯位置,避免「录制后页面
+ * 增减兄弟元素(如分页器首页缺 Previous、翻页后出现)导致选择器命中数变化」的脆弱性。
+ */
 function buildCssPath(el: Element): string {
     const path: string[] = [];
     let node: Element | null = el;
@@ -173,12 +250,32 @@ function buildCssPath(el: Element): string {
             }
         }
 
-        let segment = node.tagName.toLowerCase();
+        const tag = node.tagName.toLowerCase();
+        // 该节点的稳定 class 组合(形如 li.next),无稳定 class 时为 null
+        const classSel = buildClassSelector(node);
+        // 稳定 class 提前截断:class 组合在文档内唯一命中该节点,且拼成的全路径仍唯一命中 el
+        if (classSel && isUniqueCss(classSel, node)) {
+            const candidate = [classSel, ...path].join(' > ');
+            if (isUniqueCss(candidate, el)) {
+                return candidate;
+            }
+        }
+
+        let segment = tag;
         const parent: Element | null = node.parentElement;
         if (parent) {
-            const tagName = node.tagName;
-            const sameTag = Array.from(parent.children).filter((c) => c.tagName === tagName);
-            if (sameTag.length > 1) {
+            const sameTag = Array.from(parent.children).filter((c) => c.tagName === node!.tagName);
+            // classSel 去掉 tag 前缀即 ".classA.classB"(无稳定 class 时为空串)
+            const classPart = classSel ? classSel.slice(tag.length) : '';
+            if (classPart) {
+                const sameTagSameClass = sameTag.filter((c) => c.matches(tag + classPart));
+                // class 已能在同标签兄弟间唯一定位 → 用 tag.class(单独时也附上,守护未来出现的兄弟元素);
+                // 否则 tag.class + nth-of-type 双保险
+                segment +=
+                    sameTagSameClass.length === 1
+                        ? classPart
+                        : `${classPart}:nth-of-type(${sameTag.indexOf(node) + 1})`;
+            } else if (sameTag.length > 1) {
                 segment += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
             }
         }
