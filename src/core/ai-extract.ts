@@ -370,7 +370,6 @@ function buildModeHint(
             '结构为 { "mode": "list-detail", "listSelector": "...", "fields": [...], "detailFields": [...] }。',
             '以下是已有的 list 规则,请以它为基础,保留其 listSelector 与 fields 完全不变,',
             '只补充 detailFields(进入详情页后要抓取的字段,字段名勿与 fields 重名)。',
-            '【重要】详情页入口由用户在界面从 fields 中选定,**请勿输出任何详情链接选择器(不要 detailLinkSelector、detailLinkField 等字段)**。',
             '现有 list 规则:',
             base,
         ].join('\n');

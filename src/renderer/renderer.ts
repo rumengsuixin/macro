@@ -965,10 +965,6 @@ interface SelectorCheckResult {
     invalid: boolean;
     /** scope=item 但 listSelector 未命中、无列表项可测 */
     noItem?: boolean;
-    /** 该检查项需要额外校验首项元素能否取到非空 href(list-detail 详情入口字段) */
-    wantHref?: boolean;
-    /** wantHref 时:首项命中元素是否取得到非空 href */
-    hasHref?: boolean;
 }
 
 /**
@@ -983,39 +979,42 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
         actionSelector?: string;
         detailLinkField?: string;
         fields?: Array<{ name?: string; selector?: string }>;
+        detailFields?: Array<{ name?: string; selector?: string }>;
     };
     if (!cfg || typeof cfg !== 'object') {
         return [];
     }
-    const listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector.trim() : '';
-    const checks: Array<{ key: string; selector: string; scope: 'page' | 'item'; wantHref?: boolean }> =
-        [];
+    const checks: Array<{ key: string; selector: string; scope: 'page' | 'item' }> = [];
     const mode = cfg.mode;
-    // 字段选择器:single 在整页测,其它(list/list-detail)在项内测;留空=容器本身,跳过
-    const fieldScope: 'page' | 'item' = mode === 'single' ? 'page' : 'item';
-    (cfg.fields ?? []).forEach((f) => {
-        const sel = f && typeof f.selector === 'string' ? f.selector.trim() : '';
-        if (sel) {
-            checks.push({ key: `字段「${f.name ?? sel}」`, selector: sel, scope: fieldScope });
-        }
-    });
-    // 动作按钮:留空=点列表项本身,跳过
-    if (mode === 'list-action' && typeof cfg.actionSelector === 'string' && cfg.actionSelector.trim()) {
-        checks.push({ key: 'actionSelector', selector: cfg.actionSelector.trim(), scope: 'item' });
-    }
-    // 详情入口:list-detail 用用户选定的字段(detailLinkField)的 selector 在首项取 href;
-    // 额外校验能否取到非空 href(detailFields 在详情页、列表页测不了,略)。
-    if (mode === 'list-detail' && typeof cfg.detailLinkField === 'string' && cfg.detailLinkField) {
-        const linkField = (cfg.fields ?? []).find((f) => f && f.name === cfg.detailLinkField);
-        const sel =
-            linkField && typeof linkField.selector === 'string' ? linkField.selector.trim() : '';
-        if (sel) {
-            checks.push({
-                key: `详情入口「${cfg.detailLinkField}」`,
-                selector: sel,
-                scope: 'item',
-                wantHref: true,
-            });
+    // 注入脚本据此整页测 listSelector 并取首项为根;list-detail 在详情页生成,无列表页可测,置空。
+    let listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector.trim() : '';
+    if (mode === 'list-detail') {
+        // list-detail 规则在「详情页」上生成(AI 需读详情页 HTML 生成 detailFields)。
+        // 列表页那套(listSelector/fields/详情入口)在生成 list 规则时已验过、详情页上必然 0 命中,
+        // 故此处只在当前详情页整页校验 detailFields 是否命中,不再误验列表页选择器。
+        listSelector = '';
+        (cfg.detailFields ?? []).forEach((f) => {
+            const sel = f && typeof f.selector === 'string' ? f.selector.trim() : '';
+            if (sel) {
+                checks.push({ key: `详情字段「${f.name ?? sel}」`, selector: sel, scope: 'page' });
+            }
+        });
+    } else {
+        // 字段选择器:single 在整页测,list 在项内测;留空=容器本身,跳过
+        const fieldScope: 'page' | 'item' = mode === 'single' ? 'page' : 'item';
+        (cfg.fields ?? []).forEach((f) => {
+            const sel = f && typeof f.selector === 'string' ? f.selector.trim() : '';
+            if (sel) {
+                checks.push({ key: `字段「${f.name ?? sel}」`, selector: sel, scope: fieldScope });
+            }
+        });
+        // 动作按钮:留空=点列表项本身,跳过
+        if (
+            mode === 'list-action' &&
+            typeof cfg.actionSelector === 'string' &&
+            cfg.actionSelector.trim()
+        ) {
+            checks.push({ key: 'actionSelector', selector: cfg.actionSelector.trim(), scope: 'item' });
         }
     }
 
@@ -1030,11 +1029,9 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
         'out.push({key:"listSelector",selector:p.listSelector,scope:"page",count:lr.count||0,invalid:!!lr.invalid});' +
         'if(!lr.invalid){try{item=document.querySelector(p.listSelector);}catch(e){item=null;}}}' +
         'p.checks.forEach(function(c){' +
-        'if(c.scope==="item"&&!item){out.push({key:c.key,selector:c.selector,scope:c.scope,count:0,invalid:false,noItem:true,wantHref:!!c.wantHref});return;}' +
+        'if(c.scope==="item"&&!item){out.push({key:c.key,selector:c.selector,scope:c.scope,count:0,invalid:false,noItem:true});return;}' +
         'var root=c.scope==="item"?item:document;var r=sc(root,c.selector);' +
-        'var rec={key:c.key,selector:c.selector,scope:c.scope,count:r.count||0,invalid:!!r.invalid,wantHref:!!c.wantHref};' +
-        'if(c.wantHref&&!r.invalid&&r.count){try{var el=root.querySelector(c.selector);var h=el?el.getAttribute("href"):null;rec.hasHref=!!(h&&h.trim());}catch(e){rec.hasHref=false;}}' +
-        'out.push(rec);});' +
+        'out.push({key:c.key,selector:c.selector,scope:c.scope,count:r.count||0,invalid:!!r.invalid});});' +
         'return out;})()';
     try {
         const raw = await webview.executeJavaScript(code);
@@ -1055,8 +1052,7 @@ function summarizeChecks(checks: SelectorCheckResult[]): string {
             const where = c.scope === 'item' ? '项内' : '整页';
             if (c.invalid) return `${c.key}(${where})非法选择器`;
             if (c.noItem) return `${c.key}(${where})无列表项可测`;
-            const hrefNote = c.wantHref ? (c.hasHref ? ',取到 href' : ',无 href') : '';
-            return `${c.key}(${where})命中 ${c.count}${hrefNote}`;
+            return `${c.key}(${where})命中 ${c.count}`;
         })
         .join(';');
 }
@@ -1221,16 +1217,13 @@ aiGenerateBtn.addEventListener('click', async () => {
             extractInput.value = JSON.stringify(lastRules, null, 4);
             refreshAiModeOptions();
         }
-        // list-detail:详情入口字段 href 非致命提醒(用户选错字段时提示换一个,不阻断保存)
+        // list-detail:本次在详情页只校验 detailFields;详情入口字段在回放(列表页)时按其
+        // selector 取 href 生效,此处无列表页可测,故只作 info 说明,不再误报「取不到 href」。
         if (mode === 'list-detail') {
-            const dl = lastChecks.find((c) => c.wantHref);
-            if (dl && (dl.noItem || dl.invalid || dl.count === 0 || dl.hasHref === false)) {
-                logLocal(
-                    `提醒:详情页入口字段「${detailLinkField}」在首个列表项内取不到有效 href,` +
-                        '回放将无法进入详情页。请改选一个指向详情页链接(<a href>)的字段后重试。',
-                    'error'
-                );
-            }
+            logLocal(
+                `说明:详情页入口字段「${detailLinkField}」将在回放时于列表页生效(取该字段的 href 进详情页),` +
+                    '本次仅在当前详情页校验详情字段,不校验列表页选择器。'
+            );
         }
         if (passed) {
             aiStatusEl.classList.add('ok');
