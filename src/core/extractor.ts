@@ -70,6 +70,29 @@ async function turnPageAndSettle(
 }
 
 /**
+ * 翻页采集骨架(三种翻页模式共用):逐页「等列表就绪 → 处理本页 → 翻页并等内容切换」。
+ * 把等待/翻页/翻页日志收敛成单一事实来源——新模式只需提供「处理本页」回调,
+ * 避免接线遗漏(此前三处复制粘贴,首页缺等待的 bug 即因此三发)。
+ * 累加(rows/collected/clicked)由调用方在闭包里维护;pagination 缺省 → 单页(totalPages=1)。
+ */
+async function paginatedCollect(
+    page: Page,
+    listSelector: string,
+    pagination: PaginationContext | undefined,
+    processPage: (pageIndex: number, totalPages: number) => Promise<void>
+): Promise<void> {
+    const totalPages = pagination ? pagination.totalPages : 1;
+    for (let p = 1; p <= totalPages; p += 1) {
+        await waitListReady(page, listSelector);
+        await processPage(p, totalPages);
+        if (p < totalPages && pagination) {
+            logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
+            await turnPageAndSettle(page, pagination, listSelector);
+        }
+    }
+}
+
+/**
  * 从页面按配置提取数据。
  * - single:对每个字段取首个匹配元素,返回单行(翻页不适用)。
  * - list:逐页遍历列表项,在每项内提取各字段,返回多行。
@@ -102,17 +125,11 @@ export async function extract(
 
     // list 模式:逐页采集
     const rows: ExtractRow[] = [];
-    const totalPages = pagination ? pagination.totalPages : 1;
-    for (let p = 1; p <= totalPages; p += 1) {
-        await waitListReady(page, config.listSelector);
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
         const pageRows = await collectListRows(page, config);
         rows.push(...pageRows);
         logInfo(`第 ${p}/${totalPages} 页采集到 ${pageRows.length} 行,累计 ${rows.length} 行。`);
-        if (p < totalPages && pagination) {
-            logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await turnPageAndSettle(page, pagination, config.listSelector);
-        }
-    }
+    });
     return rows;
 }
 
@@ -240,10 +257,8 @@ async function extractListAction(
     downloads?: DownloadManager
 ): Promise<ExtractRow[]> {
     const actionTimeout = config.actionTimeout ?? 30000;
-    const totalPages = pagination ? pagination.totalPages : 1;
     let clicked = 0;
-    for (let p = 1; p <= totalPages; p += 1) {
-        await waitListReady(page, config.listSelector);
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
         const items = page.locator(config.listSelector);
         const count = await items.count();
         logInfo(`第 ${p}/${totalPages} 页发现 ${count} 个列表项,开始逐项点击……`);
@@ -287,11 +302,7 @@ async function extractListAction(
                 logError(`第 ${p} 页第 ${i + 1} 项点击失败:${message},继续下一项。`);
             }
         }
-        if (p < totalPages && pagination) {
-            logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await turnPageAndSettle(page, pagination, config.listSelector);
-        }
-    }
+    });
     logInfo(
         `列表逐项动作完成:共点击 ${clicked} 项,捕获保存下载 ${downloads ? downloads.count() : 0} 个。`
     );
@@ -347,17 +358,11 @@ async function extractListDetail(
 ): Promise<ExtractRow[]> {
     // ===== 阶段一:跨所有页收集列表(必须先收集完整列表,再导航进详情;否则列表 DOM 丢失) =====
     const collected: { row: ExtractRow; detailUrl: string }[] = [];
-    const totalPages = pagination ? pagination.totalPages : 1;
-    for (let p = 1; p <= totalPages; p += 1) {
-        await waitListReady(page, config.listSelector);
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
         const pageItems = await collectListDetailPage(page, config);
         collected.push(...pageItems);
         logInfo(`第 ${p}/${totalPages} 页采集到 ${pageItems.length} 项,累计 ${collected.length} 项。`);
-        if (p < totalPages && pagination) {
-            logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await turnPageAndSettle(page, pagination, config.listSelector);
-        }
-    }
+    });
 
     logInfo(`列表全部采集完成,共 ${collected.length} 项,开始逐个进入详情页抓取……`);
 
