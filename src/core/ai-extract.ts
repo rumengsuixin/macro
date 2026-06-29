@@ -71,19 +71,12 @@ export interface GenerateResult {
 // 这里只负责传入「需求 + HTML」并保留一句「只输出 JSON」的安全兜底,提示词尽量精简。
 // 通用选择器质量准则:与具体框架无关,凡生成规则一律注入,从源头降低「选错选择器」概率。
 // 不专项 hack 某个组件库——下面的框架名只作举例,核心是「避免动态/脆弱选择器、注意克隆 DOM」。
-const SELECTOR_QUALITY_GUIDE = [
-    '【选择器质量准则(务必遵守)】',
-    '1. 优先用稳定锚点:data-* 属性、id、name、aria-label、有语义的稳定 class、可见文本;',
-    '2. 严禁使用框架运行时生成的动态类名/属性,它们每次渲染都可能变,例如:',
-    '   element-plus 的 el-table_<数字>_column_<数字>、Vue scoped 的 v-xxxxxxx、',
-    '   CSS-Modules 哈希类名、antd 等生成的动态 id;改用稳定类、属性或文本定位;',
-    '3. 慎用结构性伪类(:first-of-type / :nth-child 等),它们随 DOM 包裹层级极易失配,',
-    '   能用类/属性/文本就不用伪类;',
-    '4. UI 组件库对「固定列 / 虚拟滚动」常渲染重复或克隆的 DOM(如固定列会复制一份带',
-    '   .el-table__fixed-right / .el-table__fixed 之类的克隆子树),要定位或点击的可见元素',
-    '   往往在克隆子树里——请选「可见、可交互」的那一份,不要选被隐藏(is-hidden)的副本;',
-    '5. actionSelector 必须能在【每个列表项内部】定位到真实可点击的元素。',
-].join('\n');
+// 极简指针:完整选择器质量规范在 agent 侧 SOUL.md〈选择器质量准则〉(单一可信源);
+// 客户端仅注入这一行核心红线作兜底,防 agent 侧准则缺失/被改坏时质量失守。
+const SELECTOR_QUALITY_GUIDE =
+    '【选择器质量准则(完整规范见你的〈选择器质量准则〉)】选择器务必稳定可命中:优先用 ' +
+    'data-*/id/aria-label/语义 class/可见文本等稳定锚点,避免框架运行时动态类名、结构性伪类与隐藏的' +
+    '克隆 DOM;actionSelector 须能在每个列表项内点中。';
 
 const DEFAULT_SYSTEM_PROMPT =
     '只输出一个 JSON 对象作为网页提取规则,不要任何解释、前言或 Markdown 代码块标记。';
@@ -445,6 +438,7 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
     const body = fillTemplate(cfg.promptTemplate, input.requirement, html);
     const modeHint = buildModeHint(input.mode, input.baseRules);
     // 选择器质量准则无条件注入(不依赖用户既有 ai-config.json,老装机也即时生效)。
+    // 现为极简指针:完整规范在 agent 侧 SOUL.md,客户端仅注入核心红线作兜底,避免与 SOUL.md 全文重复。
     // feedback 段放最后:重生成时把「上一轮哪些选择器 0 命中」直接喂回,要求据此修正。
     const feedbackBlock = input.feedback
         ? '【上一轮选择器实测反馈】以下选择器在当前页未命中,请据此修正后重新输出完整规则:\n' +
