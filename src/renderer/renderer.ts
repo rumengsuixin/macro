@@ -581,7 +581,11 @@ function buildMacro(): Macro {
     return macro;
 }
 
-/** 解析「提取规则」框,返回合法的 mode=list 规则对象;不合法返回 null(供 list-detail 取基础规则) */
+/**
+ * 解析「提取规则」框,返回可作为 list-detail 基础的规则对象;不合法返回 null。
+ * 接受 mode=list 或 mode=list-detail(两者都含 listSelector + fields,均可作 list-detail 基础);
+ * 这样加载本就是 list-detail 的宏后,list-detail 选项与详情入口字段下拉也能正常启用/填充。
+ */
 function parseValidListRules(): Record<string, unknown> | null {
     const raw = extractInput.value.trim();
     if (!raw) {
@@ -591,7 +595,7 @@ function parseValidListRules(): Record<string, unknown> | null {
         const obj = JSON.parse(raw) as Record<string, unknown>;
         if (
             obj &&
-            obj.mode === 'list' &&
+            (obj.mode === 'list' || obj.mode === 'list-detail') &&
             typeof obj.listSelector === 'string' &&
             obj.listSelector.trim() &&
             Array.isArray(obj.fields)
@@ -632,9 +636,13 @@ function refreshDetailLinkFieldOptions(): void {
         opt.textContent = name;
         aiDetailLinkFieldSel.appendChild(opt);
     }
-    // 尽量沿用上次选择;否则默认选第一个
+    // 选定优先级:沿用当前选中 → 回显已加载规则里的 detailLinkField → 默认第一项
+    const loaded =
+        typeof base?.detailLinkField === 'string' ? (base.detailLinkField as string) : '';
     if (prev && names.includes(prev)) {
         aiDetailLinkFieldSel.value = prev;
+    } else if (loaded && names.includes(loaded)) {
+        aiDetailLinkFieldSel.value = loaded;
     }
 }
 
@@ -788,6 +796,17 @@ loadBtn.addEventListener('click', async () => {
     renderSteps();
     if (macro.extract) {
         extractInput.value = JSON.stringify(macro.extract, null, 4);
+        // 目标模式下拉同步成已加载 extract 的模式(让 list-detail 宏加载后即回显该模式)。
+        // 须先放宽判定(parseValidListRules 已接受 list-detail)再设值,避免被「不可用即回退」打回。
+        const loadedMode = (macro.extract as { mode?: string }).mode;
+        if (
+            loadedMode === 'single' ||
+            loadedMode === 'list' ||
+            loadedMode === 'list-detail' ||
+            loadedMode === 'list-action'
+        ) {
+            aiModeSel.value = loadedMode;
+        }
         refreshAiModeOptions();
     }
     logLocal(
@@ -1122,7 +1141,12 @@ aiGenerateBtn.addEventListener('click', async () => {
             logLocal('「列表+详情」模式需要先在「提取规则」框中填入合法的 mode=list 规则(含 listSelector 与 fields),生成已取消。', 'error');
             return;
         }
-        baseRules = base;
+        // 基础可能本就是 list-detail(加载旧宏后),归一为 list 形再喂 agent,
+        // 避免把 detailFields/detailLinkField 当作「现有 list 规则」干扰提示词。
+        baseRules =
+            base.mode === 'list-detail'
+                ? { mode: 'list', listSelector: base.listSelector, fields: base.fields }
+                : base;
         // 详情入口字段由用户从 fields 中选定(取代 AI 生成的详情链接选择器)
         detailLinkField = aiDetailLinkFieldSel.value || '';
         if (!detailLinkField) {
