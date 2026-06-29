@@ -20,6 +20,55 @@ export interface PaginationContext {
     turnPage: () => Promise<void>;
 }
 
+/** 等列表渲染/换页的上限(毫秒):空页不干等满全局 60s;与 list-action 既有 actionTimeout 默认一致但语义独立 */
+const PAGE_SETTLE_TIMEOUT = 30000;
+
+/**
+ * 每页处理前等列表项渲染就绪(三种翻页模式共用)。
+ * 修首页:此前各循环只在 turnPage 后才等,首页之前无等待→AJAX 未就绪 count=0 整页被跳过。
+ * 超时不抛(catch):真空结果页自然按 0 项处理,非致命。
+ */
+async function waitListReady(page: Page, listSelector: string): Promise<void> {
+    await page
+        .waitForSelector(listSelector, { timeout: PAGE_SETTLE_TIMEOUT })
+        .catch(() => undefined);
+}
+
+/**
+ * 翻页并等内容真正切换(三种翻页模式共用)。
+ * SPA 翻页(纯 JS 换内容)后旧行常仍在 DOM,单纯 waitForSelector 会立即通过→下一轮读到旧页/重复处理。
+ * 比较翻页前后「首个列表项文本」是否变化来确认换页;换页后的就绪等待由下一轮循环顶部的 waitListReady 承接。
+ */
+async function turnPageAndSettle(
+    page: Page,
+    pagination: PaginationContext,
+    listSelector: string
+): Promise<void> {
+    const before = await page
+        .locator(listSelector)
+        .first()
+        .textContent()
+        .catch(() => null);
+    await pagination.turnPage();
+    if (before != null) {
+        await page
+            .waitForFunction(
+                ([sel, prev]: readonly [string, string]) => {
+                    let el: Element | null = null;
+                    try {
+                        el = document.querySelector(sel); // 非 CSS 选择器会抛→放行,交回 waitListReady
+                    } catch {
+                        return true;
+                    }
+                    return !!el && el.textContent !== prev;
+                },
+                [listSelector, before] as const,
+                { timeout: PAGE_SETTLE_TIMEOUT }
+            )
+            .catch(() => undefined); // 两页首行恰好相同/超时:放行,靠下一轮 waitListReady 兜底
+    }
+}
+
 /**
  * 从页面按配置提取数据。
  * - single:对每个字段取首个匹配元素,返回单行(翻页不适用)。
@@ -55,13 +104,13 @@ export async function extract(
     const rows: ExtractRow[] = [];
     const totalPages = pagination ? pagination.totalPages : 1;
     for (let p = 1; p <= totalPages; p += 1) {
+        await waitListReady(page, config.listSelector);
         const pageRows = await collectListRows(page, config);
         rows.push(...pageRows);
         logInfo(`第 ${p}/${totalPages} 页采集到 ${pageRows.length} 行,累计 ${rows.length} 行。`);
         if (p < totalPages && pagination) {
             logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await pagination.turnPage();
-            await page.waitForSelector(config.listSelector);
+            await turnPageAndSettle(page, pagination, config.listSelector);
         }
     }
     return rows;
@@ -194,6 +243,7 @@ async function extractListAction(
     const totalPages = pagination ? pagination.totalPages : 1;
     let clicked = 0;
     for (let p = 1; p <= totalPages; p += 1) {
+        await waitListReady(page, config.listSelector);
         const items = page.locator(config.listSelector);
         const count = await items.count();
         logInfo(`第 ${p}/${totalPages} 页发现 ${count} 个列表项,开始逐项点击……`);
@@ -239,8 +289,7 @@ async function extractListAction(
         }
         if (p < totalPages && pagination) {
             logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await pagination.turnPage();
-            await page.waitForSelector(config.listSelector);
+            await turnPageAndSettle(page, pagination, config.listSelector);
         }
     }
     logInfo(
@@ -300,13 +349,13 @@ async function extractListDetail(
     const collected: { row: ExtractRow; detailUrl: string }[] = [];
     const totalPages = pagination ? pagination.totalPages : 1;
     for (let p = 1; p <= totalPages; p += 1) {
+        await waitListReady(page, config.listSelector);
         const pageItems = await collectListDetailPage(page, config);
         collected.push(...pageItems);
         logInfo(`第 ${p}/${totalPages} 页采集到 ${pageItems.length} 项,累计 ${collected.length} 项。`);
         if (p < totalPages && pagination) {
             logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await pagination.turnPage();
-            await page.waitForSelector(config.listSelector);
+            await turnPageAndSettle(page, pagination, config.listSelector);
         }
     }
 
