@@ -98,6 +98,7 @@ interface ElectronAPI {
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
+    runPlugin(type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
     onLog(cb: (msg: LogMessage) => void): void;
     onMacroPaused(cb: (info: PauseEvent) => void): void;
     resumeMacro(runId: number): void;
@@ -913,6 +914,9 @@ async function loadPlugins(): Promise<void> {
             return;
         }
         for (const p of plugins) {
+            // 一行:左侧勾选(随「运行」执行)+ 名称,右侧「直接运行」按钮(不跑宏、直接处理文件)
+            const row = document.createElement('div');
+            row.className = 'plugin-row';
             const label = document.createElement('label');
             label.className = 'plugin-item';
             const cb = document.createElement('input');
@@ -922,14 +926,41 @@ async function loadPlugins(): Promise<void> {
             name.textContent = p.label;
             label.appendChild(cb);
             label.appendChild(name);
+            const runNow = document.createElement('button');
+            runNow.className = 'plugin-run-now';
+            runNow.textContent = '直接运行';
+            runNow.title = '不跑宏,直接选 zip/csv/xls/xlsx 文件合并';
+            runNow.addEventListener('click', () => void runPluginDirect(p.type, p.label));
+            row.appendChild(label);
+            row.appendChild(runNow);
             const desc = document.createElement('div');
             desc.className = 'plugin-desc';
             desc.textContent = p.description;
-            pluginList.appendChild(label);
+            pluginList.appendChild(row);
             pluginList.appendChild(desc);
         }
     } catch (e) {
         logLocal('加载插件列表失败:' + (e as Error).message, 'error');
+    }
+}
+
+/** 直接运行某插件:弹文件夹选择(主进程),对其内文件直接处理,不跑宏 */
+async function runPluginDirect(type: string, label: string): Promise<void> {
+    setBusy(true);
+    logLocal(`直接运行插件「${label}」:请选择要合并的文件(可多选 zip/csv/xls/xlsx)……`);
+    try {
+        const res = await window.electronAPI.runPlugin(type);
+        if (res.canceled) {
+            logLocal('已取消直接运行。');
+        } else {
+            for (const r of res.results ?? []) {
+                logLocal(`后处理「${r.type}」:${r.message}`);
+            }
+        }
+    } catch (e) {
+        logLocal('直接运行插件异常:' + (e as Error).message, 'error');
+    } finally {
+        setBusy(false);
     }
 }
 

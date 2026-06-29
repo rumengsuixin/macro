@@ -16,6 +16,7 @@ import type {
     Macro,
     ExtractRow,
     RunResult,
+    PostProcessResult,
     OnPause,
     PauseInfo,
     BrowserConfig,
@@ -262,6 +263,40 @@ function registerIpc(): void {
     ipcMain.handle('list-plugins', () => {
         return listPostProcessors();
     });
+
+    // 直接运行某插件:弹文件多选(zip/csv/xls/xlsx,默认定位 downloads/),对所选文件直接跑后处理,不回放宏
+    ipcMain.handle(
+        'run-plugin',
+        async (_e, type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> => {
+            ensureDirs();
+            const pick = await dialog.showOpenDialog(mainWindow!, {
+                title: '选择要合并的文件(可多选 zip / csv / xls / xlsx)',
+                defaultPath: downloadsDir,
+                properties: ['openFile', 'multiSelections'],
+                filters: [
+                    { name: '压缩包 / 表格', extensions: ['zip', 'csv', 'xls', 'xlsx', 'xlsm'] },
+                    { name: '所有文件', extensions: ['*'] },
+                ],
+            });
+            if (pick.canceled || pick.filePaths.length === 0) {
+                logInfo('已取消直接运行插件。');
+                return { canceled: true };
+            }
+            const files = pick.filePaths;
+            logInfo(`直接运行插件 ${type}:已选 ${files.length} 个文件。`);
+            const results = await runPostProcessors([{ type }], {
+                downloads: files,
+                downloadDir: path.dirname(files[0]),
+                exportsDir,
+                stamp: timestamp(),
+            });
+            const out = results.filter((r) => r.output).pop()?.output;
+            if (out) {
+                shell.showItemInFolder(out);
+            }
+            return { results };
+        }
+    );
 
     // 列出 AI 配置档(供渲染进程下拉选择)
     ipcMain.handle('ai-list-profiles', async () => {

@@ -318,6 +318,28 @@
             color: #64748b;
         }
 
+        /* 插件行:左侧勾选项占满,右侧「直接运行」按钮 */
+        .plugin-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .plugin-row .plugin-item {
+            flex: 1;
+        }
+
+        .plugin-run-now {
+            padding: 3px 10px;
+            background: #0d9488;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .plugin-run-now:hover {
+            background: #0f766e;
+        }
+
         .browser-body {
             padding: 8px 10px;
             display: flex;
