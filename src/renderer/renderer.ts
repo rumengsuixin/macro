@@ -13,6 +13,7 @@ interface Macro {
     version: number;
     steps: Step[];
     extract?: unknown;
+    postProcess?: Array<{ type: string; options?: Record<string, unknown> }>;
 }
 
 interface LogMessage {
@@ -30,10 +31,23 @@ interface RunError {
     screenshot?: string;
 }
 
+interface PostProcessResult {
+    type: string;
+    output?: string;
+    message: string;
+}
+
+interface PostProcessorManifest {
+    type: string;
+    label: string;
+    description: string;
+}
+
 interface RunResult {
     ok: boolean;
     rows?: Record<string, string>[];
     downloads?: string[];
+    postProcessed?: PostProcessResult[];
     error?: RunError;
 }
 
@@ -83,6 +97,7 @@ interface ElectronAPI {
     loadMacro(): Promise<Macro | null>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
+    listPlugins(): Promise<PostProcessorManifest[]>;
     onLog(cb: (msg: LogMessage) => void): void;
     onMacroPaused(cb: (info: PauseEvent) => void): void;
     resumeMacro(runId: number): void;
@@ -578,6 +593,11 @@ function buildMacro(): Macro {
     if (raw) {
         macro.extract = JSON.parse(raw); // 解析失败由调用方捕获
     }
+    // 勾选的插件写入 postProcess(随宏保存),回放产出后由主进程依次执行
+    const picked = selectedPluginTypes();
+    if (picked.length > 0) {
+        macro.postProcess = picked.map((type) => ({ type }));
+    }
     return macro;
 }
 
@@ -716,6 +736,32 @@ stopBtn.addEventListener('click', () => {
     logLocal(`停止录制,共记录 ${steps.length} 个步骤。`);
 });
 
+/** 统一处理回放结果的日志反馈(供「运行」按钮与插件面板共用) */
+function reportRunResult(result: RunResult): void {
+    if (result.ok) {
+        lastRows = result.rows ?? [];
+        const dlCount = result.downloads?.length ?? 0;
+        if (dlCount > 0) {
+            // list-action 等模式:产出是下载文件而非数据行
+            logLocal(`运行成功,已下载 ${dlCount} 个文件(已在文件管理器中定位)。`);
+        } else {
+            logLocal(`运行成功,提取到 ${lastRows.length} 行数据。可点击「导出 Excel」。`);
+        }
+        // 后处理器结果(如下载后合并 zip 内 excel)逐条提示
+        for (const pp of result.postProcessed ?? []) {
+            logLocal(`后处理「${pp.type}」:${pp.message}`);
+        }
+    } else {
+        const err = result.error;
+        logLocal(
+            `运行失败:第 ${(err?.stepIndex ?? -1) + 1} 步(${err?.stepType})` +
+                `${err?.selector ? ' selector=' + err.selector : ''}` +
+                ` URL=${err?.url ?? '未知'} 原因:${err?.message}`,
+            'error'
+        );
+    }
+}
+
 runBtn.addEventListener('click', async () => {
     let macro: Macro;
     try {
@@ -732,24 +778,7 @@ runBtn.addEventListener('click', async () => {
     logLocal('提交运行宏……(将弹出 Playwright 浏览器窗口)');
     try {
         const result = await window.electronAPI.runMacro(macro);
-        if (result.ok) {
-            lastRows = result.rows ?? [];
-            const dlCount = result.downloads?.length ?? 0;
-            if (dlCount > 0) {
-                // list-action 等模式:产出是下载文件而非数据行
-                logLocal(`运行成功,已下载 ${dlCount} 个文件(已在文件管理器中定位)。`);
-            } else {
-                logLocal(`运行成功,提取到 ${lastRows.length} 行数据。可点击「导出 Excel」。`);
-            }
-        } else {
-            const err = result.error;
-            logLocal(
-                `运行失败:第 ${(err?.stepIndex ?? -1) + 1} 步(${err?.stepType})` +
-                    `${err?.selector ? ' selector=' + err.selector : ''}` +
-                    ` URL=${err?.url ?? '未知'} 原因:${err?.message}`,
-                'error'
-            );
-        }
+        reportRunResult(result);
     } catch (e) {
         logLocal('运行宏异常:' + (e as Error).message, 'error');
     } finally {
@@ -809,6 +838,8 @@ loadBtn.addEventListener('click', async () => {
         }
         refreshAiModeOptions();
     }
+    // 回显宏里启用的插件勾选
+    refreshPluginSelection(macro.postProcess);
     logLocal(
         `已加载宏「${macro.name}」,${steps.length} 个步骤。` +
             (macro.extract ? ' 已填充提取规则。' : '')
@@ -845,6 +876,89 @@ const extractTitle = byId<HTMLElement>('extract-title');
 extractTitle.addEventListener('click', () => {
     extractPanel.classList.toggle('collapsed');
 });
+
+// ===== AI 提取面板折叠(点标题展开/收起) =====
+const aiPanel = byId<HTMLDivElement>('ai-panel');
+const aiTitle = byId<HTMLElement>('ai-title');
+aiTitle.addEventListener('click', () => {
+    aiPanel.classList.toggle('collapsed');
+});
+
+// ===== 录制步骤面板折叠(点标题展开/收起) =====
+const stepsPanel = byId<HTMLDivElement>('steps-panel');
+const stepsTitle = byId<HTMLElement>('steps-title');
+stepsTitle.addEventListener('click', () => {
+    stepsPanel.classList.toggle('collapsed');
+});
+
+// ===== 插件:可选插件列表(由后端注册表驱动,勾选启用、随主「运行」一起执行) =====
+const pluginPanel = byId<HTMLDivElement>('plugin-panel');
+const pluginTitle = byId<HTMLElement>('plugin-title');
+const pluginList = byId<HTMLDivElement>('plugin-list');
+
+pluginTitle.addEventListener('click', () => {
+    pluginPanel.classList.toggle('collapsed');
+});
+
+/** 从后端注册表拉取可用插件,渲成可勾选列表(空列表给出提示) */
+async function loadPlugins(): Promise<void> {
+    try {
+        const plugins = await window.electronAPI.listPlugins();
+        pluginList.innerHTML = '';
+        if (plugins.length === 0) {
+            const empty = document.createElement('span');
+            empty.className = 'hint';
+            empty.textContent = '暂无可用插件。';
+            pluginList.appendChild(empty);
+            return;
+        }
+        for (const p of plugins) {
+            const label = document.createElement('label');
+            label.className = 'plugin-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.dataset.pluginType = p.type;
+            const name = document.createElement('span');
+            name.textContent = p.label;
+            label.appendChild(cb);
+            label.appendChild(name);
+            const desc = document.createElement('div');
+            desc.className = 'plugin-desc';
+            desc.textContent = p.description;
+            pluginList.appendChild(label);
+            pluginList.appendChild(desc);
+        }
+    } catch (e) {
+        logLocal('加载插件列表失败:' + (e as Error).message, 'error');
+    }
+}
+
+/** 当前勾选启用的插件 type 列表 */
+function selectedPluginTypes(): string[] {
+    const boxes = pluginList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-plugin-type]');
+    const picked: string[] = [];
+    boxes.forEach((cb) => {
+        const type = cb.dataset.pluginType;
+        if (cb.checked && type) {
+            picked.push(type);
+        }
+    });
+    return picked;
+}
+
+/** 依据宏的 postProcess 回显勾选(宏里有但当前未注册的 type 忽略) */
+function refreshPluginSelection(postProcess: Macro['postProcess']): void {
+    const wanted = new Set<string>(
+        (Array.isArray(postProcess) ? postProcess : [])
+            .map((p) => p?.type)
+            .filter((t): t is string => !!t)
+    );
+    const boxes = pluginList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-plugin-type]');
+    boxes.forEach((cb) => {
+        const type = cb.dataset.pluginType;
+        cb.checked = !!type && wanted.has(type);
+    });
+}
 
 // ===== 浏览器登录态(回放复用)=====
 const browserPanel = byId<HTMLDivElement>('browser-panel');
@@ -1369,7 +1483,7 @@ async function init(): Promise<void> {
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
-    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig()]);
+    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
     hideBootOverlay();
 }

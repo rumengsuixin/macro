@@ -165,12 +165,44 @@ export type ExtractConfig =
     | ListDetailExtractConfig
     | ListActionExtractConfig;
 
+/**
+ * 后处理器规格:挂在 Macro 上,回放产出(数据/下载)后由主进程按序执行。
+ * 轻量「type → handler」注册表机制,非通用插件框架;旧宏无此字段照常解析。
+ */
+export interface PostProcessSpec {
+    /** 注册表 key,如 'merge-zip-excel' */
+    type: string;
+    /** 该 handler 的可选参数 */
+    options?: Record<string, unknown>;
+}
+
+/** 单个后处理器的执行结果(回传渲染进程展示) */
+export interface PostProcessResult {
+    type: string;
+    /** 产出文件绝对路径(若有) */
+    output?: string;
+    /** 中文摘要,如「已合并 5 个表格 / 共 120 行 → merged-xxx.xlsx」 */
+    message: string;
+}
+
+/** 插件元数据:驱动 UI 的可选插件列表(放此处便于 preload/renderer 共用类型) */
+export interface PostProcessorManifest {
+    /** 注册表 key,与 PostProcessSpec.type 对应 */
+    type: string;
+    /** 列表展示名,如「批量下载表格合并」 */
+    label: string;
+    /** 一句话说明,展示为副文字 */
+    description: string;
+}
+
 /** 宏定义 */
 export interface Macro {
     name: string;
     version: number;
     steps: Step[];
     extract?: ExtractConfig;
+    /** 回放产出后按序执行的后处理器(如 list-action 下载后合并 zip 内 excel) */
+    postProcess?: PostProcessSpec[];
 }
 
 /** 提取结果的一行 */
@@ -198,6 +230,8 @@ export interface RunResult {
     rows?: ExtractRow[];
     /** list-action 等模式下捕获并保存的下载文件绝对路径(无数据行时用它反馈) */
     downloads?: string[];
+    /** 后处理器执行结果(由主进程在 runner 之后填充,如合并 zip 内 excel 的产物) */
+    postProcessed?: PostProcessResult[];
     error?: RunError;
 }
 

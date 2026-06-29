@@ -11,6 +11,7 @@ import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { generateExtract, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput } from '../core/ai-extract';
+import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import type {
     Macro,
     ExtractRow,
@@ -206,9 +207,24 @@ function registerIpc(): void {
         const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions, downloadsDir);
         try {
             const result = await runner.run(macro);
-            // 有捕获到下载文件时给即时反馈:日志 + 在文件管理器中定位
             if (result.ok && result.downloads && result.downloads.length > 0) {
                 logInfo(`已下载 ${result.downloads.length} 个文件到:${downloadsDir}`);
+            }
+            // 回放成功且配置了后处理器时执行(如 list-action 下载后合并 zip 内 excel)
+            if (result.ok && macro.postProcess && macro.postProcess.length > 0) {
+                const postProcessed = await runPostProcessors(macro.postProcess, {
+                    downloads: result.downloads ?? [],
+                    downloadDir: downloadsDir,
+                    exportsDir,
+                    stamp: timestamp(),
+                });
+                result.postProcessed = postProcessed;
+            }
+            // 在文件管理器中定位:优先定位后处理产物,否则定位首个下载文件
+            const producedFile = result.postProcessed?.filter((r) => r.output).pop()?.output;
+            if (producedFile) {
+                shell.showItemInFolder(producedFile);
+            } else if (result.downloads && result.downloads.length > 0) {
                 shell.showItemInFolder(result.downloads[0]);
             }
             return result;
@@ -240,6 +256,11 @@ function registerIpc(): void {
         logInfo(`Excel 已导出:${saved}`);
         shell.showItemInFolder(saved); // 打开所在文件夹并高亮该文件
         return saved;
+    });
+
+    // 列出可用后处理器插件(驱动渲染进程的可选插件列表)
+    ipcMain.handle('list-plugins', () => {
+        return listPostProcessors();
     });
 
     // 列出 AI 配置档(供渲染进程下拉选择)

@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, ExtractRow, RunResult, BrowserConfig } from '../core/macro-types';
+import type { Macro, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary } from '../core/ai-extract';
 
@@ -36,6 +36,9 @@ const api = {
 
     /** 导出 Excel(弹出保存对话框),返回文件路径或 null(取消) */
     exportExcel: (rows: ExtractRow[]): Promise<string | null> => ipcRenderer.invoke('export-excel', rows),
+
+    /** 列出可用后处理器插件(驱动可选插件列表) */
+    listPlugins: (): Promise<PostProcessorManifest[]> => ipcRenderer.invoke('list-plugins'),
 
     /** 列出 AI 配置档 */
     aiListProfiles: (): Promise<AiProfilesInfo> => ipcRenderer.invoke('ai-list-profiles'),

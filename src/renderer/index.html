@@ -229,8 +229,17 @@
         }
 
         .collapsible.collapsed > #extract,
-        .collapsible.collapsed > .browser-body {
+        .collapsible.collapsed > .browser-body,
+        .collapsible.collapsed > .ai-body,
+        .collapsible.collapsed > .plugin-body,
+        .collapsible.collapsed > #steps {
             display: none;
+        }
+
+        /* 步骤面板收起时不再占用弹性高度,把空间还给其它内容 */
+        .steps-panel.collapsed {
+            flex: 0 0 auto;
+            min-height: 0;
         }
 
         #extract {
@@ -270,6 +279,43 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
+        }
+
+        /* 插件面板:独立成块,青绿色强调条 + 🧩 徽标,区别于通用 AI 面板 */
+        .plugin-panel {
+            border-bottom: 1px solid #d1d5db;
+            background: linear-gradient(180deg, #ecfeff 0%, #f8fafc 100%);
+        }
+
+        .plugin-panel > .panel-title {
+            border-left: 3px solid #0d9488;
+        }
+
+        .plugin-body {
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* 单个插件项:复选框 + 名称一行,说明另起一行(缩进对齐) */
+        .plugin-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #334155;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .plugin-item input {
+            cursor: pointer;
+        }
+
+        .plugin-desc {
+            margin: -2px 0 4px 22px;
+            font-size: 12px;
+            color: #64748b;
         }
 
         .browser-body {
@@ -764,8 +810,8 @@
                     <div class="panel-title" id="extract-title">提取规则(extract,可编辑 JSON)</div>
                     <textarea id="extract" spellcheck="false"></textarea>
                 </div>
-                <div class="panel ai-panel">
-                    <div class="panel-title">AI 提取(用 AI 自动生成上面的规则)</div>
+                <div class="panel ai-panel collapsible" id="ai-panel">
+                    <div class="panel-title" id="ai-title">AI 提取(用 AI 自动生成上面的规则)</div>
                     <div class="ai-body">
                         <div class="ai-row">
                             <label>引擎</label>
@@ -790,6 +836,12 @@
                             <select id="ai-detail-link-field"></select>
                             <span class="hint">选 fields 中指向详情页的字段(取其 href 进详情页)</span>
                         </div>
+                    </div>
+                </div>
+                <div class="panel collapsible plugin-panel" id="plugin-panel">
+                    <div class="panel-title" id="plugin-title">🧩 插件(勾选启用,随「运行」一起执行)</div>
+                    <div class="plugin-body" id="plugin-list">
+                        <span class="hint">正在加载插件…</span>
                     </div>
                 </div>
                 <div class="panel collapsible collapsed" id="browser-panel">
@@ -817,8 +869,8 @@
                         </label>
                     </div>
                 </div>
-                <div class="panel steps-panel">
-                    <div class="panel-title">录制步骤(<span id="step-count">0</span>)</div>
+                <div class="panel steps-panel collapsible" id="steps-panel">
+                    <div class="panel-title" id="steps-title">录制步骤(<span id="step-count">0</span>)</div>
                     <div id="steps"></div>
                 </div>
             </div>
