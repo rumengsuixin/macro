@@ -450,9 +450,30 @@ export class MacroRunner {
         await page.evaluate(({ sx, sy }) => window.scrollTo(sx, sy), { sx: x, sy: y });
     }
 
-    /** 滚动到页面最底部:取实际页面高度滚动,常用于触发无限滚动懒加载;滚后短暂等待新内容就绪 */
+    /** 滚动到页面最底部:window 与所有内部可滚动容器(含 fixed 定位)各自滚到底,触发无限滚动懒加载;滚后短暂等待新内容就绪 */
     private async handleScrollBottom(page: Page): Promise<void> {
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        const scrolled = await page.evaluate(() => {
+            // 1) 窗口/文档滚到底
+            const doc = document.scrollingElement || document.documentElement;
+            window.scrollTo(0, doc ? doc.scrollHeight : document.body.scrollHeight);
+            // 2) 扫描所有元素,把「自身可垂直滚动」的容器各自滚到底
+            //    (overflowY 为 auto/scroll/overlay 且 scrollHeight 明显大于 clientHeight)
+            let n = 0;
+            const els = document.querySelectorAll('*');
+            for (let i = 0; i < els.length; i += 1) {
+                const el = els[i] as HTMLElement;
+                const oy = getComputedStyle(el).overflowY;
+                if (
+                    (oy === 'auto' || oy === 'scroll' || oy === 'overlay') &&
+                    el.scrollHeight - el.clientHeight > 4
+                ) {
+                    el.scrollTop = el.scrollHeight; // 设 scrollTop 会派发 scroll 事件,兼容滚动监听型懒加载
+                    n += 1;
+                }
+            }
+            return n; // 命中的内部可滚动容器数,供日志诊断
+        });
+        logInfo(`滚动到底部:已滚动 window + ${scrolled} 个内部可滚动容器。`);
         // 等懒加载内容就绪(非致命,固定短等待)
         await page.waitForTimeout(1000);
     }
