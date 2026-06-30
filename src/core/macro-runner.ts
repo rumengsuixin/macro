@@ -326,6 +326,9 @@ export class MacroRunner {
             case 'scroll-bottom':
                 await this.handleScrollBottom(page);
                 break;
+            case 'wait-for-load':
+                await this.handleWaitForLoad(page);
+                break;
             case 'waitForSelector':
                 await this.handleWaitForSelector(page, step.selector, step.timeout);
                 break;
@@ -478,6 +481,16 @@ export class MacroRunner {
         await page.waitForTimeout(1000);
     }
 
+    /** 等待页面加载完成:等 load 事件(DOM 与全部资源加载完毕);超时只告警不致命,避免轮询型站点永久挂死 */
+    private async handleWaitForLoad(page: Page): Promise<void> {
+        try {
+            await page.waitForLoadState('load');
+            logInfo('页面加载完成(load)。');
+        } catch (e) {
+            logInfo(`等待页面加载完成超时,继续后续步骤:${(e as Error).message}`);
+        }
+    }
+
     private async handleWaitForSelector(
         page: Page,
         selector: string,
@@ -549,6 +562,8 @@ function describeStep(step: Step): string {
             return `滚动到 (${step.x}, ${step.y})`;
         case 'scroll-bottom':
             return '滚动到底部';
+        case 'wait-for-load':
+            return '等待页面加载完成';
         case 'waitForSelector':
             return `等待元素 ${step.selector}`;
         case 'pause':

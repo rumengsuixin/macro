@@ -9,6 +9,7 @@ export type StepType =
     | 'press'
     | 'scroll'
     | 'scroll-bottom'
+    | 'wait-for-load'
     | 'waitForSelector'
     | 'pause';
 
@@ -69,6 +70,11 @@ export interface ScrollBottomStep {
     type: 'scroll-bottom';
 }
 
+/** 等待页面加载完成(回放到此等 load 事件,即 DOM 与所有资源加载完毕,再继续后续步骤) */
+export interface WaitForLoadStep {
+    type: 'wait-for-load';
+}
+
 /** 等待元素出现 */
 export interface WaitForSelectorStep {
     type: 'waitForSelector';
@@ -101,6 +107,7 @@ export type Step = StepFlags & (
     | PressStep
     | ScrollStep
     | ScrollBottomStep
+    | WaitForLoadStep
     | WaitForSelectorStep
     | PauseStep
 );

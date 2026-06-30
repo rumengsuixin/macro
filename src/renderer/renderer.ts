@@ -212,6 +212,8 @@ function describeStep(step: Step): string {
             return `scroll (${s.x}, ${s.y})`;
         case 'scroll-bottom':
             return '滚动到底部';
+        case 'wait-for-load':
+            return '等待页面加载完成';
         case 'waitForSelector':
             return `waitForSelector ${s.selector}`;
         case 'pause':
@@ -392,6 +394,10 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.appendChild(makeMenuItem('在此后添加滚动到底部', () => {
         insertScrollBottom(index + 1);
     }));
+    // 在此后添加「等待页面加载完成」步骤
+    menu.appendChild(makeMenuItem('在此后添加等待页面加载完成', () => {
+        insertWaitForLoad(index + 1);
+    }));
     // 删除当前步骤
     menu.appendChild(makeMenuItem('删除此步骤', () => {
         steps.splice(index, 1);
@@ -525,6 +531,14 @@ function insertScrollBottom(at: number): void {
     closeStepContextMenu();
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「滚动到底部」(回放时滚到页面最底部以触发懒加载)。`);
+}
+
+function insertWaitForLoad(at: number): void {
+    const clamped = Math.max(0, Math.min(at, steps.length));
+    steps.splice(clamped, 0, { type: 'wait-for-load' });
+    closeStepContextMenu();
+    renderSteps();
+    logLocal(`已在第 ${clamped + 1} 步位置添加「等待页面加载完成」(回放时等 load 事件后继续)。`);
 }
 
 function addStep(step: Step): void {
