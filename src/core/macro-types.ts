@@ -8,6 +8,7 @@ export type StepType =
     | 'fill'
     | 'press'
     | 'scroll'
+    | 'scroll-bottom'
     | 'waitForSelector'
     | 'pause';
 
@@ -63,6 +64,11 @@ export interface ScrollStep {
     y: number;
 }
 
+/** 滚动到页面最底部(常用于触发无限滚动懒加载;无固定坐标,运行时取实际页面高度) */
+export interface ScrollBottomStep {
+    type: 'scroll-bottom';
+}
+
 /** 等待元素出现 */
 export interface WaitForSelectorStep {
     type: 'waitForSelector';
@@ -94,6 +100,7 @@ export type Step = StepFlags & (
     | FillStep
     | PressStep
     | ScrollStep
+    | ScrollBottomStep
     | WaitForSelectorStep
     | PauseStep
 );

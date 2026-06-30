@@ -323,6 +323,9 @@ export class MacroRunner {
             case 'scroll':
                 await this.handleScroll(page, step.x, step.y);
                 break;
+            case 'scroll-bottom':
+                await this.handleScrollBottom(page);
+                break;
             case 'waitForSelector':
                 await this.handleWaitForSelector(page, step.selector, step.timeout);
                 break;
@@ -447,6 +450,13 @@ export class MacroRunner {
         await page.evaluate(({ sx, sy }) => window.scrollTo(sx, sy), { sx: x, sy: y });
     }
 
+    /** 滚动到页面最底部:取实际页面高度滚动,常用于触发无限滚动懒加载;滚后短暂等待新内容就绪 */
+    private async handleScrollBottom(page: Page): Promise<void> {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        // 等懒加载内容就绪(非致命,固定短等待)
+        await page.waitForTimeout(1000);
+    }
+
     private async handleWaitForSelector(
         page: Page,
         selector: string,
@@ -516,6 +526,8 @@ function describeStep(step: Step): string {
             return `按键 ${step.key}${step.selector ? ' @ ' + step.selector : ''}`;
         case 'scroll':
             return `滚动到 (${step.x}, ${step.y})`;
+        case 'scroll-bottom':
+            return '滚动到底部';
         case 'waitForSelector':
             return `等待元素 ${step.selector}`;
         case 'pause':

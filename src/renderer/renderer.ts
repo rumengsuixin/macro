@@ -210,6 +210,8 @@ function describeStep(step: Step): string {
             return `press ${s.key}${s.selector ? ' @ ' + s.selector : ''}`;
         case 'scroll':
             return `scroll (${s.x}, ${s.y})`;
+        case 'scroll-bottom':
+            return '滚动到底部';
         case 'waitForSelector':
             return `waitForSelector ${s.selector}`;
         case 'pause':
@@ -386,6 +388,10 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.appendChild(makeMenuItem('在此后插入暂停', () => {
         insertPause(index + 1);
     }));
+    // 在此后添加「滚动到底部」步骤(用于触发无限滚动懒加载)
+    menu.appendChild(makeMenuItem('在此后添加滚动到底部', () => {
+        insertScrollBottom(index + 1);
+    }));
     // 删除当前步骤
     menu.appendChild(makeMenuItem('删除此步骤', () => {
         steps.splice(index, 1);
@@ -511,6 +517,14 @@ function insertPause(at: number): void {
     closeStepContextMenu();
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置插入人工介入暂停(可右键修改提示文案)。`);
+}
+
+function insertScrollBottom(at: number): void {
+    const clamped = Math.max(0, Math.min(at, steps.length));
+    steps.splice(clamped, 0, { type: 'scroll-bottom' });
+    closeStepContextMenu();
+    renderSteps();
+    logLocal(`已在第 ${clamped + 1} 步位置添加「滚动到底部」(回放时滚到页面最底部以触发懒加载)。`);
 }
 
 function addStep(step: Step): void {
