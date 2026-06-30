@@ -107,6 +107,9 @@ function onPickerClick(event: MouseEvent): void {
         exitPicker(true);
         return;
     }
+    // 关键:先摘掉拾取高亮类,再生成选择器,否则临时类 __macro_picker_hover__ 会被算进选择器
+    clearHover();
+    t.classList.remove(PICKER_CLS); // 双保险:确保被点元素自身无此类
     // 用户点的就是要等待的元素,直接生成选择器(不向上找可点击祖先)
     const selector = generateSelector(t);
     const fingerprint = buildFingerprint(t);
