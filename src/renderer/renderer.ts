@@ -181,8 +181,10 @@ const aiDetailLinkFieldSel = byId<HTMLSelectElement>('ai-detail-link-field');
 let recording = false;
 let steps: Step[] = [];
 let lastRows: Record<string, string>[] = [];
-// 元素拾取:记录拾取结果要插入的步骤位置;null 表示当前无进行中的拾取
-let pickerInsertAt: number | null = null;
+// 元素拾取(通用「取选择器+回调」服务):pendingPick 保存当前这次拾取的消费回调,
+// null 表示无进行中的拾取。用途由发起方通过回调决定(本文件 fingerprint 暂不消费,故用 unknown)。
+type PickedHandler = (selector: string, fingerprint?: unknown) => void;
+let pendingPick: PickedHandler | null = null;
 // 已展开的连续滚动组——按「组首 step 对象引用」记录;默认折叠(不在集合里即折叠)。
 // 用对象引用而非下标:step 对象在 splice/push 中保持身份不变,插入/删除/拖拽后仍能命中;
 // 加载新宏时整个 steps 数组被替换为新对象,旧记录自动被 GC。
@@ -457,7 +459,9 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     }));
     // 在此后添加「等待元素出现」步骤(在浏览器里点选目标元素)
     menu.appendChild(makeMenuItem('在此后添加等待元素出现(点选)', () => {
-        startPicker(index + 1);
+        const at = index + 1;
+        closeStepContextMenu();
+        requestPick((selector) => insertWaitForSelector(at, selector));
     }));
     // 删除当前步骤
     menu.appendChild(makeMenuItem('删除此步骤', () => {
@@ -602,10 +606,9 @@ function insertWaitForLoad(at: number): void {
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待页面加载完成」(回放时等 load 事件后继续)。`);
 }
 
-// 进入元素拾取模式:在浏览器里点选目标元素,拾取结果回传后插入「等待元素出现」步骤
-function startPicker(at: number): void {
-    pickerInsertAt = Math.max(0, Math.min(at, steps.length));
-    closeStepContextMenu();
+// 通用拾取服务:进入拾取模式,选中元素后把选择器交给发起方登记的回调(用途与拾取解耦)。
+function requestPick(onPicked: PickedHandler): void {
+    pendingPick = onPicked;
     // 拾取期间临时挂起录制,避免拾取的点击被误录(picker 已 preventDefault,这里再加一层稳妥)
     if (recording) {
         armRecorder(false);
@@ -614,14 +617,14 @@ function startPicker(at: number): void {
         webview.send('toggle-picker', true);
     } catch {
         // 页面尚未就绪,回滚状态
-        pickerInsertAt = null;
+        pendingPick = null;
         if (recording) {
             armRecorder(true);
         }
         logLocal('页面尚未就绪,无法进入元素拾取模式。', 'error');
         return;
     }
-    logLocal('拾取模式已开启:请在页面中点击要等待的元素,按 ESC 取消。');
+    logLocal('拾取模式已开启:请在页面中点击目标元素,按 ESC 取消。');
 }
 
 function insertWaitForSelector(at: number, selector: string): void {
@@ -1545,9 +1548,9 @@ webview.addEventListener('dom-ready', () => {
     if (recording) {
         armRecorder(true); // 导航后重新武装录制器
     }
-    // 拾取期间发生导航:preload 随旧文档销毁,picker 状态已失效,清理悬挂位置
-    if (pickerInsertAt !== null) {
-        pickerInsertAt = null;
+    // 拾取期间发生导航:preload 随旧文档销毁,picker 状态已失效,丢弃悬挂的回调
+    if (pendingPick) {
+        pendingPick = null;
         logLocal('页面已跳转,元素拾取已取消。');
     }
 });
@@ -1561,9 +1564,9 @@ webview.addEventListener('ipc-message', (e: any) => {
             addStep(step);
         }
     } else if (e.channel === 'picker-result') {
-        const r = e.args[0] as { selector?: string; cancelled?: boolean } | undefined;
-        const at = pickerInsertAt;
-        pickerInsertAt = null;
+        const r = e.args[0] as { selector?: string; fingerprint?: unknown; cancelled?: boolean } | undefined;
+        const handler = pendingPick;
+        pendingPick = null;
         // 恢复拾取前临时挂起的录制
         if (recording) {
             armRecorder(true);
@@ -1576,7 +1579,10 @@ webview.addEventListener('ipc-message', (e: any) => {
             logLocal('未能为所选元素生成选择器,请重试。', 'error');
             return;
         }
-        insertWaitForSelector(at ?? steps.length, r.selector);
+        // 把选择器交给本次拾取的发起方(用途由回调决定)
+        if (handler) {
+            handler(r.selector, r.fingerprint);
+        }
     }
 });
 
