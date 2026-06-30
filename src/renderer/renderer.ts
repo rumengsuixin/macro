@@ -183,6 +183,10 @@ let steps: Step[] = [];
 let lastRows: Record<string, string>[] = [];
 // 元素拾取:记录拾取结果要插入的步骤位置;null 表示当前无进行中的拾取
 let pickerInsertAt: number | null = null;
+// 已展开的连续滚动组——按「组首 step 对象引用」记录;默认折叠(不在集合里即折叠)。
+// 用对象引用而非下标:step 对象在 splice/push 中保持身份不变,插入/删除/拖拽后仍能命中;
+// 加载新宏时整个 steps 数组被替换为新对象,旧记录自动被 GC。
+const expandedScrollGroups = new WeakSet<Step>();
 
 // ===== 日志 =====
 function appendLog(message: string, level: 'info' | 'error', time?: string): void {
@@ -225,78 +229,129 @@ function describeStep(step: Step): string {
     }
 }
 
+/** 创建单个步骤行 div(含文本、徽标、右键菜单、拖拽排序),事件均绑定真实下标 i */
+function createStepLine(step: Step, i: number): HTMLDivElement {
+    const div = document.createElement('div');
+    div.className = 'step-line';
+    div.textContent = `${i + 1}. ${describeStep(step)}`;
+    // 翻页标记:加高亮 class 与行尾徽标
+    if (step.pagination === true) {
+        div.classList.add('pagination-marked');
+        const badge = document.createElement('span');
+        badge.className = 'pagination-badge';
+        const pages = typeof step.pageCount === 'number' ? step.pageCount : 1;
+        badge.textContent = `翻页 · 共${pages}页`;
+        div.appendChild(badge);
+    }
+    // 人工介入暂停步骤:加高亮 class 与行尾徽标
+    if (step.type === 'pause') {
+        div.classList.add('pause-marked');
+        const badge = document.createElement('span');
+        badge.className = 'pause-badge';
+        badge.textContent = '人工介入';
+        div.appendChild(badge);
+    }
+    // 右键弹出操作菜单
+    div.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showStepContextMenu(e.clientX, e.clientY, i);
+    });
+    // 拖拽排序:每一行可上下拖动调整顺序
+    div.draggable = true;
+    div.dataset.index = String(i);
+    div.addEventListener('dragstart', (e) => {
+        dragFromIndex = i;
+        div.classList.add('dragging');
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(i)); // 兼容部分浏览器要求有数据才触发 drop
+        }
+    });
+    div.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'move';
+        }
+        if (dragFromIndex === null || dragFromIndex === i) {
+            return; // 拖到自身不显示指示线
+        }
+        clearDropIndicators();
+        const rect = div.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        div.classList.add(before ? 'drop-before' : 'drop-after');
+    });
+    div.addEventListener('dragleave', () => {
+        div.classList.remove('drop-before', 'drop-after');
+    });
+    div.addEventListener('drop', (e) => {
+        e.preventDefault();
+        if (dragFromIndex === null) {
+            return;
+        }
+        const rect = div.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        const to = before ? i : i + 1; // 插入到目标行之前/之后
+        moveStep(dragFromIndex, to);
+    });
+    div.addEventListener('dragend', () => {
+        div.classList.remove('dragging');
+        clearDropIndicators();
+        dragFromIndex = null;
+    });
+    return div;
+}
+
+/** 是否为可并入折叠组的滚动步骤(翻页标记的滚动单独成行,避免折叠时隐藏翻页徽标) */
+function isGroupableScroll(step: Step): boolean {
+    return step.type === 'scroll' && step.pagination !== true;
+}
+
 function renderSteps(): void {
     stepsEl.innerHTML = '';
-    steps.forEach((step, i) => {
-        const div = document.createElement('div');
-        div.className = 'step-line';
-        div.textContent = `${i + 1}. ${describeStep(step)}`;
-        // 翻页标记:加高亮 class 与行尾徽标
-        if (step.pagination === true) {
-            div.classList.add('pagination-marked');
-            const badge = document.createElement('span');
-            badge.className = 'pagination-badge';
-            const pages = typeof step.pageCount === 'number' ? step.pageCount : 1;
-            badge.textContent = `翻页 · 共${pages}页`;
-            div.appendChild(badge);
+    let i = 0;
+    while (i < steps.length) {
+        const step = steps[i];
+        // 连续滚动折叠:探测从 i 起的连续可分组滚动 [i, end)
+        if (isGroupableScroll(step)) {
+            let end = i + 1;
+            while (end < steps.length && isGroupableScroll(steps[end])) {
+                end++;
+            }
+            const groupLen = end - i;
+            if (groupLen >= 2) {
+                const expanded = expandedScrollGroups.has(step); // 以组首对象引用为锚
+                const head = createStepLine(step, i);
+                head.classList.add('scroll-group-head');
+                const toggle = document.createElement('span');
+                toggle.className = 'scroll-group-toggle';
+                toggle.textContent = expanded ? `收起 ${groupLen} 条 ▴` : `连续滚动 ${groupLen} 条 ▾`;
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation(); // 不触发拖拽等行为
+                    if (expanded) {
+                        expandedScrollGroups.delete(step);
+                    } else {
+                        expandedScrollGroups.add(step);
+                    }
+                    renderSteps();
+                });
+                head.appendChild(toggle);
+                stepsEl.appendChild(head);
+                // 展开态:逐条渲染后续滚动子项(缩进、淡色)
+                if (expanded) {
+                    for (let j = i + 1; j < end; j++) {
+                        const sub = createStepLine(steps[j], j);
+                        sub.classList.add('scroll-group-item');
+                        stepsEl.appendChild(sub);
+                    }
+                }
+                i = end;
+                continue;
+            }
         }
-        // 人工介入暂停步骤:加高亮 class 与行尾徽标
-        if (step.type === 'pause') {
-            div.classList.add('pause-marked');
-            const badge = document.createElement('span');
-            badge.className = 'pause-badge';
-            badge.textContent = '人工介入';
-            div.appendChild(badge);
-        }
-        // 右键弹出操作菜单
-        div.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showStepContextMenu(e.clientX, e.clientY, i);
-        });
-        // 拖拽排序:每一行可上下拖动调整顺序
-        div.draggable = true;
-        div.dataset.index = String(i);
-        div.addEventListener('dragstart', (e) => {
-            dragFromIndex = i;
-            div.classList.add('dragging');
-            if (e.dataTransfer) {
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', String(i)); // 兼容部分浏览器要求有数据才触发 drop
-            }
-        });
-        div.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            if (e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'move';
-            }
-            if (dragFromIndex === null || dragFromIndex === i) {
-                return; // 拖到自身不显示指示线
-            }
-            clearDropIndicators();
-            const rect = div.getBoundingClientRect();
-            const before = e.clientY < rect.top + rect.height / 2;
-            div.classList.add(before ? 'drop-before' : 'drop-after');
-        });
-        div.addEventListener('dragleave', () => {
-            div.classList.remove('drop-before', 'drop-after');
-        });
-        div.addEventListener('drop', (e) => {
-            e.preventDefault();
-            if (dragFromIndex === null) {
-                return;
-            }
-            const rect = div.getBoundingClientRect();
-            const before = e.clientY < rect.top + rect.height / 2;
-            const to = before ? i : i + 1; // 插入到目标行之前/之后
-            moveStep(dragFromIndex, to);
-        });
-        div.addEventListener('dragend', () => {
-            div.classList.remove('dragging');
-            clearDropIndicators();
-            dragFromIndex = null;
-        });
-        stepsEl.appendChild(div);
-    });
+        // 普通步骤(含单条滚动):正常单行渲染
+        stepsEl.appendChild(createStepLine(step, i));
+        i++;
+    }
     stepCountEl.textContent = String(steps.length);
 }
 
