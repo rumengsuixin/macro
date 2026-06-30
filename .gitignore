@@ -5,6 +5,7 @@ dist/
 exports/
 errors/
 macros/
+downloads/
 browser-profile/
 browser-config.json
 
