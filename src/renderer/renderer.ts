@@ -181,6 +181,8 @@ const aiDetailLinkFieldSel = byId<HTMLSelectElement>('ai-detail-link-field');
 let recording = false;
 let steps: Step[] = [];
 let lastRows: Record<string, string>[] = [];
+// 元素拾取:记录拾取结果要插入的步骤位置;null 表示当前无进行中的拾取
+let pickerInsertAt: number | null = null;
 
 // ===== 日志 =====
 function appendLog(message: string, level: 'info' | 'error', time?: string): void {
@@ -215,7 +217,7 @@ function describeStep(step: Step): string {
         case 'wait-for-load':
             return '等待页面加载完成';
         case 'waitForSelector':
-            return `waitForSelector ${s.selector}`;
+            return `等待元素出现 ${s.selector}`;
         case 'pause':
             return `人工介入暂停${s.reason ? ' — ' + s.reason : ''}${s.timeout ? '(超时 ' + s.timeout + 'ms)' : ''}`;
         default:
@@ -398,6 +400,10 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.appendChild(makeMenuItem('在此后添加等待页面加载完成', () => {
         insertWaitForLoad(index + 1);
     }));
+    // 在此后添加「等待元素出现」步骤(在浏览器里点选目标元素)
+    menu.appendChild(makeMenuItem('在此后添加等待元素出现(点选)', () => {
+        startPicker(index + 1);
+    }));
     // 删除当前步骤
     menu.appendChild(makeMenuItem('删除此步骤', () => {
         steps.splice(index, 1);
@@ -539,6 +545,35 @@ function insertWaitForLoad(at: number): void {
     closeStepContextMenu();
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待页面加载完成」(回放时等 load 事件后继续)。`);
+}
+
+// 进入元素拾取模式:在浏览器里点选目标元素,拾取结果回传后插入「等待元素出现」步骤
+function startPicker(at: number): void {
+    pickerInsertAt = Math.max(0, Math.min(at, steps.length));
+    closeStepContextMenu();
+    // 拾取期间临时挂起录制,避免拾取的点击被误录(picker 已 preventDefault,这里再加一层稳妥)
+    if (recording) {
+        armRecorder(false);
+    }
+    try {
+        webview.send('toggle-picker', true);
+    } catch {
+        // 页面尚未就绪,回滚状态
+        pickerInsertAt = null;
+        if (recording) {
+            armRecorder(true);
+        }
+        logLocal('页面尚未就绪,无法进入元素拾取模式。', 'error');
+        return;
+    }
+    logLocal('拾取模式已开启:请在页面中点击要等待的元素,按 ESC 取消。');
+}
+
+function insertWaitForSelector(at: number, selector: string): void {
+    const clamped = Math.max(0, Math.min(at, steps.length));
+    steps.splice(clamped, 0, { type: 'waitForSelector', selector });
+    renderSteps();
+    logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素出现」:${selector}`);
 }
 
 function addStep(step: Step): void {
@@ -1455,6 +1490,11 @@ webview.addEventListener('dom-ready', () => {
     if (recording) {
         armRecorder(true); // 导航后重新武装录制器
     }
+    // 拾取期间发生导航:preload 随旧文档销毁,picker 状态已失效,清理悬挂位置
+    if (pickerInsertAt !== null) {
+        pickerInsertAt = null;
+        logLocal('页面已跳转,元素拾取已取消。');
+    }
 });
 
 // 接收来自录制 preload 的步骤
@@ -1465,6 +1505,23 @@ webview.addEventListener('ipc-message', (e: any) => {
         if (step && typeof step.type === 'string') {
             addStep(step);
         }
+    } else if (e.channel === 'picker-result') {
+        const r = e.args[0] as { selector?: string; cancelled?: boolean } | undefined;
+        const at = pickerInsertAt;
+        pickerInsertAt = null;
+        // 恢复拾取前临时挂起的录制
+        if (recording) {
+            armRecorder(true);
+        }
+        if (!r || r.cancelled) {
+            logLocal('已取消元素拾取。');
+            return;
+        }
+        if (!r.selector) {
+            logLocal('未能为所选元素生成选择器,请重试。', 'error');
+            return;
+        }
+        insertWaitForSelector(at ?? steps.length, r.selector);
     }
 });
 

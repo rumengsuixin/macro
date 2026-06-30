@@ -20,6 +20,108 @@ ipcRenderer.on('toggle-recording', (_event, on: boolean) => {
     }
 });
 
+// ===== 元素拾取器(picker)=====
+// 进入拾取模式后:鼠标 hover 元素高亮、点击元素生成选择器回传宿主(用于「等待元素出现」步骤),
+// 点击被拦截(不触发网页跳转、也不录制成 click 步骤),ESC 取消。
+let picking = false;
+let pickerStyleEl: HTMLStyleElement | null = null;
+let hoveredEl: Element | null = null;
+const PICKER_CLS = '__macro_picker_hover__';
+
+// 接收宿主的拾取开关
+ipcRenderer.on('toggle-picker', (_event, on: boolean) => {
+    if (on) {
+        enterPicker();
+    } else {
+        exitPicker(false);
+    }
+});
+
+function enterPicker(): void {
+    if (picking) {
+        return;
+    }
+    picking = true;
+    // 注入高亮样式:hover 元素加蓝色描边 + 半透明底,整页十字光标
+    pickerStyleEl = document.createElement('style');
+    pickerStyleEl.textContent =
+        '.' + PICKER_CLS + '{outline:2px solid #2f6df6 !important;outline-offset:-2px !important;' +
+        'background:rgba(47,109,246,.12) !important;}' +
+        'html.' + PICKER_CLS + '-cur,html.' + PICKER_CLS + '-cur *{cursor:crosshair !important;}';
+    document.documentElement.appendChild(pickerStyleEl);
+    document.documentElement.classList.add(PICKER_CLS + '-cur');
+    document.addEventListener('mouseover', onPickerOver, true);
+    document.addEventListener('mouseout', onPickerOut, true);
+    document.addEventListener('click', onPickerClick, true);
+    document.addEventListener('keydown', onPickerKey, true);
+}
+
+function exitPicker(emitCancel: boolean): void {
+    if (!picking) {
+        return;
+    }
+    picking = false;
+    clearHover();
+    document.removeEventListener('mouseover', onPickerOver, true);
+    document.removeEventListener('mouseout', onPickerOut, true);
+    document.removeEventListener('click', onPickerClick, true);
+    document.removeEventListener('keydown', onPickerKey, true);
+    document.documentElement.classList.remove(PICKER_CLS + '-cur');
+    if (pickerStyleEl) {
+        pickerStyleEl.remove();
+        pickerStyleEl = null;
+    }
+    if (emitCancel) {
+        ipcRenderer.sendToHost('picker-result', { cancelled: true });
+    }
+}
+
+function clearHover(): void {
+    if (hoveredEl) {
+        hoveredEl.classList.remove(PICKER_CLS);
+        hoveredEl = null;
+    }
+}
+
+function onPickerOver(event: Event): void {
+    const t = event.target as Element | null;
+    if (!t || t.nodeType !== 1) {
+        return;
+    }
+    clearHover();
+    hoveredEl = t;
+    t.classList.add(PICKER_CLS);
+}
+
+function onPickerOut(): void {
+    clearHover();
+}
+
+function onPickerClick(event: MouseEvent): void {
+    // 拦截点击:不触发网页跳转,也不冒泡给网页自身监听
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    const t = event.target as Element | null;
+    if (!t || t.nodeType !== 1) {
+        exitPicker(true);
+        return;
+    }
+    // 用户点的就是要等待的元素,直接生成选择器(不向上找可点击祖先)
+    const selector = generateSelector(t);
+    const fingerprint = buildFingerprint(t);
+    exitPicker(false); // 先清理高亮/监听,再回传
+    ipcRenderer.sendToHost('picker-result', { selector, fingerprint });
+}
+
+function onPickerKey(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        exitPicker(true);
+    }
+}
+
 function sendStep(step: Step): void {
     ipcRenderer.sendToHost('macro-step', step);
 }
@@ -49,6 +151,10 @@ function resolveClickable(el: Element): Element {
 document.addEventListener(
     'click',
     (event) => {
+        if (picking) {
+            // 拾取模式下,点击交给 picker 处理,不录制成 click 步骤
+            return;
+        }
         if (!recording) {
             return;
         }

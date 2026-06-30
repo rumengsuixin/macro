@@ -565,7 +565,7 @@ function describeStep(step: Step): string {
         case 'wait-for-load':
             return '等待页面加载完成';
         case 'waitForSelector':
-            return `等待元素 ${step.selector}`;
+            return `等待元素出现 ${step.selector}`;
         case 'pause':
             return `人工介入暂停${step.reason ? ':' + step.reason : ''}`;
         default:
