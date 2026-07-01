@@ -516,13 +516,25 @@ export class MacroRunner {
     ): Promise<void> {
         await page.waitForFunction(
             (sel: string) => {
-                let el: Element | null;
+                let el: Element | null = null;
                 try {
-                    el = document.querySelector(sel);
+                    if (sel.slice(0, 6) === 'xpath=') {
+                        // xpath= 前缀:走浏览器原生 XPath 接口(document.querySelector 只认 CSS)
+                        const r = document.evaluate(
+                            sel.slice(6),
+                            document,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        el = r.singleNodeValue as Element | null;
+                    } else {
+                        el = document.querySelector(sel); // CSS 走原路,行为完全不变
+                    }
                 } catch {
-                    return false; // 非法选择器:判为未就绪,继续等到超时
+                    return false; // 非法选择器/XPath 语法错误:判为未就绪,继续等到超时
                 }
-                if (!el) return false;
+                if (!el || el.nodeType !== 1) return false; // 必须是元素节点(XPath 可能命中文本/属性节点)
                 const rect = el.getBoundingClientRect();
                 if (rect.width <= 0 || rect.height <= 0) return false; // 尺寸为 0 视为不可见
                 const style = getComputedStyle(el);
