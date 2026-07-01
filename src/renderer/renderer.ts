@@ -463,6 +463,27 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         closeStepContextMenu();
         requestPick((selector) => insertWaitForSelector(at, selector));
     }));
+    // 仅带选择器的步骤(click/fill/waitForSelector/带 selector 的 press)可「重新点选」修正
+    if (typeof step.selector === 'string' && step.selector) {
+        const target = step; // 捕获对象引用:拾取异步期间即使排序变化也能定位到正确步骤
+        menu.appendChild(makeMenuItem('重新点选此步骤的选择器', () => {
+            closeStepContextMenu();
+            requestPick((selector, fingerprint) => {
+                const i = steps.indexOf(target);
+                if (i < 0) {
+                    logLocal('该步骤已不存在,选择器未更新。', 'error');
+                    return;
+                }
+                target.selector = selector;
+                // click 步骤的语义指纹须与新选择器同步,否则回放重定位会依据旧元素走偏
+                if (target.type === 'click') {
+                    target.fingerprint = fingerprint;
+                }
+                renderSteps();
+                logLocal(`步骤 #${i + 1} 的选择器已更新为:${selector}`);
+            });
+        }));
+    }
     // 删除当前步骤
     menu.appendChild(makeMenuItem('删除此步骤', () => {
         steps.splice(index, 1);
