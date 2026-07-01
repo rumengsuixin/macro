@@ -332,6 +332,9 @@ export class MacroRunner {
             case 'waitForSelector':
                 await this.handleWaitForSelector(page, step.selector, step.timeout);
                 break;
+            case 'waitForClickable':
+                await this.handleWaitForClickable(page, step.selector, step.timeout);
+                break;
             case 'pause':
                 await this.handlePause(step, stepIndex);
                 break;
@@ -500,6 +503,51 @@ export class MacroRunner {
         await page.waitForSelector(selector, timeout ? { timeout } : undefined);
     }
 
+    /**
+     * 等待元素「可点击」:比 waitForSelector 的 visible 更强,要求元素可交互。
+     * 判定完全在页面内做纯只读检查(尺寸非零、非隐藏、非 disabled、视口内时未被遮挡),
+     * 不用 Playwright 的 trial click——后者会 scroll into view 改变滚动位置(本项目对滚动敏感)。
+     * 超时致命(同 waitForSelector 的强前置语义);未指定 timeout 走全局默认(setDefaultTimeout 对 waitForFunction 生效)。
+     */
+    private async handleWaitForClickable(
+        page: Page,
+        selector: string,
+        timeout?: number
+    ): Promise<void> {
+        await page.waitForFunction(
+            (sel: string) => {
+                let el: Element | null;
+                try {
+                    el = document.querySelector(sel);
+                } catch {
+                    return false; // 非法选择器:判为未就绪,继续等到超时
+                }
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false; // 尺寸为 0 视为不可见
+                const style = getComputedStyle(el);
+                if (style.visibility === 'hidden' || style.display === 'none') return false;
+                // enabled:原生 disabled 或 aria-disabled
+                if ((el as HTMLButtonElement).disabled === true) return false;
+                if (el.getAttribute('aria-disabled') === 'true') return false;
+                // 遮挡检测:仅当元素中心点在视口内时做(视口外 elementFromPoint 测不准 → 降级跳过)
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const inViewport =
+                    cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight;
+                if (inViewport) {
+                    const top = document.elementFromPoint(cx, cy);
+                    if (!top) return false;
+                    // 命中自身、自身后代、或自身祖先(同渲染栈)都算未被遮挡
+                    if (top !== el && !el.contains(top) && !top.contains(el)) return false;
+                }
+                return true;
+            },
+            selector,
+            timeout ? { timeout } : undefined
+        );
+    }
+
     /** 人工介入暂停:阻塞回放,等用户在浏览器里手动操作后点继续;可设超时避免无人值守永久挂起 */
     private async handlePause(step: PauseStep, stepIndex: number): Promise<void> {
         logInfo(
@@ -566,6 +614,8 @@ function describeStep(step: Step): string {
             return '等待页面加载完成';
         case 'waitForSelector':
             return `等待元素出现 ${step.selector}`;
+        case 'waitForClickable':
+            return `等待元素可点击 ${step.selector}`;
         case 'pause':
             return `人工介入暂停${step.reason ? ':' + step.reason : ''}`;
         default:

@@ -11,6 +11,7 @@ export type StepType =
     | 'scroll-bottom'
     | 'wait-for-load'
     | 'waitForSelector'
+    | 'waitForClickable'
     | 'pause';
 
 /** 打开网址 */
@@ -82,6 +83,17 @@ export interface WaitForSelectorStep {
     timeout?: number;
 }
 
+/**
+ * 等待元素可点击:比「出现(visible)」更强,要求元素可交互
+ * (尺寸非零、未 disabled、视口内时未被遮罩遮挡)。判定为纯只读、零副作用,不滚动页面。
+ * 用于「透明遮罩盖住内容」「disabled 按钮变 enabled」等下一步非点击的同步场景。
+ */
+export interface WaitForClickableStep {
+    type: 'waitForClickable';
+    selector: string;
+    timeout?: number;
+}
+
 /** 人工介入暂停:回放到此步时停下,等用户在浏览器里手动操作(登录/验证码/扫码等)后点继续 */
 export interface PauseStep {
     type: 'pause';
@@ -109,6 +121,7 @@ export type Step = StepFlags & (
     | ScrollBottomStep
     | WaitForLoadStep
     | WaitForSelectorStep
+    | WaitForClickableStep
     | PauseStep
 );
 

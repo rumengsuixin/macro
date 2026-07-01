@@ -646,11 +646,21 @@
         }
 
         .ctx-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             padding: 6px 10px;
             border-radius: 4px;
             cursor: pointer;
             white-space: nowrap;
             transition: background .12s, color .12s;
+        }
+
+        .ctx-menu-icon {
+            flex: none;
+            width: 16px;
+            text-align: center;
+            font-size: 13px;
         }
 
         .ctx-menu-item:hover {

@@ -224,6 +224,8 @@ function describeStep(step: Step): string {
             return '等待页面加载完成';
         case 'waitForSelector':
             return `等待元素出现 ${s.selector}`;
+        case 'waitForClickable':
+            return `等待元素可点击 ${s.selector}`;
         case 'pause':
             return `人工介入暂停${s.reason ? ' — ' + s.reason : ''}${s.timeout ? '(超时 ' + s.timeout + 'ms)' : ''}`;
         default:
@@ -416,17 +418,17 @@ function showStepContextMenu(x: number, y: number, index: number): void {
 
     // pause 步骤不提供翻页标记(回放主循环会跳过带 pagination 的步骤,二者互斥)
     if (step.type === 'pause') {
-        const editPause = makeMenuItem('修改暂停提示文案', () => {
+        const editPause = makeMenuItem('✏️', '修改暂停提示文案', () => {
             showPauseReasonInput(menu, index);
         });
         menu.appendChild(editPause);
     } else if (step.pagination === true) {
         // 已标记:提供「修改总页数」与「取消翻页标记」
         const current = typeof step.pageCount === 'number' ? step.pageCount : 1;
-        const editItem = makeMenuItem(`修改翻页总页数(当前 ${current})`, () => {
+        const editItem = makeMenuItem('✏️', `修改翻页总页数(当前 ${current})`, () => {
             showPageCountInput(menu, index);
         });
-        const unmarkItem = makeMenuItem('取消翻页标记', () => {
+        const unmarkItem = makeMenuItem('❌', '取消翻页标记', () => {
             delete steps[index].pagination;
             delete steps[index].pageCount;
             closeStepContextMenu();
@@ -436,37 +438,43 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         menu.appendChild(editItem);
         menu.appendChild(unmarkItem);
     } else {
-        const markItem = makeMenuItem('标记翻页操作', () => {
+        const markItem = makeMenuItem('🔖', '标记翻页操作', () => {
             showPageCountInput(menu, index);
         });
         menu.appendChild(markItem);
     }
 
     // 任意步骤都可在其前/后插入人工介入暂停步骤
-    menu.appendChild(makeMenuItem('在此前插入暂停', () => {
+    menu.appendChild(makeMenuItem('⏸️', '在此前插入暂停', () => {
         insertPause(index);
     }));
-    menu.appendChild(makeMenuItem('在此后插入暂停', () => {
+    menu.appendChild(makeMenuItem('⏸️', '在此后插入暂停', () => {
         insertPause(index + 1);
     }));
     // 在此后添加「滚动到底部」步骤(用于触发无限滚动懒加载)
-    menu.appendChild(makeMenuItem('在此后添加滚动到底部', () => {
+    menu.appendChild(makeMenuItem('⬇️', '在此后添加滚动到底部', () => {
         insertScrollBottom(index + 1);
     }));
     // 在此后添加「等待页面加载完成」步骤
-    menu.appendChild(makeMenuItem('在此后添加等待页面加载完成', () => {
+    menu.appendChild(makeMenuItem('⏳', '在此后添加等待页面加载完成', () => {
         insertWaitForLoad(index + 1);
     }));
     // 在此后添加「等待元素出现」步骤(在浏览器里点选目标元素)
-    menu.appendChild(makeMenuItem('在此后添加等待元素出现(点选)', () => {
+    menu.appendChild(makeMenuItem('🎯', '在此后添加等待元素出现(点选)', () => {
         const at = index + 1;
         closeStepContextMenu();
         requestPick((selector) => insertWaitForSelector(at, selector));
     }));
+    // 在此后添加「等待元素可点击」步骤(比「出现」更强:等到可交互;点选目标元素)
+    menu.appendChild(makeMenuItem('🖱️', '在此后添加等待元素可点击(点选)', () => {
+        const at = index + 1;
+        closeStepContextMenu();
+        requestPick((selector) => insertWaitForClickable(at, selector));
+    }));
     // 仅带选择器的步骤(click/fill/waitForSelector/带 selector 的 press)可「重新点选」修正
     if (typeof step.selector === 'string' && step.selector) {
         const target = step; // 捕获对象引用:拾取异步期间即使排序变化也能定位到正确步骤
-        menu.appendChild(makeMenuItem('重新点选此步骤的选择器', () => {
+        menu.appendChild(makeMenuItem('🎯', '重新点选此步骤的选择器', () => {
             closeStepContextMenu();
             requestPick((selector, fingerprint) => {
                 const i = steps.indexOf(target);
@@ -485,7 +493,7 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         }));
     }
     // 删除当前步骤
-    menu.appendChild(makeMenuItem('删除此步骤', () => {
+    menu.appendChild(makeMenuItem('🗑️', '删除此步骤', () => {
         steps.splice(index, 1);
         closeStepContextMenu();
         renderSteps();
@@ -506,10 +514,16 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     document.addEventListener('keydown', onKeyDownForMenu, true);
 }
 
-function makeMenuItem(label: string, onClick: () => void): HTMLDivElement {
+function makeMenuItem(icon: string, label: string, onClick: () => void): HTMLDivElement {
     const item = document.createElement('div');
     item.className = 'ctx-menu-item';
-    item.textContent = label;
+    const ico = document.createElement('span');
+    ico.className = 'ctx-menu-icon';
+    ico.textContent = icon;
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(ico);
+    item.appendChild(text);
     item.addEventListener('click', onClick);
     return item;
 }
@@ -653,6 +667,13 @@ function insertWaitForSelector(at: number, selector: string): void {
     steps.splice(clamped, 0, { type: 'waitForSelector', selector });
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素出现」:${selector}`);
+}
+
+function insertWaitForClickable(at: number, selector: string): void {
+    const clamped = Math.max(0, Math.min(at, steps.length));
+    steps.splice(clamped, 0, { type: 'waitForClickable', selector });
+    renderSteps();
+    logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素可点击」:${selector}`);
 }
 
 function addStep(step: Step): void {
