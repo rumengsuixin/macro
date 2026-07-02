@@ -1001,6 +1001,10 @@ loadBtn.addEventListener('click', async () => {
             aiModeSel.value = loadedMode;
         }
         refreshAiModeOptions();
+    } else {
+        // 宏无提取规则:显式清空,避免残留 init() 预填的 DEFAULT_EXTRACT
+        extractInput.value = '';
+        refreshAiModeOptions();
     }
     // 回显宏里启用的插件勾选
     refreshPluginSelection(macro.postProcess);
