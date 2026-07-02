@@ -829,6 +829,63 @@
         #pause-continue:hover {
             background: #0e7490;
         }
+
+        /* ===== 元素拾取模式:视觉提示 + 屏蔽其余区域 ===== */
+        /* 拾取期间除录制浏览器外一律变暗且点不动,让用户只能在浏览器里操作 */
+        .app.picking .toolbar,
+        .app.picking .sidebar,
+        .app.picking .logwrap,
+        .app.picking .main-divider {
+            pointer-events: none;
+            opacity: .45;
+            transition: opacity .15s ease;
+        }
+
+        /* 高亮录制浏览器面板,引导注意力 */
+        .app.picking .browser-panel {
+            box-shadow: 0 0 0 3px #2f6df6, 0 0 18px rgba(47, 109, 246, .5);
+            border-radius: 4px;
+        }
+
+        /* 顶部拾取提示横幅 */
+        #pick-hint {
+            position: fixed;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10001;
+            display: none;
+            align-items: center;
+            gap: 14px;
+            padding: 10px 16px;
+            background: #2f6df6;
+            color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(47, 109, 246, .45);
+            font-size: 13.5px;
+        }
+
+        #pick-hint.show {
+            display: flex;
+        }
+
+        #pick-hint .pick-hint-text {
+            white-space: nowrap;
+        }
+
+        #pick-cancel {
+            padding: 5px 12px;
+            border: 1px solid rgba(255, 255, 255, .6);
+            border-radius: 5px;
+            background: rgba(255, 255, 255, .15);
+            color: #fff;
+            font-size: 12.5px;
+            cursor: pointer;
+        }
+
+        #pick-cancel:hover {
+            background: rgba(255, 255, 255, .28);
+        }
     </style>
 </head>
 <body>
@@ -951,6 +1008,12 @@
     <div id="boot-overlay">
         <div class="boot-spinner"></div>
         <div class="boot-text">正在启动…</div>
+    </div>
+
+    <!-- 元素拾取模式提示横幅(拾取期间由 renderer.js 显示) -->
+    <div id="pick-hint">
+        <span class="pick-hint-text">🎯 拾取模式进行中 —— 请在左侧浏览器中点选目标元素,按 ESC 取消</span>
+        <button id="pick-cancel">取消拾取(ESC)</button>
     </div>
 
     <!-- 回放人工介入暂停模态框 -->

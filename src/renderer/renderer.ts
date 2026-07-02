@@ -176,6 +176,9 @@ const aiImportBtn = byId<HTMLButtonElement>('ai-import');
 const aiStatusEl = byId<HTMLSpanElement>('ai-status');
 const aiDetailLinkRow = byId<HTMLDivElement>('ai-detail-link-row');
 const aiDetailLinkFieldSel = byId<HTMLSelectElement>('ai-detail-link-field');
+const appEl = document.querySelector('.app') as HTMLDivElement;
+const pickHint = byId<HTMLDivElement>('pick-hint');
+const pickCancelBtn = byId<HTMLButtonElement>('pick-cancel');
 
 // ===== 状态 =====
 let recording = false;
@@ -687,6 +690,44 @@ function insertWaitForLoad(at: number): void {
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待页面加载完成」(回放时等 load 事件后继续)。`);
 }
 
+// 进入拾取模式的主窗口 UI:焦点交给录制浏览器、屏蔽其余区域并变暗、显示提示横幅。
+function enterPickingUI(): void {
+    appEl.classList.add('picking');
+    pickHint.classList.add('show');
+    // 焦点交给内嵌浏览器(guest),使 ESC-in-guest 也即时可用,并把用户注意力引向浏览器
+    try {
+        webview.focus();
+    } catch {
+        // 忽略:焦点仅为体验优化,主窗口级 ESC 兜底仍有效
+    }
+}
+
+// 退出拾取模式的主窗口 UI(与 enterPickingUI 成对,进入/退出各调一次)。
+function exitPickingUI(): void {
+    appEl.classList.remove('picking');
+    pickHint.classList.remove('show');
+}
+
+// 取消进行中的拾取(主窗口有焦点时的 ESC / 横幅按钮路径)。
+// 与 picker-result 分支均以 pendingPick 为闸门,幂等安全,不会重复处理。
+function cancelPick(): void {
+    if (!pendingPick) {
+        return;
+    }
+    pendingPick = null;
+    // 通知 preload 清理 guest 高亮/监听(exitPicker(false),不再回传 picker-result)
+    try {
+        webview.send('toggle-picker', false);
+    } catch {
+        // 页面已卸载等情况,忽略即可
+    }
+    if (recording) {
+        armRecorder(true);
+    }
+    exitPickingUI();
+    logLocal('已取消元素拾取。');
+}
+
 // 通用拾取服务:进入拾取模式,选中元素后把选择器交给发起方登记的回调(用途与拾取解耦)。
 function requestPick(onPicked: PickedHandler): void {
     pendingPick = onPicked;
@@ -705,6 +746,7 @@ function requestPick(onPicked: PickedHandler): void {
         logLocal('页面尚未就绪,无法进入元素拾取模式。', 'error');
         return;
     }
+    enterPickingUI();
     logLocal('拾取模式已开启:请在页面中点击目标元素,按 ESC 取消。');
 }
 
@@ -1663,6 +1705,8 @@ webview.addEventListener('ipc-message', (e: any) => {
         if (recording) {
             armRecorder(true);
         }
+        // 退出拾取 UI(覆盖「成功点选」与「ESC-in-webview 取消」两条退出路径)
+        exitPickingUI();
         if (!r || r.cancelled) {
             logLocal('已取消元素拾取。');
             return;
@@ -1683,6 +1727,18 @@ webview.addEventListener('did-navigate', (e: any) => {
         addressInput.value = e.url;
     }
 });
+
+// 主窗口级 ESC:焦点在主窗口(工具栏/侧栏等)时按 ESC 也能退出拾取模式。
+// 焦点在 webview(guest)内时 ESC 由 preload 处理(不冒泡到此),两路互斥、无重复。
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && pendingPick) {
+        e.preventDefault();
+        cancelPick();
+    }
+});
+
+// 横幅上的显式取消入口(ESC 之外再兜一层)
+pickCancelBtn.addEventListener('click', () => cancelPick());
 
 // ===== 左右宽度拖动 =====
 const SIDEBAR_WIDTH_KEY = 'macro.sidebarWidth';
