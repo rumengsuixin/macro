@@ -220,7 +220,7 @@ export class MacroRunner {
                     continue;
                 }
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${describeStep(step)} —— 执行中`);
-                await this.executeStep(activePage, step, i);
+                await this.executeStep(activePage, step, i, context);
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${step.type} —— 完成`);
             }
 
@@ -238,11 +238,12 @@ export class MacroRunner {
                         `检测到 ${paginationSteps.length} 个翻页步骤,总页数设为 ${totalPages}。`
                     );
                     const runPage = activePage;
+                    const runContext = context; // 闭包内 context 收窄丢失,捕获非空引用
                     pagination = {
                         totalPages,
                         turnPage: async (): Promise<void> => {
                             for (const s of paginationSteps) {
-                                await this.executeStep(runPage, s);
+                                await this.executeStep(runPage, s, -1, runContext);
                             }
                             // 翻页点击常触发整页导航;等页面加载稳定再交回提取流程,
                             // 避免「在旧页/半载页上采集(少采)或读到旧分页器(误判命中数)」的竞态。
@@ -305,8 +306,16 @@ export class MacroRunner {
         }
     }
 
-    /** 分发并执行单个步骤;stepIndex 仅用于 pause 步骤向 UI 报告位置 */
-    private async executeStep(page: Page, step: Step, stepIndex = -1): Promise<void> {
+    /**
+     * 分发并执行单个步骤;stepIndex 仅用于 pause 步骤向 UI 报告位置。
+     * context 传入时,等待类步骤会兼顾「随后弹出的新窗口」(解决活动页切换晚于下一步的竞态)。
+     */
+    private async executeStep(
+        page: Page,
+        step: Step,
+        stepIndex = -1,
+        context?: BrowserContext
+    ): Promise<void> {
         switch (step.type) {
             case 'goto':
                 await this.handleGoto(page, step.url);
@@ -330,10 +339,10 @@ export class MacroRunner {
                 await this.handleWaitForLoad(page);
                 break;
             case 'waitForSelector':
-                await this.handleWaitForSelector(page, step.selector, step.timeout);
+                await this.handleWaitForSelector(page, step.selector, step.timeout, context);
                 break;
             case 'waitForClickable':
-                await this.handleWaitForClickable(page, step.selector, step.timeout);
+                await this.handleWaitForClickable(page, step.selector, step.timeout, context);
                 break;
             case 'pause':
                 await this.handlePause(step, stepIndex);
@@ -497,10 +506,53 @@ export class MacroRunner {
     private async handleWaitForSelector(
         page: Page,
         selector: string,
+        timeout?: number,
+        context?: BrowserContext
+    ): Promise<void> {
+        // 未指定 timeout 时走全局默认超时(setDefaultTimeout);宏里显式指定的优先。
+        // 兼顾「上一步点击刚弹出的新窗口」:活动页切换可能晚于本步,故同时盯当前页与新弹窗。
+        const opts = timeout ? { timeout } : undefined;
+        await this.raceWaitAcrossPopup(
+            page,
+            context,
+            (p) => p.waitForSelector(selector, opts),
+            timeout
+        );
+    }
+
+    /**
+     * 在「当前页」与「随后弹出的新页」之间竞态等待:哪个先满足用哪个。
+     * 解决「点击触发新窗口后,活动页(context.on('page'))切换晚于下一步」的竞态——
+     * 等待步骤主动追随迟到的新窗口,而非卡在旧页等一个永不出现的元素直至超时。
+     * context 缺省(如无头单测/无上下文)时退化为仅等当前页,行为不变。
+     * 致命语义不变:当前页无该元素且无新窗口时,两分支各自超时 reject,race 以先 reject 者结束。
+     */
+    private async raceWaitAcrossPopup(
+        page: Page,
+        context: BrowserContext | undefined,
+        waitFn: (p: Page) => Promise<unknown>,
         timeout?: number
     ): Promise<void> {
-        // 未指定 timeout 时走全局默认超时(setDefaultTimeout);宏里显式指定的优先
-        await page.waitForSelector(selector, timeout ? { timeout } : undefined);
+        const current = waitFn(page);
+        if (!context) {
+            await current;
+            return;
+        }
+        const popup = context
+            .waitForEvent('page', timeout ? { timeout } : undefined)
+            .then(async (p) => {
+                // 新窗口:等 DOM 就绪后在其上执行同样的等待
+                // (activePage 由既有 context.on('page') 监听同步更新,故本步解决后续步骤自然在新页继续)
+                await p.waitForLoadState('domcontentloaded').catch(() => undefined);
+                return waitFn(p);
+            });
+        try {
+            await Promise.race([current, popup]);
+        } finally {
+            // 抑制未采纳分支的迟到 rejection(超时/页面关闭),避免 unhandledRejection
+            current.catch(() => undefined);
+            popup.catch(() => undefined);
+        }
     }
 
     /**
@@ -512,10 +564,14 @@ export class MacroRunner {
     private async handleWaitForClickable(
         page: Page,
         selector: string,
-        timeout?: number
+        timeout?: number,
+        context?: BrowserContext
     ): Promise<void> {
-        await page.waitForFunction(
-            (sel: string) => {
+        // 与 waitForSelector 一致:兼顾上一步点击刚弹出的新窗口(活动页切换可能晚于本步)
+        const opts = timeout ? { timeout } : undefined;
+        const check = (p: Page): Promise<unknown> =>
+            p.waitForFunction(
+                (sel: string) => {
                 let el: Element | null = null;
                 try {
                     if (sel.slice(0, 6) === 'xpath=') {
@@ -554,10 +610,11 @@ export class MacroRunner {
                     if (top !== el && !el.contains(top) && !top.contains(el)) return false;
                 }
                 return true;
-            },
-            selector,
-            timeout ? { timeout } : undefined
-        );
+                },
+                selector,
+                opts
+            );
+        await this.raceWaitAcrossPopup(page, context, check, timeout);
     }
 
     /** 人工介入暂停:阻塞回放,等用户在浏览器里手动操作后点继续;可设超时避免无人值守永久挂起 */
