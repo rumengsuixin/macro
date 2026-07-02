@@ -471,6 +471,12 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         closeStepContextMenu();
         requestPick((selector) => insertWaitForClickable(at, selector));
     }));
+    // fill 步骤:就地修改要填写的文本内容(无需重录/改 JSON)
+    if (step.type === 'fill') {
+        menu.appendChild(makeMenuItem('✏️', '修改填写内容', () => {
+            showFillValueInput(menu, index);
+        }));
+    }
     // 仅带选择器的步骤(click/fill/waitForSelector/带 selector 的 press)可「重新点选」修正
     if (typeof step.selector === 'string' && step.selector) {
         const target = step; // 捕获对象引用:拾取异步期间即使排序变化也能定位到正确步骤
@@ -596,6 +602,46 @@ function showPauseReasonInput(menu: HTMLDivElement, index: number): void {
         closeStepContextMenu();
         renderSteps();
         logLocal(`步骤 #${index + 1} 暂停提示已更新。`);
+    };
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = '确定';
+    okBtn.addEventListener('click', confirm);
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            confirm();
+        }
+    });
+
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+    wrap.appendChild(okBtn);
+    menu.appendChild(wrap);
+    input.focus();
+    input.select();
+}
+
+/** 在菜单内显示 fill 步骤的填写内容输入框 */
+function showFillValueInput(menu: HTMLDivElement, index: number): void {
+    menu.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'ctx-menu-input';
+
+    const label = document.createElement('div');
+    label.className = 'ctx-menu-label';
+    label.textContent = '填写内容:';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.style.width = '180px';
+    input.value = typeof steps[index].value === 'string' ? (steps[index].value as string) : '';
+
+    const confirm = (): void => {
+        steps[index].value = input.value; // 不 trim:保留用户输入原样;允许空串
+        closeStepContextMenu();
+        renderSteps();
+        logLocal(`步骤 #${index + 1} 填写内容已更新。`);
     };
 
     const okBtn = document.createElement('button');
