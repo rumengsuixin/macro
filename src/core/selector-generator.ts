@@ -215,7 +215,7 @@ function buildClassSelector(el: Element): string | null {
 }
 
 /** 判断 class 是否「稳定」(过滤明显动态 / 哈希类名) */
-function isStableClass(cls: string): boolean {
+export function isStableClass(cls: string): boolean {
     if (cls.length === 0) {
         return false;
     }
@@ -227,6 +227,15 @@ function isStableClass(cls: string): boolean {
     }
     if (/^(css|sc|jsx|emotion)-/.test(cls)) {
         return false; // 常见 CSS-in-JS 前缀
+    }
+    // Facebook Stylex 原子类:x 开头 + 纯小写字母数字且含数字的短哈希(每次发版都变)
+    // 如 x1ey2m1c / x78zum5 / xdt5ytf / x1n2onr6 / xxo9b9y
+    if (/^x[a-z0-9]{4,}$/.test(cls) && /[0-9]/.test(cls)) {
+        return false;
+    }
+    // Twitter/X 原子类:r- 前缀 + 含数字的哈希,如 r-1xnzce8
+    if (/^r-[a-z0-9]{5,}$/.test(cls) && /[0-9]/.test(cls)) {
+        return false;
     }
     return true;
 }
