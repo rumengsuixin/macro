@@ -10,7 +10,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
-import { generateExtract, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput } from '../core/ai-extract';
+import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import type {
     Macro,
@@ -332,6 +332,18 @@ function registerIpc(): void {
             logInfo(`AI 提取成功(${result.profileLabel},耗时 ${result.elapsedMs}ms),已生成规则。`);
         } else {
             logError(`AI 提取失败(${result.profileLabel || input?.profileId || '未知'}):${result.error}`);
+        }
+        return result;
+    });
+
+    // 调用 AI 校正单个步骤的脆弱选择器(renderer 已在真实 webview 定位元素、取上下文)
+    ipcMain.handle('ai-fix-selector', async (_e, input: FixSelectorInput) => {
+        logInfo(`AI 校正选择器:配置档=${input?.profileId ?? 'selector-fix'},当前=「${input?.current ?? ''}」,正在请求……`);
+        const result = await fixSelector(input);
+        if (result.ok) {
+            logInfo(`AI 校正选择器成功(${result.profileLabel},耗时 ${result.elapsedMs}ms):${result.selector}`);
+        } else {
+            logError(`AI 校正选择器失败(${result.profileLabel || input?.profileId || 'selector-fix'}):${result.error}`);
         }
         return result;
     });

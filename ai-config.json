@@ -7,6 +7,13 @@
             "agentId": "webextract",
             "sessionKeyPrefix": "agent:webextract:macro:extract",
             "timeout": 120000
+        },
+        {
+            "id": "selector-fix",
+            "label": "选择器校正 Agent(selector-fix)",
+            "agentId": "selector-fix",
+            "sessionKeyPrefix": "agent:selector-fix:macro:selector",
+            "timeout": 90000
         }
     ],
     "openclaw": {},

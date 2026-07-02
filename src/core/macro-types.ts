@@ -50,6 +50,8 @@ export interface FillStep {
     type: 'fill';
     selector: string;
     value: string;
+    /** 语义指纹:供「AI 校正选择器」在旧选择器失效时重定位元素;旧宏可缺省 */
+    fingerprint?: ElementFingerprint;
 }
 
 /** 按键(如 Enter)。selector 可选:有则聚焦该元素后按键,无则全局按键 */
@@ -81,6 +83,8 @@ export interface WaitForSelectorStep {
     type: 'waitForSelector';
     selector: string;
     timeout?: number;
+    /** 语义指纹:供「AI 校正选择器」在旧选择器失效时重定位元素;旧宏可缺省 */
+    fingerprint?: ElementFingerprint;
 }
 
 /**
@@ -92,6 +96,8 @@ export interface WaitForClickableStep {
     type: 'waitForClickable';
     selector: string;
     timeout?: number;
+    /** 语义指纹:供「AI 校正选择器」在旧选择器失效时重定位元素;旧宏可缺省 */
+    fingerprint?: ElementFingerprint;
 }
 
 /** 人工介入暂停:回放到此步时停下,等用户在浏览器里手动操作(登录/验证码/扫码等)后点继续 */

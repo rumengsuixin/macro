@@ -20,6 +20,7 @@
 - `scripts/verify-merge.mjs` — 合并后处理器离线自检(本地造 xlsx→打 zip→跑 merge-zip-excel,断言行数/列并集;不需网络,需先 `npm run build`)
 - `scripts/verify-selector-class.mjs` — 选择器稳定类判定离线自检(断言 `isStableClass` 过滤 FB Stylex/Twitter 原子类、保留语义类含 next/previous;需先 `npm run build`,不需网络)
 - `scripts/verify-popup-wait.mjs` — 新窗口等待竞态离线自检(本地造两 html:page1 有 target=_blank 链接、page2 延迟 1.5s 才插入 `#target`;宏 goto→click 开新窗→waitForSelector `#target`,断言 `ok=true` 即等待步骤跟随了新窗口;需先 `npm run build`,`MACRO_HEADLESS=1` 运行,不需网络)
+- `scripts/test-selector-fix.mjs` — 选择器校正自检脚本(造「脆弱选择器 + 稳定锚点」上下文调 `fixSelector`,断言返回选择器非空且不含随机 id/原子类/nth-of-type;需先 `npm run build` 且 Gateway 运行 + 已建 selector-fix agent)
 - `打包指南.md` — Windows 安装包打包说明(自带 Chromium,`npm run dist` 一键打包,产物在 `release/`);安装态用户数据在 `%APPDATA%\macro-recorder\`,`ai-config.json` 首次启动自动生成
 - 规划阶段计划文档:`C:\Users\Administrator\.claude\plans\glimmering-brewing-hoare.md`、`...\happy-wishing-hamming.md`(AI 提取)
 
@@ -27,12 +28,13 @@
 
 - 方式:macro 作为 WebSocket 客户端连本机 OpenClaw Gateway(`ws://127.0.0.1:18799`),Ed25519 签名认证,`chat.send`(`deliver:false`)请求 agent 生成、收回草稿。**不再** spawn claude/codex。
 - 客户端 `src/core/openclaw-client.ts`(参考 `D:\git_object\aiAgentServicer` 的 `test_ws_send.js`/`oclaw-client.js`);依赖 `ws` + Node 内置 `crypto`。
-- 专用 agent:`webextract`(用 `openclaw agents add` 创建,workspace 在 `~/.openclaw/workspace-webextract`,SOUL.md 定位为「只输出 ExtractConfig JSON」)。
+- 专用 agent:`webextract`(用 `openclaw agents add` 创建,workspace 在 `~/.openclaw/workspace-webextract`,SOUL.md 定位为「只输出 ExtractConfig JSON」)。另有 `selector-fix`(见下「AI 校正选择器」)。
 - 配置在 `ai-config.json`:profile 指定 `agentId` + `sessionKeyPrefix`(实际 sessionKey = 前缀 + uuid),可配多个 agent 目标。
 - 依赖:`~/.openclaw/openclaw.json`(端口/token)、`~/.openclaw/identity/device.json`(Ed25519 身份);Gateway 须运行。
 - 已验证:自检对接 webextract,24s 产出合法 list 规则。
 - agent 管理:`openclaw agents list` 查看,`openclaw agents delete webextract` 回滚。
 - 选择器质量加固(通用,非专项):①`ai-extract.ts` 的 `SELECTOR_QUALITY_GUIDE` 常量现为**极简指针**(单行核心红线:优先稳定锚点 data-*/id/aria/文本、避免框架动态类名/结构伪类/隐藏克隆 DOM、actionSelector 须项内可点,末尾指向 agent 侧 SOUL.md〈选择器质量准则〉完整规范)在 `generateExtract` 组装 message 时**无条件注入**(systemPrompt 后、modeHint 前),不依赖既有 ai-config.json,老装机即时生效。**完整 5 条规范以 agent 侧 SOUL.md 为单一可信源**(避免两份全文重复漂移);客户端这行只作 agent 侧准则缺失/被改坏时的兜底红线。②**生成后自检回路**:`GenerateInput` 加 `feedback`/`sessionKey`,`GenerateResult` 回传 sessionKey(`chat.send` 仅凭 sessionKey 路由 agent,故重试须复用首轮 key 才能保留上下文);renderer 的 `verifySelectors` 在录制 webview 内用一段 `executeJavaScript` 实测各选择器命中数(listSelector 整页测,字段/actionSelector/detailLinkSelector 以**首个列表项**为根测,镜像 extractor 的 `item.locator(sel).first()`;非法选择器记 invalid),`evaluateChecks` 判定(listSelector 必>0、非法即失败、项内至少一个命中),未通过则带中文反馈复用同会话重生成,**最多 2 次修复**,仍失败不致命(填最后一版+提示人工核对)。DOM 与 AI 所见一致,无需回放浏览器、无新 IPC。
+- AI 校正选择器(2026-07-02,不再堆正则、改走 AI:校正录制步骤里用了随机类名/id 的脆弱选择器):根因是 `selector-generator.ts` 的正则过滤(`isStableClass` 等)永远堆不完——FB Stylex 无数字原子类(`xeuugli`/`xstzfhl`)、React/Relay 随机 id(`#_r_3_`/`#_R_1cl...`)照样漏进已录宏(见 `macros/fb.json`)。**方案 = 新建专用 agent + 校正回路**,**未改 `selector-generator.ts` 任何规则**。①**新 agent `selector-fix`**(`openclaw agents add`,workspace `~/.openclaw/workspace-selector-fix`,SOUL.md 定位「只输出 `{"selector":"..."}` 的选择器修复器」,**完整〈选择器质量准则〉以该 SOUL.md 为单一可信源**:优先 data-*/语义 id/aria-label/文本/语义 class,禁用 FB Stylex `x…`/Twitter `r-…`/React `_r_`·`_R_`·`:r:`·`mount_` 随机 id,慎用 nth-of-type,善用稳定祖先做作用域,文本锚定可输出 `xpath=`)。`ai-config.json` 与 `DEFAULT_CONFIG` 各加 `selector-fix` profile(`sessionKeyPrefix:agent:selector-fix:macro:selector`,timeout 90s)。②**客户端 `fixSelector`**(加在 `ai-extract.ts`,复用同文件 `OpenclawClient`/`loadAiConfig`/`extractJson`/`SELECTOR_QUALITY_GUIDE`;入参 `{current,reason,elementHtml,ancestors,feedback?,sessionKey?}`,组装 message→`requestDraft`→取 `{selector}`;`resolveFixProfile` 默认回退 selector-fix)。webextract 的 `generateExtract` **零改动**。③**IPC `ai-fix-selector`**(`main.ts`)+ `preload.aiFixSelector`。④**renderer 校正回路**(`renderer.ts`,镜像 AI 提取的「生成→实测→反馈重生成」自愈回路,**基于实时录制 webview DOM**):`locateAndSnapshot(selector,fingerprint)` 用 `executeJavaScript` 先试当前选择器(唯一命中)、失效则用步骤已存指纹(aria→文本→href,要求唯一可见命中)定位,**先读 outerHTML(截断 2000)再给目标打临时标记 `data-macro-fix="1"`**,回传 outerHTML+祖先链摘要(≤6 层);`verifyFixed(selector)` 实测 AI 结果**恰好命中 1 个且是被标记元素**(`xpath=` 走 `document.evaluate`);`clearFixMarker` 于 `finally` 清标记;`fixStepSelector(index)` 跑最多 3 轮(不通过带「命中 K 个/非目标」中文反馈复用 sessionKey),通过则更新 `step.selector`(click 步骤保留原 fingerprint,元素身份未变),找不到元素则跳过并提示「先把对应页面加载到浏览器」。入口:工具栏 `#ai-fix-all`「🤖 AI 校正选择器」批量(遍历所有带 selector 的步骤,汇总校正/跳过/未成功)+ 步骤右键「AI 校正此步骤选择器」单步(紧邻「重新点选此步骤的选择器」)。⑤**给非 click 步骤补语义指纹**(旧选择器失效时才能重定位):`macro-types.ts` 的 `FillStep`/`WaitForSelectorStep`/`WaitForClickableStep` 各加可选 `fingerprint`;`webview-preload.ts` fill 提交处 `buildFingerprint(pendingFill.el)`;`renderer.ts` 的 `insertWaitForSelector`/`insertWaitForClickable` 保存 picker-result 已回传但原被丢弃的 fingerprint。**仅新录制生效**——`fb.json` 里旧的 fill/wait 步骤无指纹,其失效选择器若在当前页也不命中则只能跳过或手动重选;click 步骤有指纹可正常校正。**限制**:校正依赖当前 webview 已加载对应页面/状态(同「重新点选」UX);不把 DOM 快照写进宏(保持文件干净);改动经「保存宏」落盘。**已验证**:`node scripts/test-selector-fix.mjs` 对接 selector-fix,24s 把 `#_r_3_ > …button.x1lliihq` 校正成 `button[data-testid="open-registration-form"]`;`verify-merge`/`verify-pagination` 回归通过。agent 回滚 `openclaw agents delete selector-fix`。
 
 ## 项目要点
 
@@ -71,6 +73,7 @@
 - `MACRO_HEADLESS=1 node scripts/verify-core.mjs` — 无头自检:实跑 demo 宏并导出 Excel
 - `MACRO_HEADLESS=1 node scripts/verify-pagination.mjs` — 翻页健壮性自检:脆弱选择器 `.pager li a`(quotes.toscrape.com page2 命中 2)+ 语义指纹 anchor 重定位,实跑采满 3 页 30 行(需网络)
 - `node scripts/test-ai.mjs [profileId] [需求]` — AI 自检:对接 openclaw agent 出规则(需先 `npm run build` 且 Gateway 运行),如 `node scripts/test-ai.mjs webextract`
+- `node scripts/test-selector-fix.mjs [profileId]` — 选择器校正自检:对接 selector-fix agent 把脆弱选择器校正为稳定选择器(需先 `npm run build`、Gateway 运行、已建 selector-fix agent)
 - `node scripts/verify-merge.mjs` — 合并后处理器离线自检:本地造 xlsx 打 zip,跑 merge-zip-excel,断言行数/列并集(需先 `npm run build`,不需网络)
 - `MACRO_HEADLESS=1 node scripts/verify-popup-wait.mjs` — 新窗口等待竞态离线自检:本地造 target=_blank 两页(page2 延迟 1.5s 插入 `#target`),断言点击开新窗后 waitForSelector 跟随新窗口 `ok=true`(需先 `npm run build`,不需网络)
 - 注:环境若设置了 `ELECTRON_RUN_AS_NODE=1`,务必用 `npm start`(而非 `electron .`)启动

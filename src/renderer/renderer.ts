@@ -114,6 +114,22 @@ interface ElectronAPI {
         /** 复用同一 agent 会话的 key(多轮修复保留上下文) */
         sessionKey?: string;
     }): Promise<AiGenerateResult>;
+    aiFixSelector(input: {
+        profileId?: string;
+        current: string;
+        reason?: string;
+        elementHtml: string;
+        ancestors?: string;
+        feedback?: string;
+        sessionKey?: string;
+    }): Promise<{
+        ok: boolean;
+        selector?: string;
+        error?: string;
+        sessionKey?: string;
+        profileLabel: string;
+        elapsedMs: number;
+    }>;
     importAiConfig(): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }>;
     getBrowserConfig(): Promise<BrowserConfig>;
     setBrowserConfig(patch: Partial<BrowserConfig>): Promise<BrowserConfig>;
@@ -164,6 +180,7 @@ const runBtn = byId<HTMLButtonElement>('run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
 const addPauseBtn = byId<HTMLButtonElement>('add-pause');
+const aiFixAllBtn = byId<HTMLButtonElement>('ai-fix-all');
 const exportBtn = byId<HTMLButtonElement>('export');
 const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
@@ -466,13 +483,13 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.appendChild(makeMenuItem('🎯', '在此后添加等待元素出现(点选)', () => {
         const at = index + 1;
         closeStepContextMenu();
-        requestPick((selector) => insertWaitForSelector(at, selector));
+        requestPick((selector, fingerprint) => insertWaitForSelector(at, selector, fingerprint));
     }));
     // 在此后添加「等待元素可点击」步骤(比「出现」更强:等到可交互;点选目标元素)
     menu.appendChild(makeMenuItem('🖱️', '在此后添加等待元素可点击(点选)', () => {
         const at = index + 1;
         closeStepContextMenu();
-        requestPick((selector) => insertWaitForClickable(at, selector));
+        requestPick((selector, fingerprint) => insertWaitForClickable(at, selector, fingerprint));
     }));
     // fill 步骤:就地修改要填写的文本内容(无需重录/改 JSON)
     if (step.type === 'fill') {
@@ -499,6 +516,15 @@ function showStepContextMenu(x: number, y: number, index: number): void {
                 renderSteps();
                 logLocal(`步骤 #${i + 1} 的选择器已更新为:${selector}`);
             });
+        }));
+        // AI 校正此步骤选择器:让 AI 看真实 DOM 上下文重挑更稳定的选择器,实测唯一命中后落地
+        const fixTarget = step;
+        menu.appendChild(makeMenuItem('🤖', 'AI 校正此步骤选择器', () => {
+            closeStepContextMenu();
+            const i = steps.indexOf(fixTarget);
+            if (i >= 0) {
+                void fixStepSelector(i);
+            }
         }));
     }
     // 删除当前步骤
@@ -750,16 +776,17 @@ function requestPick(onPicked: PickedHandler): void {
     logLocal('拾取模式已开启:请在页面中点击目标元素,按 ESC 取消。');
 }
 
-function insertWaitForSelector(at: number, selector: string): void {
+function insertWaitForSelector(at: number, selector: string, fingerprint?: unknown): void {
     const clamped = Math.max(0, Math.min(at, steps.length));
-    steps.splice(clamped, 0, { type: 'waitForSelector', selector });
+    // 一并保存语义指纹:供「AI 校正选择器」在旧选择器失效时重定位元素
+    steps.splice(clamped, 0, { type: 'waitForSelector', selector, ...(fingerprint ? { fingerprint } : {}) });
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素出现」:${selector}`);
 }
 
-function insertWaitForClickable(at: number, selector: string): void {
+function insertWaitForClickable(at: number, selector: string, fingerprint?: unknown): void {
     const clamped = Math.max(0, Math.min(at, steps.length));
-    steps.splice(clamped, 0, { type: 'waitForClickable', selector });
+    steps.splice(clamped, 0, { type: 'waitForClickable', selector, ...(fingerprint ? { fingerprint } : {}) });
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素可点击」:${selector}`);
 }
@@ -1505,6 +1532,190 @@ function evaluateChecks(checks: SelectorCheckResult[]): { passed: boolean; feedb
     ].join('\n');
     return { passed: false, feedback };
 }
+
+// ===== AI 校正选择器 =====
+// 让 selector-fix agent 看元素的真实 DOM 上下文,为脆弱选择器(随机 id / 框架动态类名)
+// 重挑更稳定的选择器,并在真实录制 webview 里实测「唯一命中被标记的目标元素」后才落地。
+// 元素定位:先试步骤当前选择器;失效则用步骤已存的语义指纹(aria/文本/href)重定位。
+
+/** 定位结果 */
+interface LocateSnapshot {
+    found: boolean;
+    /** 命中途径:selector / aria / text / href */
+    via?: string;
+    /** 目标元素 outerHTML(截断,不含临时标记) */
+    outerHTML?: string;
+    /** 祖先链摘要(从近到远) */
+    ancestors?: string;
+}
+
+/**
+ * 在录制 webview 内定位步骤对应的元素,给它打临时标记 data-macro-fix,并取上下文快照。
+ * 先读 outerHTML 再打标记,保证发给 AI 的 HTML 不含标记。
+ */
+async function locateAndSnapshot(selector: string, fingerprint: unknown): Promise<LocateSnapshot> {
+    const params = { selector, fingerprint: fingerprint ?? null };
+    const code =
+        '(function(){' +
+        'var p=' + JSON.stringify(params) + ';var MARK="data-macro-fix";' +
+        'try{var old=document.querySelectorAll("["+MARK+"]");for(var k=0;k<old.length;k++)old[k].removeAttribute(MARK);}catch(e){}' +
+        'function q(sel){try{if(sel.indexOf("xpath=")===0){var xr=document.evaluate(sel.slice(6),document,null,7,null);var a=[];for(var i=0;i<xr.snapshotLength;i++){a.push(xr.snapshotItem(i));}return a;}return Array.prototype.slice.call(document.querySelectorAll(sel));}catch(e){return null;}}' +
+        'function vis(el){if(!el||el.nodeType!==1)return false;var r=el.getBoundingClientRect();if(r.width<=0&&r.height<=0)return false;var s;try{s=window.getComputedStyle(el);}catch(e){return true;}if(!s)return true;if(s.display==="none"||s.visibility==="hidden"||s.opacity==="0")return false;return true;}' +
+        'function uniqVisible(list){if(!list)return null;var v=list.filter(vis);if(v.length===1)return v[0];if(v.length===0&&list.length===1)return list[0];return null;}' +
+        'var target=null,via="";' +
+        'if(p.selector){var m=q(p.selector);if(m&&m.length===1){target=m[0];via="selector";}}' +
+        'if(!target&&p.fingerprint){var fp=p.fingerprint;var got=null;' +
+        'if(!got&&fp.ariaLabel){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[aria-label="+JSON.stringify(fp.ariaLabel)+"]")));}catch(e){}if(got)via="aria";}' +
+        'if(!got&&fp.text){var tag=fp.tag||"*";var all;try{all=document.querySelectorAll(tag);}catch(e){all=document.querySelectorAll("*");}var bt=[];for(var i=0;i<all.length;i++){var el=all[i];var t=(el.textContent||"").replace(/\\s+/g," ").trim();if(t===fp.text)bt.push(el);}got=uniqVisible(bt);if(got)via="text";}' +
+        'if(!got&&fp.href){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[href="+JSON.stringify(fp.href)+"]")));}catch(e){}if(got)via="href";}' +
+        'if(got)target=got;}' +
+        'if(!target)return{found:false};' +
+        'var outer=target.outerHTML||"";if(outer.length>2000)outer=outer.slice(0,2000)+"…(截断)";' +
+        'var lines=[];var node=target.parentElement;var depth=0;' +
+        'while(node&&node.nodeType===1&&node.tagName.toLowerCase()!=="html"&&depth<6){' +
+        'var seg=node.tagName.toLowerCase();if(node.id)seg+="#"+node.id;var attrs=[];' +
+        '["role","aria-label","name","type","data-testid","data-test","data-cy"].forEach(function(a){var val=node.getAttribute&&node.getAttribute(a);if(val)attrs.push(a+"="+JSON.stringify(val));});' +
+        'var cls=(node.className&&node.className.baseVal!==undefined)?node.className.baseVal:(typeof node.className==="string"?node.className:"");cls=(cls||"").trim();' +
+        'var line=seg;if(attrs.length)line+=" ["+attrs.join(" ")+"]";if(cls)line+=" class=\\""+cls.split(/\\s+/).slice(0,6).join(" ")+"\\"";' +
+        'lines.push(line);node=node.parentElement;depth++;}' +
+        'target.setAttribute(MARK,"1");' +
+        'return{found:true,via:via,outerHTML:outer,ancestors:lines.join("\\n")};})()';
+    try {
+        const raw = await webview.executeJavaScript(code);
+        return (raw && typeof raw === 'object' ? raw : { found: false }) as LocateSnapshot;
+    } catch (e) {
+        logLocal('定位元素失败(按未找到处理):' + (e as Error).message, 'error');
+        return { found: false };
+    }
+}
+
+/** 实测校正后的选择器:必须恰好命中 1 个且是被标记的目标元素 */
+async function verifyFixed(selector: string): Promise<{ count: number; ok: boolean; invalid: boolean }> {
+    const code =
+        '(function(){var p=' + JSON.stringify({ selector }) + ';var MARK="data-macro-fix";' +
+        'function q(sel){try{if(sel.indexOf("xpath=")===0){var xr=document.evaluate(sel.slice(6),document,null,7,null);var a=[];for(var i=0;i<xr.snapshotLength;i++){a.push(xr.snapshotItem(i));}return a;}return Array.prototype.slice.call(document.querySelectorAll(sel));}catch(e){return null;}}' +
+        'var m=q(p.selector);if(m===null)return{invalid:true,count:0,ok:false};' +
+        'var marked=null;try{marked=document.querySelector("["+MARK+"]");}catch(e){}' +
+        'return{count:m.length,ok:(m.length===1&&!!marked&&m[0]===marked),invalid:false};})()';
+    try {
+        const raw = await webview.executeJavaScript(code);
+        const r = (raw && typeof raw === 'object' ? raw : {}) as { count?: number; ok?: boolean; invalid?: boolean };
+        return { count: r.count ?? 0, ok: !!r.ok, invalid: !!r.invalid };
+    } catch {
+        return { count: 0, ok: false, invalid: false };
+    }
+}
+
+/** 清除页面上的临时校正标记(finally 必调) */
+async function clearFixMarker(): Promise<void> {
+    try {
+        await webview.executeJavaScript(
+            '(function(){try{var els=document.querySelectorAll("[data-macro-fix]");for(var i=0;i<els.length;i++)els[i].removeAttribute("data-macro-fix");}catch(e){}return true;})()'
+        );
+    } catch {
+        // 非致命
+    }
+}
+
+/** 对单个步骤做 AI 选择器校正;返回处理状态供批量汇总 */
+async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'> {
+    const step = steps[index];
+    const selector = step && step.selector;
+    if (typeof selector !== 'string' || !selector) {
+        return 'skip';
+    }
+    const snap = await locateAndSnapshot(selector, step.fingerprint);
+    if (!snap.found || !snap.outerHTML) {
+        logLocal(`步骤 #${index + 1}(${describeStep(step as Step)}):当前页找不到该元素,已跳过(请先把对应页面/状态加载到浏览器里)。`);
+        return 'skip';
+    }
+    try {
+        const reason = '当前选择器疑似含框架动态类名 / 随机 id,回放易失效';
+        let feedback: string | undefined;
+        let sessionKey: string | undefined;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+            const res = await window.electronAPI.aiFixSelector({
+                current: selector,
+                reason,
+                elementHtml: snap.outerHTML,
+                ancestors: snap.ancestors,
+                feedback,
+                sessionKey,
+            });
+            if (!res.ok || !res.selector) {
+                logLocal(`步骤 #${index + 1} AI 校正失败:${res.error || '未返回选择器'}`, 'error');
+                return 'fail';
+            }
+            sessionKey = res.sessionKey ?? sessionKey;
+            const v = await verifyFixed(res.selector);
+            if (v.ok) {
+                const old = String(step.selector);
+                step.selector = res.selector;
+                renderSteps();
+                logLocal(`步骤 #${index + 1} 选择器已校正(${attempt} 轮):${old} → ${res.selector}`);
+                return 'fixed';
+            }
+            if (v.invalid) {
+                feedback = `选择器 \`${res.selector}\` 是非法选择器,请重挑。`;
+            } else if (v.count === 0) {
+                feedback = `选择器 \`${res.selector}\` 在当前页命中 0 个,请重挑唯一命中目标元素的稳定选择器。`;
+            } else if (v.count > 1) {
+                feedback = `选择器 \`${res.selector}\` 命中了 ${v.count} 个元素(不唯一),请缩小到只命中目标元素。`;
+            } else {
+                feedback = `选择器 \`${res.selector}\` 命中的不是目标元素,请重挑唯一命中目标元素的稳定选择器。`;
+            }
+            logLocal(`步骤 #${index + 1} 第 ${attempt} 轮实测未通过,带反馈重挑……`);
+        }
+        logLocal(`步骤 #${index + 1} 三轮仍未校正,保留原选择器,请人工核对。`, 'error');
+        return 'fail';
+    } finally {
+        await clearFixMarker();
+    }
+}
+
+function setFixBusy(busy: boolean): void {
+    aiFixAllBtn.disabled = busy;
+    aiFixAllBtn.textContent = busy ? 'AI 校正中…' : '🤖 AI 校正选择器';
+}
+
+/** 批量校正:遍历所有带选择器的步骤逐个 AI 校正 */
+async function fixAllSelectors(): Promise<void> {
+    const targets: number[] = [];
+    steps.forEach((s, i) => {
+        if (typeof (s as { selector?: unknown }).selector === 'string' && (s as { selector?: string }).selector) {
+            targets.push(i);
+        }
+    });
+    if (!targets.length) {
+        logLocal('没有带选择器的步骤可校正。');
+        return;
+    }
+    const url = safeGetUrl();
+    if (!url || url === 'about:blank') {
+        logLocal('请先在上方打开对应网页(校正基于当前页面真实 DOM),再批量校正选择器。', 'error');
+        return;
+    }
+    setFixBusy(true);
+    logLocal(`开始 AI 批量校正选择器:共 ${targets.length} 个带选择器的步骤……`);
+    let fixed = 0;
+    let skip = 0;
+    let fail = 0;
+    try {
+        for (const i of targets) {
+            const r = await fixStepSelector(i);
+            if (r === 'fixed') fixed += 1;
+            else if (r === 'skip') skip += 1;
+            else fail += 1;
+        }
+    } finally {
+        setFixBusy(false);
+    }
+    logLocal(`AI 批量校正完成:校正 ${fixed} 个、跳过 ${skip} 个、未成功 ${fail} 个。改动尚未落盘,请点「保存宏」。`);
+}
+
+aiFixAllBtn.addEventListener('click', () => {
+    void fixAllSelectors();
+});
 
 aiGenerateBtn.addEventListener('click', async () => {
     const url = safeGetUrl();

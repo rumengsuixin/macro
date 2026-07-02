@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { Macro, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
-import type { GenerateInput, GenerateResult, ProfileSummary } from '../core/ai-extract';
+import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
 
 /** AI 配置档列表返回结构 */
 export interface AiProfilesInfo {
@@ -50,6 +50,10 @@ const api = {
     /** 调用 AI 生成提取规则 */
     aiGenerateExtract: (input: AiGenerateInput): Promise<AiGenerateResult> =>
         ipcRenderer.invoke('ai-generate-extract', input),
+
+    /** 调用 AI 校正单个步骤的脆弱选择器 */
+    aiFixSelector: (input: FixSelectorInput): Promise<FixSelectorResult> =>
+        ipcRenderer.invoke('ai-fix-selector', input),
 
     /** 上传并校验 ai-config.json,通过则覆盖生效 */
     importAiConfig: (): Promise<{ ok: boolean; error?: string; canceled?: boolean; profileCount?: number }> =>

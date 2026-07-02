@@ -98,6 +98,13 @@ const DEFAULT_CONFIG: AiConfig = {
             sessionKeyPrefix: 'agent:webextract:macro:extract',
             timeout: 120000,
         },
+        {
+            id: 'selector-fix',
+            label: '选择器校正 Agent(selector-fix)',
+            agentId: 'selector-fix',
+            sessionKeyPrefix: 'agent:selector-fix:macro:selector',
+            timeout: 90000,
+        },
     ],
     openclaw: {},
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -486,6 +493,142 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
             profileId: profile.id,
             profileLabel: profile.label,
             error: err instanceof Error ? err.message : String(err),
+            elapsedMs: Date.now() - start,
+        };
+    } finally {
+        client?.close();
+    }
+}
+
+// ===== 选择器校正(对接 selector-fix agent)=====
+// 与 generateExtract 同链路(连接→认证→chat.send(deliver:false)→收草稿→关闭),
+// 但目标不同:给某个已录制步骤的脆弱选择器重挑一个更稳定、更通用的选择器。
+// 由 renderer 在真实录制 webview 里定位元素、取上下文,发到这里;agent 只输出 {"selector":"..."}。
+
+/** 选择器校正入参 */
+export interface FixSelectorInput {
+    /** 指定配置档;不传默认用 selector-fix(见下方回退逻辑) */
+    profileId?: string;
+    /** 当前(脆弱)选择器 */
+    current: string;
+    /** 失效/脆弱原因的简短说明(如「含疑似随机 id / 框架动态类名」) */
+    reason?: string;
+    /** 目标元素的 outerHTML(已截断,不含临时标记) */
+    elementHtml: string;
+    /** 目标元素的祖先链摘要(各级 tag+id+稳定属性+class,从近到远) */
+    ancestors?: string;
+    /** 上一轮实测反馈(命中 K 个 / 命中错误元素),复用同会话重挑 */
+    feedback?: string;
+    /** 会话 key:多轮修复复用以保留上下文;不传则新建 */
+    sessionKey?: string;
+}
+
+/** 选择器校正结果 */
+export interface FixSelectorResult {
+    ok: boolean;
+    profileId: string;
+    profileLabel: string;
+    /** 校正后的选择器(CSS 或 xpath= 前缀) */
+    selector?: string;
+    /** 模型原始回复(便于排查) */
+    raw?: string;
+    error?: string;
+    /** 本次会话 key(供多轮修复复用) */
+    sessionKey?: string;
+    elapsedMs: number;
+}
+
+/** selector-fix 找不到时的默认档回退顺序 */
+function resolveFixProfile(cfg: AiConfig, id?: string): AiProfile | null {
+    const target = id || 'selector-fix';
+    return (
+        cfg.profiles.find((p) => p.id === target) ??
+        cfg.profiles.find((p) => p.id === 'selector-fix') ??
+        resolveProfile(cfg, undefined)
+    );
+}
+
+/** 调用 selector-fix agent 为单个脆弱选择器重挑稳定选择器 */
+export async function fixSelector(input: FixSelectorInput): Promise<FixSelectorResult> {
+    const start = Date.now();
+    const cfg = loadAiConfig();
+    const profile = resolveFixProfile(cfg, input.profileId);
+    if (!profile) {
+        return {
+            ok: false,
+            profileId: input.profileId ?? '',
+            profileLabel: '',
+            error: '未找到任何可用的 AI 配置档,请检查 ai-config.json',
+            elapsedMs: Date.now() - start,
+        };
+    }
+
+    // 组装 message:系统兜底 + 选择器质量红线 + 任务说明 + 元素上下文 + 可选反馈。
+    // 完整〈选择器质量准则〉在 selector-fix agent 侧 SOUL.md(单一可信源),此处只注入核心红线兜底。
+    const taskHint = [
+        '【任务:选择器校正】下面给你一个网页元素的 DOM 上下文,以及它当前那个不稳定的选择器。',
+        '请为【这个元素】重挑一个唯一命中它、且尽量稳定通用的选择器。',
+        '只输出一个 JSON 对象:{ "selector": "..." },不要任何解释、前言或 Markdown 代码块标记。',
+        'selector 可以是 CSS,若用文本/属性锚定更稳可用 xpath=// 前缀。',
+    ].join('\n');
+    const contextBlock = [
+        '当前选择器:' + input.current,
+        input.reason ? '判定原因:' + input.reason : '',
+        '目标元素 outerHTML:',
+        input.elementHtml,
+        input.ancestors ? '祖先链(从近到远):\n' + input.ancestors : '',
+    ]
+        .filter(Boolean)
+        .join('\n\n');
+    const feedbackBlock = input.feedback
+        ? '【上一轮实测反馈】你上次给的选择器未通过,请据此修正后重新只输出 {"selector":"..."}:\n' +
+          input.feedback
+        : '';
+    const message =
+        (cfg.systemPrompt ? cfg.systemPrompt + '\n\n' : '') +
+        SELECTOR_QUALITY_GUIDE + '\n\n' +
+        taskHint + '\n\n' +
+        contextBlock +
+        (feedbackBlock ? '\n\n' + feedbackBlock : '');
+
+    const sessionKey = input.sessionKey ?? `${profile.sessionKeyPrefix}:${randomUUID()}`;
+    const timeout = profile.timeout ?? 90000;
+
+    let client: OpenclawClient | null = null;
+    try {
+        client = new OpenclawClient(cfg.openclaw ?? {});
+        await client.connect();
+        const reply = await client.requestDraft(sessionKey, message, timeout);
+        const parsed = extractJson(reply) as { selector?: unknown } | null;
+        const selector =
+            parsed && typeof parsed.selector === 'string' ? parsed.selector.trim() : '';
+        if (!selector) {
+            return {
+                ok: false,
+                profileId: profile.id,
+                profileLabel: profile.label,
+                raw: reply,
+                error: '模型未返回可解析的 { "selector": "..." }',
+                sessionKey,
+                elapsedMs: Date.now() - start,
+            };
+        }
+        return {
+            ok: true,
+            profileId: profile.id,
+            profileLabel: profile.label,
+            selector,
+            raw: reply,
+            sessionKey,
+            elapsedMs: Date.now() - start,
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            profileId: profile.id,
+            profileLabel: profile.label,
+            error: err instanceof Error ? err.message : String(err),
+            sessionKey,
             elapsedMs: Date.now() - start,
         };
     } finally {

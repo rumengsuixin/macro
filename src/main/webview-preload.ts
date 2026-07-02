@@ -9,8 +9,9 @@ import type { Step } from '../core/macro-types';
 
 let recording = false;
 
-// 当前待提交的输入(在失焦 / 回车时生成 fill 步骤)
-let pendingFill: { selector: string; value: string } | null = null;
+// 当前待提交的输入(在失焦 / 回车时生成 fill 步骤)。
+// 保留元素引用,提交时一并生成语义指纹(供「AI 校正选择器」在旧选择器失效时重定位)。
+let pendingFill: { selector: string; value: string; el: Element } | null = null;
 
 // 接收宿主的录制开关(每次页面导航后宿主会重新发送以「重新武装」)
 ipcRenderer.on('toggle-recording', (_event, on: boolean) => {
@@ -131,7 +132,12 @@ function sendStep(step: Step): void {
 
 function flushPendingFill(): void {
     if (pendingFill) {
-        sendStep({ type: 'fill', selector: pendingFill.selector, value: pendingFill.value });
+        sendStep({
+            type: 'fill',
+            selector: pendingFill.selector,
+            value: pendingFill.value,
+            fingerprint: buildFingerprint(pendingFill.el),
+        });
         pendingFill = null;
     }
 }
@@ -190,12 +196,12 @@ document.addEventListener(
         if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
             const selector = generateSelector(target);
             if (selector) {
-                pendingFill = { selector, value: target.value };
+                pendingFill = { selector, value: target.value, el: target };
             }
         } else if (target.isContentEditable) {
             const selector = generateSelector(target);
             if (selector) {
-                pendingFill = { selector, value: target.innerText };
+                pendingFill = { selector, value: target.innerText, el: target };
             }
         }
     },
