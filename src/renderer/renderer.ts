@@ -1093,7 +1093,7 @@ function parseValidListRules(): Record<string, unknown> | null {
 
 // list-detail 选项:无合法 list 规则前提时直接禁用,而非选后报错回退
 const aiListDetailOption = aiModeSel.querySelector<HTMLOptionElement>('option[value="list-detail"]')!;
-const LIST_DETAIL_LABEL = '列表+详情(list-detail)';
+const LIST_DETAIL_LABEL = '列表+点进详情页(list-detail)';
 
 /**
  * 详情页入口字段下拉:仅在 list-detail 模式显示,选项来自现有 list 规则的 fields[].name。
@@ -1135,7 +1135,7 @@ function refreshAiModeOptions(): void {
     aiListDetailOption.disabled = !ready;
     aiListDetailOption.textContent = ready
         ? LIST_DETAIL_LABEL
-        : `${LIST_DETAIL_LABEL} — 需先填合法 list 规则`;
+        : `${LIST_DETAIL_LABEL} — 需先配好上面的「采一个列表」`;
     // 前提失效且当前正选中 list-detail 时,回退到 list
     if (!ready && aiModeSel.value === 'list-detail') {
         aiModeSel.value = 'list';
@@ -2314,6 +2314,47 @@ function setupMainDivider(): void {
     });
 }
 
+// ===== 主页简化:高级模式开关 + 「更多」下拉 =====
+const ADV_MODE_KEY = 'macro.advancedMode';
+
+/**
+ * 高级模式开关:默认关闭,此时隐藏高级面板(提取规则 JSON / 插件 / 登录状态复用),
+ * 普通用户只看到核心采集流。仅切换 .sidebar 的 .advanced class(纯 CSS 显隐,
+ * 不删节点、不动任何功能),状态记 localStorage 跨会话保留。
+ */
+function setupAdvancedMode(): void {
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    const toggle = document.getElementById('advanced-mode') as HTMLInputElement | null;
+    if (!sidebar || !toggle) return;
+    const on = localStorage.getItem(ADV_MODE_KEY) === '1';
+    toggle.checked = on;
+    sidebar.classList.toggle('advanced', on);
+    toggle.addEventListener('change', () => {
+        sidebar.classList.toggle('advanced', toggle.checked);
+        localStorage.setItem(ADV_MODE_KEY, toggle.checked ? '1' : '0');
+    });
+}
+
+/**
+ * 「更多」下拉:把保存 / 加载 / 插入暂停三个次要按钮收起,主工具栏更清爽。
+ * 只管开合与「点外部收起」,内部按钮的既有事件绑定完全不动。
+ */
+function setupMoreMenu(): void {
+    const btn = document.getElementById('more-btn');
+    const menu = document.getElementById('more-menu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // 防冒泡到 document 立即被下面的关闭逻辑收起
+        menu.classList.toggle('open');
+    });
+    menu.addEventListener('click', () => menu.classList.remove('open')); // 选完即收起
+    document.addEventListener('click', (e) => {
+        if (!menu.contains(e.target as Node) && e.target !== btn) {
+            menu.classList.remove('open');
+        }
+    });
+}
+
 // ===== 初始化 =====
 /** 隐藏启动加载遮罩(淡出后移除,失败也不影响界面) */
 function hideBootOverlay(): void {
@@ -2330,6 +2371,8 @@ async function init(): Promise<void> {
     addressInput.value = 'https://books.toscrape.com/';
     setRecordingUI(false);
     setupMainDivider();
+    setupAdvancedMode();
+    setupMoreMenu();
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     window.electronAPI.onMacroRunStarted(({ runId }) => {

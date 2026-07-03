@@ -108,6 +108,61 @@
             color: #fecaca;
         }
 
+        /* 「更多」下拉:把不常用按钮收起,主工具栏更清爽 */
+        .more-wrap {
+            position: relative;
+            display: inline-block;
+        }
+
+        .more-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 20;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            margin-top: 4px;
+            padding: 4px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 4px;
+            min-width: 120px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+        }
+
+        .more-menu.open {
+            display: flex;
+        }
+
+        .more-menu button {
+            width: 100%;
+            text-align: left;
+        }
+
+        /* 「高级」开关:靠右,平时把高级设置藏起来 */
+        .adv-toggle {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: #cbd5e1;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .adv-toggle input {
+            cursor: pointer;
+        }
+
+        /* 基础视图(未开启高级):隐藏高级面板,普通用户只看核心采集流 */
+        .sidebar:not(.advanced) > #extract-panel,
+        .sidebar:not(.advanced) > #plugin-panel,
+        .sidebar:not(.advanced) > #browser-panel {
+            display: none;
+        }
+
         .main {
             flex: 1;
             display: flex;
@@ -229,11 +284,18 @@
         }
 
         .collapsible.collapsed > #extract,
+        .collapsible.collapsed > .hint,
         .collapsible.collapsed > .browser-body,
         .collapsible.collapsed > .ai-body,
         .collapsible.collapsed > .plugin-body,
         .collapsible.collapsed > #steps {
             display: none;
+        }
+
+        /* 说明性小字:统一为灰色小号,降低专业信息的视觉压迫 */
+        .hint {
+            color: #64748b;
+            font-size: 12px;
         }
 
         /* 步骤面板收起时不再占用弹性高度,把空间还给其它内容 */
@@ -894,20 +956,28 @@
             <div class="row">
                 <label>地址</label>
                 <input type="text" id="address" placeholder="输入网址,如 https://books.toscrape.com/" />
-                <button id="open">打开网页</button>
+                <button id="open" title="在下方内置浏览器打开这个网址">打开网页</button>
                 <span id="rec-indicator" class="rec-indicator">未录制</span>
             </div>
             <div class="row">
-                <label>宏名称</label>
+                <label title="给这套操作起名字,便于保存 / 区分">任务名称</label>
                 <input type="text" id="macro-name" value="demo-task" />
-                <button id="start" class="danger">开始录制</button>
-                <button id="stop" disabled>停止录制</button>
-                <button id="run" class="ok">运行宏</button>
-                <button id="stop-run" class="danger" disabled>停止回放</button>
-                <button id="save">保存宏</button>
-                <button id="load">加载宏</button>
-                <button id="add-pause">插入暂停</button>
-                <button id="export" class="ok">导出 Excel</button>
+                <button id="start" class="danger" title="开始记录你在网页里的点击、输入等操作">开始录制</button>
+                <button id="stop" disabled title="结束记录">停止录制</button>
+                <button id="run" class="ok" title="自动重放刚才的操作并采集数据">运行宏</button>
+                <button id="stop-run" class="danger" disabled title="中止正在自动运行的任务">停止回放</button>
+                <button id="export" class="ok" title="把采集到的数据存为 Excel 表格">导出 Excel</button>
+                <div class="more-wrap">
+                    <button id="more-btn" type="button" title="更多操作">更多 ▾</button>
+                    <div id="more-menu" class="more-menu">
+                        <button id="save" title="把操作 + 采集配置存成文件,下次可复用">保存宏</button>
+                        <button id="load" title="打开之前保存的操作文件">加载宏</button>
+                        <button id="add-pause" title="在末尾加一个『暂停等人工操作』步骤(如登录 / 验证码)">插入暂停</button>
+                    </div>
+                </div>
+                <label class="adv-toggle" title="显示提取规则 JSON、插件、登录状态等高级设置">
+                    <input type="checkbox" id="advanced-mode" /> 高级
+                </label>
             </div>
         </div>
 
@@ -930,70 +1000,72 @@
             <div class="main-divider" id="main-divider" title="拖动调整左右宽度"></div>
             <div class="sidebar">
                 <div class="panel collapsible collapsed" id="extract-panel">
-                    <div class="panel-title" id="extract-title">提取规则(extract,可编辑 JSON)</div>
+                    <div class="panel-title" id="extract-title">采集内容配置(高级:提取规则 JSON)</div>
+                    <div class="hint" style="padding: 6px 10px">一般不用手改,用上面的「让 AI 帮你配置」自动生成即可;此处是给高级用户看的 JSON。</div>
                     <textarea id="extract" spellcheck="false"></textarea>
                 </div>
                 <div class="panel ai-panel collapsible" id="ai-panel">
-                    <div class="panel-title" id="ai-title">AI 提取(用 AI 自动生成上面的规则)</div>
+                    <div class="panel-title" id="ai-title">让 AI 帮你配置采集内容(自动生成规则)</div>
                     <div class="ai-body">
                         <div class="ai-row">
-                            <label>引擎</label>
+                            <label title="选用哪个 AI 生成采集配置">AI 模型</label>
                             <select id="ai-profile"></select>
-                            <button id="ai-import" title="上传 ai-config.json,校验通过后覆盖生效">上传配置</button>
+                            <button id="ai-import" title="导入 AI 配置文件(高级)">上传配置</button>
                         </div>
                         <textarea id="ai-requirement" spellcheck="false"
                             placeholder="用一句话描述要采集什么,例如:采集每个商品的标题、价格、详情链接"></textarea>
                         <div class="ai-row">
-                            <label>目标模式</label>
+                            <label title="按页面结构选:单条 / 列表 / 列表进详情 / 列表逐条操作">采集方式</label>
                             <select id="ai-mode">
-                                <option value="single">单条(single)</option>
-                                <option value="list" selected>列表(list)</option>
-                                <option value="list-detail">列表+详情(list-detail)</option>
-                                <option value="list-action">列表逐项动作(list-action)</option>
+                                <option value="single">只采一条(整页一组数据)</option>
+                                <option value="list" selected>采一个列表(每行一条,如商品 / 搜索结果)</option>
+                                <option value="list-detail">列表+点进详情页(list-detail)</option>
+                                <option value="list-action">列表逐条操作(对每条执行动作,如逐个下载)</option>
                             </select>
-                            <button id="ai-generate">AI 生成规则</button>
+                            <button id="ai-generate" title="读取当前页面,自动生成采集配置">AI 生成规则</button>
                             <span id="ai-status"></span>
                         </div>
                         <div class="ai-row" id="ai-detail-link-row" style="display: none">
-                            <label>详情页入口字段</label>
+                            <label>进详情页的链接字段</label>
                             <select id="ai-detail-link-field"></select>
-                            <span class="hint">选 fields 中指向详情页的字段(取其 href 进详情页)</span>
+                            <span class="hint">选一个能点进详情页的字段(用它的链接进入详情页)</span>
                         </div>
                     </div>
                 </div>
                 <div class="panel collapsible plugin-panel" id="plugin-panel">
-                    <div class="panel-title" id="plugin-title">🧩 插件(勾选启用,随「运行」一起执行)</div>
+                    <div class="panel-title" id="plugin-title">🧩 附加处理(勾选后随「运行」自动执行,如合并文件)</div>
                     <div class="plugin-body" id="plugin-list">
                         <span class="hint">正在加载插件…</span>
                     </div>
                 </div>
                 <div class="panel collapsible collapsed" id="browser-panel">
-                    <div class="panel-title" id="browser-title">浏览器登录态(回放复用)</div>
+                    <div class="panel-title" id="browser-title">登录状态复用(需登录的网站才勾,高级)</div>
                     <div class="browser-body">
-                        <label class="bc-check">
+                        <div class="hint">只有需要登录的网站才用勾这里,普通网站可忽略。</div>
+                        <label class="bc-check" title="用本机安装的 Chrome / Edge 浏览器内核回放,更不容易被网站识别为自动程序">
                             <input type="checkbox" id="bc-chrome" />
                             <span>优先用本机 Chrome/Edge 内核(反检测)</span>
                         </label>
-                        <label class="bc-check">
+                        <label class="bc-check" title="把登录状态存到本地目录,下次回放免登录">
                             <input type="checkbox" id="bc-persist" />
-                            <span>持久化回放 profile(复用 user-data-dir)</span>
+                            <span>记住登录状态,下次免登录(持久化回放 profile)</span>
                         </label>
                         <div class="bc-dir-row">
                             <span class="bc-dir" id="bc-dir" title=""></span>
                             <button id="bc-choose">选择目录</button>
                         </div>
-                        <label class="bc-check">
+                        <label class="bc-check" title="把录制时的登录 Cookie 带到回放浏览器,让回放也处于已登录状态">
                             <input type="checkbox" id="bc-inject" />
                             <span>回放前注入录制登录态(cookies)</span>
                         </label>
-                        <label class="bc-check">
+                        <label class="bc-check" title="有些网站把登录信息存在 localStorage,勾此项把它一并带到回放(仅当前页所在网站)">
                             <input type="checkbox" id="bc-localstorage" />
                             <span>回放前注入录制 localStorage(仅当前页 origin)</span>
                         </label>
                     </div>
                 </div>
                 <div class="panel steps-panel collapsible" id="steps-panel">
-                    <div class="panel-title" id="steps-title">录制步骤(<span id="step-count">0</span>)</div>
+                    <div class="panel-title" id="steps-title">已录制的操作(共 <span id="step-count">0</span> 步)</div>
                     <div id="steps"></div>
                 </div>
             </div>
