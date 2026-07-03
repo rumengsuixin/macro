@@ -294,6 +294,8 @@ export interface RunResult {
     downloads?: string[];
     /** 后处理器执行结果(由主进程在 runner 之后填充,如合并 zip 内 excel 的产物) */
     postProcessed?: PostProcessResult[];
+    /** 用户中途点「停止回放」主动中止(非失败):UI 据此提示"已停止"而非报错截图 */
+    cancelled?: boolean;
     error?: RunError;
 }
 

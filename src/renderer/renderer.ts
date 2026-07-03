@@ -48,6 +48,8 @@ interface RunResult {
     rows?: Record<string, string>[];
     downloads?: string[];
     postProcessed?: PostProcessResult[];
+    /** 用户中途点「停止回放」主动中止(非失败) */
+    cancelled?: boolean;
     error?: RunError;
 }
 
@@ -114,6 +116,8 @@ interface ElectronAPI {
     onLog(cb: (msg: LogMessage) => void): void;
     onMacroPaused(cb: (info: PauseEvent) => void): void;
     resumeMacro(runId: number): void;
+    onMacroRunStarted(cb: (info: { runId: number }) => void): void;
+    stopMacro(runId: number): void;
     aiListProfiles(): Promise<AiProfilesInfo>;
     aiGenerateExtract(input: {
         requirement: string;
@@ -189,6 +193,7 @@ const openBtn = byId<HTMLButtonElement>('open');
 const startBtn = byId<HTMLButtonElement>('start');
 const stopBtn = byId<HTMLButtonElement>('stop');
 const runBtn = byId<HTMLButtonElement>('run');
+const stopRunBtn = byId<HTMLButtonElement>('stop-run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
 const addPauseBtn = byId<HTMLButtonElement>('add-pause');
@@ -196,6 +201,7 @@ const exportBtn = byId<HTMLButtonElement>('export');
 const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
 const pauseContinueBtn = byId<HTMLButtonElement>('pause-continue');
+const pauseStopBtn = byId<HTMLButtonElement>('pause-stop');
 const aiProfileSel = byId<HTMLSelectElement>('ai-profile');
 const aiModeSel = byId<HTMLSelectElement>('ai-mode');
 const aiRequirementInput = byId<HTMLTextAreaElement>('ai-requirement');
@@ -920,10 +926,27 @@ function setRecordingUI(on: boolean): void {
 function setBusy(busy: boolean): void {
     runBtn.disabled = busy;
     runBtn.textContent = busy ? '运行中…' : '运行宏';
+    // 停止按钮与运行按钮相反:运行中可点、空闲禁用;每次切换复位其文案/禁用态
+    stopRunBtn.disabled = !busy;
+    stopRunBtn.textContent = '停止回放';
 }
 
-// ===== 人工介入暂停模态框 =====
+// ===== 运行/停止:runId 与暂停模态框 =====
+// 本次运行的 runId(主进程在运行开始时经 macro-run-started 推送),供「停止回放」回传
+let activeRunId: number | null = null;
 let currentPauseRunId: number | null = null;
+
+// 「停止回放」按钮:向主进程发停止信号(runner.cancel() 会关浏览器打断当前操作)
+stopRunBtn.addEventListener('click', () => {
+    if (activeRunId === null) {
+        return;
+    }
+    window.electronAPI.stopMacro(activeRunId);
+    logLocal('已请求停止回放……');
+    // 防重复点:禁用并改文案,待运行结束由 setBusy(false) 复位
+    stopRunBtn.disabled = true;
+    stopRunBtn.textContent = '停止中…';
+});
 
 function showPauseModal(info: PauseEvent): void {
     currentPauseRunId = info.runId;
@@ -944,6 +967,17 @@ pauseContinueBtn.addEventListener('click', () => {
     if (currentPauseRunId !== null) {
         window.electronAPI.resumeMacro(currentPauseRunId);
         logLocal('已点击「继续」,恢复回放。');
+    }
+    hidePauseModal();
+});
+
+// 暂停中「停止回放」:同时发 stop + resume——resume 让 handlePause 返回,
+// 主循环下一轮顶部检查 cancelled 抛出干净退出(暂停期间无 Playwright 操作在跑,单靠关 context 不解除等待)
+pauseStopBtn.addEventListener('click', () => {
+    if (currentPauseRunId !== null) {
+        window.electronAPI.stopMacro(currentPauseRunId);
+        window.electronAPI.resumeMacro(currentPauseRunId);
+        logLocal('已请求停止回放……');
     }
     hidePauseModal();
 });
@@ -1167,6 +1201,10 @@ stopBtn.addEventListener('click', () => {
 
 /** 统一处理回放结果的日志反馈(供「运行」按钮与插件面板共用) */
 function reportRunResult(result: RunResult): void {
+    if (result.cancelled) {
+        logLocal('回放已被用户停止。');
+        return;
+    }
     if (result.ok) {
         lastRows = result.rows ?? [];
         const dlCount = result.downloads?.length ?? 0;
@@ -1212,6 +1250,7 @@ runBtn.addEventListener('click', async () => {
         logLocal('运行宏异常:' + (e as Error).message, 'error');
     } finally {
         setBusy(false);
+        activeRunId = null; // 本次运行结束,清 runId
         hidePauseModal(); // 清理可能残留的暂停模态框(如超时失败返回时)
     }
 });
@@ -2293,6 +2332,9 @@ async function init(): Promise<void> {
     setupMainDivider();
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
+    window.electronAPI.onMacroRunStarted(({ runId }) => {
+        activeRunId = runId; // 记录本次运行 runId,供「停止回放」按钮回传
+    });
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
     await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');

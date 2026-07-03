@@ -85,6 +85,16 @@ const api = {
     resumeMacro: (runId: number): void => {
         ipcRenderer.send('resume-macro', runId);
     },
+
+    /** 订阅「本次运行已开始」事件(带 runId,供停止按钮回传) */
+    onMacroRunStarted: (callback: (info: { runId: number }) => void): void => {
+        ipcRenderer.on('macro-run-started', (_event, info: { runId: number }) => callback(info));
+    },
+
+    /** 通知主进程「停止」回放(需带回对应的 runId) */
+    stopMacro: (runId: number): void => {
+        ipcRenderer.send('stop-macro', runId);
+    },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

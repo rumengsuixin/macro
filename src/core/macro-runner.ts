@@ -28,6 +28,10 @@ export class MacroRunner {
     private session: SessionOptions;
     /** 下载文件保存目录;缺省回退到 errorDir 同级的 downloads */
     private downloadDir: string;
+    /** 用户已请求停止:主循环每步前检查,已置位则抛出并跳过后续步骤/提取 */
+    private cancelled = false;
+    /** 当前 context 引用:停止时主动关闭以打断正在进行的 Playwright 操作(慢步骤/提取阶段) */
+    private activeContext: BrowserContext | null = null;
 
     constructor(
         errorDir: string,
@@ -43,6 +47,19 @@ export class MacroRunner {
         this.onPause = onPause ?? (async (): Promise<void> => {});
         this.session = session ?? {};
         this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
+    }
+
+    /**
+     * 请求停止当前回放(由主进程在收到「停止」信号时调用,依赖倒置——core 不依赖 Electron)。
+     * 置取消标志让主循环干净退出;并主动关闭 context 以**立即打断**正在 await 的 Playwright
+     * 操作(如卡在慢 waitForSelector / goto / 提取阶段),使 run() 尽快从 catch 退出。
+     */
+    cancel(): void {
+        this.cancelled = true;
+        if (this.activeContext) {
+            // 关闭失败(如已关)静默忽略;正在进行的操作会抛 "Target closed" 由 run() 的 catch 兜住
+            this.activeContext.close().catch(() => undefined);
+        }
     }
 
     /** 回放整个宏 */
@@ -138,6 +155,12 @@ export class MacroRunner {
             if (!context || !page) {
                 throw lastErr ?? new Error('所有浏览器内核均启动失败。');
             }
+            // 持有 context 引用,供 cancel() 停止时主动关闭以打断正在进行的操作
+            this.activeContext = context;
+            // 若用户在浏览器启动期间已点「停止」,此处直接退出,不再往下跑
+            if (this.cancelled) {
+                throw new Error('回放已被用户停止。');
+            }
 
             // 反检测注入脚本(必须在任何导航前注册;早于 cookie 注入):抹掉自动化痕迹、补齐常见浏览器特征
             await context.addInitScript(() => {
@@ -214,6 +237,10 @@ export class MacroRunner {
                 currentStepIndex = i;
                 currentStep = macro.steps[i];
                 const step = currentStep;
+                // 用户已请求停止:在执行本步前干净退出(天然覆盖 pause 步骤 resume 后的下一轮迭代)
+                if (this.cancelled) {
+                    throw new Error('回放已被用户停止。');
+                }
                 // 翻页步骤正常回放时跳过,改由提取流程在采完一页后驱动
                 if (step.pagination) {
                     logInfo(`第 ${i + 1}/${macro.steps.length} 步为翻页动作,正常回放跳过。`);
@@ -222,6 +249,11 @@ export class MacroRunner {
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${describeStep(step)} —— 执行中`);
                 await this.executeStep(activePage, step, i, context);
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${step.type} —— 完成`);
+            }
+
+            // 提取阶段前再检查一次;提取阶段本身若被停止,靠 cancel() 关 context 强制中断
+            if (this.cancelled) {
+                throw new Error('回放已被用户停止。');
             }
 
             let rows: ExtractRow[] | undefined;
@@ -268,6 +300,11 @@ export class MacroRunner {
             }
             return { ok: true, rows, downloads: downloads.length > 0 ? downloads : undefined };
         } catch (err) {
+            // 用户主动停止:不当作失败,不尝试错误截图(此时页面/context 多半已关会抛错)
+            if (this.cancelled) {
+                logInfo('回放已被用户停止。');
+                return { ok: false, cancelled: true };
+            }
             const message = err instanceof Error ? err.message : String(err);
             const selector =
                 currentStep && 'selector' in currentStep ? currentStep.selector : undefined;
@@ -293,12 +330,21 @@ export class MacroRunner {
             }
             return { ok: false, error: runError };
         } finally {
-            // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser
+            // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser。
+            // 停止(cancel)时 context 可能已被关过,故各自 try/catch,避免二次 close 抛错覆盖返回值。
             if (context) {
-                await context.close();
+                try {
+                    await context.close();
+                } catch {
+                    /* 已关闭等异常忽略 */
+                }
             }
             if (browser) {
-                await browser.close();
+                try {
+                    await browser.close();
+                } catch {
+                    /* 已关闭等异常忽略 */
+                }
             }
             if (context || browser) {
                 logInfo('浏览器已关闭。');

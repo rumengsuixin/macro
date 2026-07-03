@@ -224,6 +224,22 @@ function registerIpc(): void {
         ensureDirs();
         const sessionOptions = await buildSessionOptions();
         const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions, downloadsDir);
+
+        // 「停止回放」信号:匹配 runId 时调用 runner.cancel() 主动中止(与 resume 同一 runId 隔离机制)
+        const stopListener = (_ev: unknown, id: number): void => {
+            if (id !== runId) {
+                return; // 非本次运行的信号,忽略
+            }
+            runner.cancel();
+        };
+        ipcMain.on('stop-macro', stopListener);
+        listeners.push(() => ipcMain.removeListener('stop-macro', stopListener));
+
+        // 通知渲染进程:本次运行已开始(带 runId),供其「停止回放」按钮回传对应 runId
+        if (!wc.isDestroyed()) {
+            wc.send('macro-run-started', { runId });
+        }
+
         try {
             const result = await runner.run(macro);
             if (result.ok && result.downloads && result.downloads.length > 0) {
