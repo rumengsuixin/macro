@@ -147,11 +147,12 @@ function flushPendingFill(): void {
     }
 }
 
-/** 向上寻找更有意义的可点击祖先(按钮 / 链接),避免选中图标 span 等叶子节点 */
+/** 向上寻找更有意义的可点击祖先(按钮 / 链接),避免选中图标 span 等叶子节点。
+ * 深度 8:FB 等站点的 div[role=button] 常在叶子之上 5~7 层,4 层不够。 */
 function resolveClickable(el: Element): Element {
     let node: Element | null = el;
     let depth = 0;
-    while (node && depth < 4) {
+    while (node && depth < 8) {
         if (node.tagName === 'A' || node.tagName === 'BUTTON' || node.getAttribute('role') === 'button') {
             return node;
         }

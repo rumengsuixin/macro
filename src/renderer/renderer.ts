@@ -1744,14 +1744,22 @@ async function locateAndSnapshot(selector: string, fingerprint: unknown): Promis
     }
 }
 
-/** 实测校正后的选择器:必须恰好命中 1 个且是被标记的目标元素 */
-async function verifyFixed(selector: string): Promise<{ count: number; ok: boolean; invalid: boolean }> {
+/**
+ * 实测校正后的选择器:必须恰好命中 1 个且命中了被标记的目标元素。
+ * acceptClickable=true(点击步骤)时,命中目标的可点击祖先/后代亦算通过(与离线判定同规则)。
+ */
+async function verifyFixed(
+    selector: string,
+    acceptClickable: boolean
+): Promise<{ count: number; ok: boolean; invalid: boolean }> {
     const code =
-        '(function(){var p=' + JSON.stringify({ selector }) + ';var MARK="data-macro-fix";' +
+        '(function(){var p=' + JSON.stringify({ selector, acceptClickable }) + ';var MARK="data-macro-fix";' +
         'function q(sel){try{if(sel.indexOf("xpath=")===0){var xr=document.evaluate(sel.slice(6),document,null,7,null);var a=[];for(var i=0;i<xr.snapshotLength;i++){a.push(xr.snapshotItem(i));}return a;}return Array.prototype.slice.call(document.querySelectorAll(sel));}catch(e){return null;}}' +
+        'function act(el){var t=el.tagName?el.tagName.toLowerCase():"";if(t==="a"||t==="button")return true;var r=(el.getAttribute&&el.getAttribute("role"))||"";return ["button","link","tab","menuitem","option","checkbox","radio","switch"].indexOf(r)>=0;}' +
+        'function hit(mm,tt){if(mm===tt)return true;if(!p.acceptClickable)return false;if(mm.contains(tt)&&act(mm))return true;if(tt.contains(mm))return true;return false;}' +
         'var m=q(p.selector);if(m===null)return{invalid:true,count:0,ok:false};' +
         'var marked=null;try{marked=document.querySelector("["+MARK+"]");}catch(e){}' +
-        'return{count:m.length,ok:(m.length===1&&!!marked&&m[0]===marked),invalid:false};})()';
+        'return{count:m.length,ok:(m.length===1&&!!marked&&hit(m[0],marked)),invalid:false};})()';
     try {
         const raw = await webview.executeJavaScript(code);
         const r = (raw && typeof raw === 'object' ? raw : {}) as { count?: number; ok?: boolean; invalid?: boolean };
@@ -1772,13 +1780,47 @@ async function clearFixMarker(): Promise<void> {
     }
 }
 
+/** 元素是否「可点击」(点击语义的祖先白名单):tag=a/button 或 role∈交互角色集 */
+function isActionable(el: Element): boolean {
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'a' || tag === 'button') {
+        return true;
+    }
+    const role = (el.getAttribute && el.getAttribute('role')) || '';
+    return ['button', 'link', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch'].indexOf(role) >= 0;
+}
+
+/**
+ * 命中元素 match 是否算「命中了目标 target」。
+ * - 严格:match===target。
+ * - 点击步骤放宽(acceptClickable):还接受「match 是目标的可点击祖先」或「match 是目标内后代」——
+ *   点外层 role=button 与点里层 span 对点击等效;用「可点击」把关,挡掉仅仅包含目标的大容器。
+ */
+function matchHitsTarget(match: Element, target: Element, acceptClickable: boolean): boolean {
+    if (match === target) {
+        return true;
+    }
+    if (!acceptClickable) {
+        return false;
+    }
+    if (match.contains(target) && isActionable(match)) {
+        return true; // 可点击祖先
+    }
+    if (target.contains(match)) {
+        return true; // 目标内后代
+    }
+    return false;
+}
+
 /**
  * 离线验证:在录制时抓的邻域子树(contextHtml,目标带 data-macro-cap 标记)里,
- * 校验 AI 新选择器是否「唯一命中且正是被标记的目标」。纯 DOMParser,无 webview、与当前页无关。
+ * 校验 AI 新选择器是否「唯一命中且命中了目标」。纯 DOMParser,无 webview、与当前页无关。
+ * acceptClickable=true(点击步骤)时,命中目标的可点击祖先/后代亦算通过。
  */
 function verifyAgainstCapture(
     selector: string,
-    cap: StepCapture
+    cap: StepCapture,
+    acceptClickable: boolean
 ): { count: number; ok: boolean; invalid: boolean } {
     let doc: Document;
     try {
@@ -1801,7 +1843,8 @@ function verifyAgainstCapture(
     } catch {
         return { count: 0, ok: false, invalid: true };
     }
-    return { count: matches.length, ok: matches.length === 1 && !!target && matches[0] === target, invalid: false };
+    const ok = matches.length === 1 && !!target && matchHitsTarget(matches[0], target, acceptClickable);
+    return { count: matches.length, ok, invalid: false };
 }
 
 /**
@@ -1831,7 +1874,7 @@ async function fixWithCapture(
             return 'fail';
         }
         sessionKey = res.sessionKey ?? sessionKey;
-        const v = verifyAgainstCapture(res.selector, cap);
+        const v = verifyAgainstCapture(res.selector, cap, step.type === 'click');
         if (v.ok) {
             const old = String(step.selector);
             step.selector = res.selector;
@@ -1879,7 +1922,7 @@ async function fixWithLiveDom(index: number, step: Step, selector: string): Prom
                 return 'fail';
             }
             sessionKey = res.sessionKey ?? sessionKey;
-            const v = await verifyFixed(res.selector);
+            const v = await verifyFixed(res.selector, step.type === 'click');
             if (v.ok) {
                 const old = String(step.selector);
                 step.selector = res.selector;
