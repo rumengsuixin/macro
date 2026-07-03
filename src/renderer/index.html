@@ -116,30 +116,6 @@
             z-index: 5;
         }
 
-        /* 品牌区:🐟 二爪鱼 + 副标题 */
-        .brand {
-            display: flex;
-            align-items: baseline;
-            gap: 10px;
-        }
-
-        .brand-logo {
-            font-size: 20px;
-            line-height: 1;
-            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .3));
-            transform: translateY(2px);
-        }
-
-        .brand-name {
-            font-size: 19px;
-            font-weight: 800;
-            letter-spacing: 2px;
-            background: linear-gradient(92deg, #6ff0e6 0%, #b6f5c7 45%, #ffb89f 100%);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
         .row {
             display: flex;
             align-items: center;
@@ -1259,10 +1235,6 @@
 <body>
     <div class="app">
         <div class="toolbar">
-            <div class="brand">
-                <span class="brand-logo">🐟</span>
-                <span class="brand-name">二爪鱼</span>
-            </div>
             <div class="row">
                 <label>地址</label>
                 <input type="text" id="address" placeholder="输入网址,如 https://books.toscrape.com/" />
@@ -1272,18 +1244,17 @@
             <div class="row">
                 <label title="给这套操作起名字,便于保存 / 区分">任务名称</label>
                 <input type="text" id="macro-name" value="demo-task" />
+                <!-- 动作按钮按优先级平铺;超过显示数量的靠后按钮由 renderer.ts 自动收进「更多」 -->
                 <button id="start" class="danger" title="开始记录你在网页里的点击、输入等操作">开始录制</button>
                 <button id="stop" disabled title="结束记录">停止录制</button>
                 <button id="run" class="ok" title="自动重放刚才的操作并采集数据">运行宏</button>
                 <button id="stop-run" class="danger" disabled title="中止正在自动运行的任务">停止回放</button>
+                <button id="save" title="把操作 + 采集配置存成文件,下次可复用">保存宏</button>
+                <button id="load" title="打开之前保存的操作文件">加载宏</button>
                 <button id="export" class="ok" title="把采集到的数据存为 Excel 表格">导出 Excel</button>
                 <div class="more-wrap">
                     <button id="more-btn" type="button" title="更多操作">更多 ▾</button>
-                    <div id="more-menu" class="more-menu">
-                        <button id="save" title="把操作 + 采集配置存成文件,下次可复用">保存宏</button>
-                        <button id="load" title="打开之前保存的操作文件">加载宏</button>
-                        <button id="add-pause" title="在末尾加一个『暂停等人工操作』步骤(如登录 / 验证码)">插入暂停</button>
-                    </div>
+                    <div id="more-menu" class="more-menu"></div>
                 </div>
                 <label class="adv-toggle" title="显示 AI 生成规则、提取规则 JSON、插件、登录状态等高级设置">
                     <input type="checkbox" id="advanced-mode" /> ✨ 高级

@@ -196,7 +196,6 @@ const runBtn = byId<HTMLButtonElement>('run');
 const stopRunBtn = byId<HTMLButtonElement>('stop-run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
-const addPauseBtn = byId<HTMLButtonElement>('add-pause');
 const exportBtn = byId<HTMLButtonElement>('export');
 const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
@@ -1253,10 +1252,6 @@ runBtn.addEventListener('click', async () => {
         activeRunId = null; // 本次运行结束,清 runId
         hidePauseModal(); // 清理可能残留的暂停模态框(如超时失败返回时)
     }
-});
-
-addPauseBtn.addEventListener('click', () => {
-    insertPause(steps.length);
 });
 
 saveBtn.addEventListener('click', async () => {
@@ -2383,14 +2378,29 @@ function setupAdvancedMode(): void {
     });
 }
 
+// 工具栏动作按钮:顺序即优先级;超过「显示数量」且排在后面的自动收进「更多」下拉。
+// 改顺序 / 显示数量只改这两个常量即可,溢出规则自动生效。
+const TOOLBAR_ACTIONS = ['start', 'stop', 'run', 'stop-run', 'save', 'load', 'export'];
+const MAX_VISIBLE_ACTIONS = 6;
+
 /**
- * 「更多」下拉:把保存 / 加载 / 插入暂停三个次要按钮收起,主工具栏更清爽。
- * 只管开合与「点外部收起」,内部按钮的既有事件绑定完全不动。
+ * 工具栏「更多」下拉:①按规则把超出显示数量的靠后按钮移进下拉(自动溢出),
+ * 无溢出则隐藏「更多」;②开合与「点外部收起」。按钮事件均按 id 绑定,移动 DOM 不受影响。
  */
 function setupMoreMenu(): void {
+    const wrap = document.querySelector<HTMLElement>('.more-wrap');
     const btn = document.getElementById('more-btn');
     const menu = document.getElementById('more-menu');
-    if (!btn || !menu) return;
+    if (!wrap || !btn || !menu) return;
+
+    // 溢出:下标 ≥ 显示数量的按钮依次移入「更多」(保持顺序);移动后 .more-wrap 自然落到最后一个可见按钮之后
+    const overflow = TOOLBAR_ACTIONS.slice(MAX_VISIBLE_ACTIONS);
+    for (const id of overflow) {
+        const el = document.getElementById(id);
+        if (el) menu.appendChild(el);
+    }
+    wrap.style.display = menu.childElementCount > 0 ? '' : 'none';
+
     btn.addEventListener('click', (e) => {
         e.stopPropagation(); // 防冒泡到 document 立即被下面的关闭逻辑收起
         menu.classList.toggle('open');
