@@ -180,7 +180,6 @@ const runBtn = byId<HTMLButtonElement>('run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
 const addPauseBtn = byId<HTMLButtonElement>('add-pause');
-const aiFixAllBtn = byId<HTMLButtonElement>('ai-fix-all');
 const exportBtn = byId<HTMLButtonElement>('export');
 const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
@@ -209,6 +208,64 @@ let pendingPick: PickedHandler | null = null;
 // 用对象引用而非下标:step 对象在 splice/push 中保持身份不变,插入/删除/拖拽后仍能命中;
 // 加载新宏时整个 steps 数组被替换为新对象,旧记录自动被 GC。
 const expandedScrollGroups = new WeakSet<Step>();
+
+// ===== 步骤撤销/重做(通用快照机制)=====
+// 不给每种操作写逆操作,而是在 renderSteps() 顶部自动 diff `steps` 的 JSON:
+// 所有改动 steps 的代码都紧跟一次 renderSteps(),非改动型渲染(展开/折叠)不改内容不入栈。
+// 天然覆盖一切(现有与未来)步骤操作。会话内内存栈,不持久化。
+let undoStack: string[] = []; // 历史快照(JSON 串,存「变更前」状态)
+let redoStack: string[] = [];
+let lastStepsJson = '[]'; // 上次渲染时 steps 的 JSON
+let applyingHistory = false; // 撤销/重做过程中,不再记账
+const UNDO_LIMIT = 100;
+
+/** 在 renderSteps() 最顶部调用:侦测 steps 是否变化,变了就把「上一态」压入撤销栈 */
+function captureHistoryOnRender(): void {
+    if (applyingHistory) {
+        return;
+    }
+    const cur = JSON.stringify(steps);
+    if (cur !== lastStepsJson) {
+        undoStack.push(lastStepsJson);
+        if (undoStack.length > UNDO_LIMIT) {
+            undoStack.shift();
+        }
+        redoStack = []; // 出现新改动 → redo 失效
+        lastStepsJson = cur;
+    }
+}
+
+/** 撤销:恢复上一份 steps 快照 */
+function undoSteps(): void {
+    if (!undoStack.length) {
+        logLocal('没有可撤销的步骤操作。');
+        return;
+    }
+    redoStack.push(lastStepsJson);
+    const prev = undoStack.pop() as string;
+    applyingHistory = true;
+    steps = JSON.parse(prev) as Step[];
+    lastStepsJson = prev;
+    renderSteps();
+    applyingHistory = false;
+    logLocal('已撤销上一步步骤改动。');
+}
+
+/** 重做:恢复被撤销掉的 steps 快照 */
+function redoSteps(): void {
+    if (!redoStack.length) {
+        logLocal('没有可重做的步骤操作。');
+        return;
+    }
+    undoStack.push(lastStepsJson);
+    const next = redoStack.pop() as string;
+    applyingHistory = true;
+    steps = JSON.parse(next) as Step[];
+    lastStepsJson = next;
+    renderSteps();
+    applyingHistory = false;
+    logLocal('已重做步骤改动。');
+}
 
 // ===== 日志 =====
 function appendLog(message: string, level: 'info' | 'error', time?: string): void {
@@ -331,6 +388,7 @@ function isGroupableScroll(step: Step): boolean {
 }
 
 function renderSteps(): void {
+    captureHistoryOnRender(); // 渲染前记账:steps 相对上次渲染若有变化则压入撤销栈
     stepsEl.innerHTML = '';
     let i = 0;
     while (i < steps.length) {
@@ -1673,50 +1731,6 @@ async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'
     }
 }
 
-function setFixBusy(busy: boolean): void {
-    aiFixAllBtn.disabled = busy;
-    aiFixAllBtn.textContent = busy ? 'AI 校正中…' : '🤖 AI 校正选择器';
-}
-
-/** 批量校正:遍历所有带选择器的步骤逐个 AI 校正 */
-async function fixAllSelectors(): Promise<void> {
-    const targets: number[] = [];
-    steps.forEach((s, i) => {
-        if (typeof (s as { selector?: unknown }).selector === 'string' && (s as { selector?: string }).selector) {
-            targets.push(i);
-        }
-    });
-    if (!targets.length) {
-        logLocal('没有带选择器的步骤可校正。');
-        return;
-    }
-    const url = safeGetUrl();
-    if (!url || url === 'about:blank') {
-        logLocal('请先在上方打开对应网页(校正基于当前页面真实 DOM),再批量校正选择器。', 'error');
-        return;
-    }
-    setFixBusy(true);
-    logLocal(`开始 AI 批量校正选择器:共 ${targets.length} 个带选择器的步骤……`);
-    let fixed = 0;
-    let skip = 0;
-    let fail = 0;
-    try {
-        for (const i of targets) {
-            const r = await fixStepSelector(i);
-            if (r === 'fixed') fixed += 1;
-            else if (r === 'skip') skip += 1;
-            else fail += 1;
-        }
-    } finally {
-        setFixBusy(false);
-    }
-    logLocal(`AI 批量校正完成:校正 ${fixed} 个、跳过 ${skip} 个、未成功 ${fail} 个。改动尚未落盘,请点「保存宏」。`);
-}
-
-aiFixAllBtn.addEventListener('click', () => {
-    void fixAllSelectors();
-});
-
 aiGenerateBtn.addEventListener('click', async () => {
     const url = safeGetUrl();
     if (!url || url === 'about:blank') {
@@ -1945,6 +1959,30 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && pendingPick) {
         e.preventDefault();
         cancelPick();
+    }
+});
+
+// 录制步骤面板撤销/重做:Ctrl+Z 撤销、Ctrl+Shift+Z 或 Ctrl+Y 重做。
+// 焦点在可编辑控件(地址栏/宏名/需求框/JSON 框/内联对话框输入)时放行给浏览器原生文本撤销,不误伤。
+// <webview> guest 内的按键不冒泡到宿主 document,故在浏览器里操作不会误触步骤撤销。
+document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) {
+        return;
+    }
+    const k = e.key.toLowerCase();
+    if (k !== 'z' && k !== 'y') {
+        return;
+    }
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+        return;
+    }
+    if (k === 'y' || (k === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redoSteps();
+    } else if (k === 'z') {
+        e.preventDefault();
+        undoSteps();
     }
 });
 
