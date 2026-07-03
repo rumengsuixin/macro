@@ -2314,6 +2314,54 @@ function setupMainDivider(): void {
     });
 }
 
+const LOG_HEIGHT_KEY = 'macro.logHeight';
+const LOG_MIN = 90; // 日志区最矮
+const LOG_MAX_RATIO = 0.6; // 日志区最高不超过整窗高度的 60%,保证上方可见
+
+/** 把日志区高度写到样式(同时设 flex-basis 与 height,覆盖 CSS 固定值) */
+function applyLogHeight(logwrap: HTMLElement, h: number): void {
+    logwrap.style.flex = '0 0 ' + h + 'px';
+    logwrap.style.height = h + 'px';
+}
+
+/** 初始化上下分隔条拖动:实时调整日志区高度(向上拖变高),松开后存 localStorage */
+function setupLogDivider(): void {
+    const divider = document.getElementById('log-divider');
+    const app = document.querySelector<HTMLElement>('.app');
+    const main = document.querySelector<HTMLElement>('.main');
+    const logwrap = document.querySelector<HTMLElement>('.logwrap');
+    if (!divider || !app || !main || !logwrap) return;
+
+    const maxHeight = (): number => app.getBoundingClientRect().height * LOG_MAX_RATIO;
+
+    // 启动时恢复上次高度(合法才应用)
+    const saved = Number(localStorage.getItem(LOG_HEIGHT_KEY));
+    if (Number.isFinite(saved) && saved >= LOG_MIN) {
+        applyLogHeight(logwrap, Math.min(saved, maxHeight() || saved));
+    }
+
+    const onMove = (e: MouseEvent): void => {
+        // 日志区在底部,鼠标越往上(clientY 越小)日志区越高
+        let h = app.getBoundingClientRect().bottom - e.clientY;
+        h = Math.max(LOG_MIN, Math.min(h, maxHeight()));
+        applyLogHeight(logwrap, h);
+    };
+    const onUp = (): void => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        main.classList.remove('resizing'); // 复用同一规则遮住 webview 防吞事件
+        divider.classList.remove('dragging');
+        localStorage.setItem(LOG_HEIGHT_KEY, String(Math.round(logwrap.getBoundingClientRect().height)));
+    };
+    divider.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        main.classList.add('resizing');
+        divider.classList.add('dragging');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
 // ===== 主页简化:高级模式开关 + 「更多」下拉 =====
 const ADV_MODE_KEY = 'macro.advancedMode';
 
@@ -2371,6 +2419,7 @@ async function init(): Promise<void> {
     addressInput.value = 'https://books.toscrape.com/';
     setRecordingUI(false);
     setupMainDivider();
+    setupLogDivider();
     setupAdvancedMode();
     setupMoreMenu();
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));

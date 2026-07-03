@@ -1083,6 +1083,29 @@
         }
 
         /* ============================ 日志区 ============================ */
+        /* 上下分隔条:拖动调整日志区高度(与左右分隔条 .main-divider 同款) */
+        .log-divider {
+            flex: 0 0 8px;
+            cursor: row-resize;
+            background: transparent;
+            position: relative;
+            transition: background .12s;
+        }
+
+        .log-divider::before {
+            content: "";
+            position: absolute;
+            inset: 2px 42% ;
+            border-radius: var(--r-pill);
+            background: var(--border-strong);
+            transition: background .12s;
+        }
+
+        .log-divider:hover::before,
+        .log-divider.dragging::before {
+            background: var(--primary);
+        }
+
         .logwrap {
             height: 180px;
             flex: 0 0 180px;
@@ -1249,7 +1272,6 @@
             <div class="brand">
                 <span class="brand-logo">🐟</span>
                 <span class="brand-name">二爪鱼</span>
-                <span class="brand-tag">网页采集小助手</span>
             </div>
             <div class="row">
                 <label>地址</label>
@@ -1369,6 +1391,7 @@
             </div>
         </div>
 
+        <div class="log-divider" id="log-divider" title="拖动调整日志区高度"></div>
         <div class="logwrap">
             <div class="panel-title">日志</div>
             <div id="log"></div>

@@ -69,6 +69,8 @@ function createWindow(): void {
         width: 1280,
         height: 860,
         title: '网页宏录制工具',
+        // 应用图标(与主页 🐟「二爪鱼」品牌一致);打包态 projectRoot 指向 asar 根,assets 已随包
+        icon: path.join(projectRoot, 'assets', 'icon.ico'),
         // 与 index.html body 背景一致,消除窗口首帧白底闪烁
         backgroundColor: '#f3f4f6',
         // 先不显示,等首帧可绘制(ready-to-show)再显示,避免白屏
