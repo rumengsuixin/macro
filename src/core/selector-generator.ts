@@ -6,7 +6,7 @@
 //
 // 优先级:data-testid > id > name > aria-label > role+文本 > class > css path > xpath 兜底。
 
-import type { ElementFingerprint } from './macro-types';
+import type { ElementFingerprint, StepCapture } from './macro-types';
 
 /**
  * 为给定元素生成稳定的 selector。
@@ -108,6 +108,90 @@ export function buildFingerprint(el: Element): ElementFingerprint {
         fp.anchor = anchor;
     }
     return fp;
+}
+
+/** 邻域子树 HTML 体积上限:超过则退到更靠近目标的祖先,控制旁车体积 */
+const CTX_CAP = 40000;
+
+/**
+ * 录制时抓取元素的 DOM 上下文快照(供「AI 校正选择器」离线重挑,不依赖当前页面)。
+ * - outerHTML / ancestors:喂给 AI(与实时路径 locateAndSnapshot 同格式)。
+ * - contextHtml:目标最近的、outerHTML ≤ CTX_CAP 的祖先子树,**目标元素上带临时标记 data-macro-cap**,
+ *   仅供离线验证识别目标;取完立即移除标记(同步、无副作用,录制不监听属性变更)。
+ */
+export function buildElementContext(el: Element): StepCapture {
+    if (!el || el.nodeType !== 1) {
+        return { outerHTML: '', ancestors: '', contextHtml: '' };
+    }
+    // 选邻域根:从 el 向上 ≤6 层,取 outerHTML ≤ CTX_CAP 的最高祖先;都超限则用 el 自身
+    let contextRoot: Element = el;
+    let node: Element | null = el.parentElement;
+    let depth = 0;
+    while (node && node.nodeType === 1 && node.tagName.toLowerCase() !== 'html' && depth < 6) {
+        const len = (node.outerHTML || '').length;
+        if (len > CTX_CAP) {
+            break;
+        }
+        contextRoot = node;
+        node = node.parentElement;
+        depth += 1;
+    }
+
+    const MARK = 'data-macro-cap';
+    let contextHtml = '';
+    try {
+        el.setAttribute(MARK, '1');
+        contextHtml = contextRoot.outerHTML || '';
+    } finally {
+        el.removeAttribute(MARK);
+    }
+
+    // 移除标记后采集(不含标记),AI 只看这两项
+    let outerHTML = el.outerHTML || '';
+    if (outerHTML.length > 2500) {
+        outerHTML = outerHTML.slice(0, 2500) + '…(截断)';
+    }
+    const ancestors = buildAncestorSummary(el);
+    return { outerHTML, ancestors, contextHtml };
+}
+
+/** 祖先链摘要(tag+id+稳定属性+class,从近到远,≤6 层),与 renderer 实时路径同格式 */
+function buildAncestorSummary(el: Element): string {
+    const lines: string[] = [];
+    let node: Element | null = el.parentElement;
+    let depth = 0;
+    while (node && node.nodeType === 1 && node.tagName.toLowerCase() !== 'html' && depth < 6) {
+        let seg = node.tagName.toLowerCase();
+        if (node.id) {
+            seg += `#${node.id}`;
+        }
+        const attrs: string[] = [];
+        for (const a of ['role', 'aria-label', 'name', 'type', 'data-testid', 'data-test', 'data-cy']) {
+            const val = node.getAttribute && node.getAttribute(a);
+            if (val) {
+                attrs.push(`${a}=${JSON.stringify(val)}`);
+            }
+        }
+        const cnAny = node.className as unknown as { baseVal?: string };
+        const cls = (
+            cnAny && cnAny.baseVal !== undefined
+                ? cnAny.baseVal
+                : typeof node.className === 'string'
+                  ? node.className
+                  : ''
+        ).trim();
+        let line = seg;
+        if (attrs.length) {
+            line += ` [${attrs.join(' ')}]`;
+        }
+        if (cls) {
+            line += ` class="${cls.split(/\s+/).slice(0, 6).join(' ')}"`;
+        }
+        lines.push(line);
+        node = node.parentElement;
+        depth += 1;
+    }
+    return lines.join('\n');
 }
 
 /** 从元素向上(不含自身)找最近一个能被稳定锚点唯一标识的祖先,返回其选择器 */

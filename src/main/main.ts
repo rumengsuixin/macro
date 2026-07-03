@@ -8,12 +8,13 @@ import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
 import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
-import { saveMacro, loadMacro } from '../storage/macro-store';
+import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import type {
     Macro,
+    MacroCaptures,
     ExtractRow,
     RunResult,
     PostProcessResult,
@@ -132,43 +133,60 @@ function createWindow(): void {
 function registerIpc(): void {
     ipcMain.handle('get-webview-preload-path', () => webviewPreloadPath);
 
-    ipcMain.handle('save-macro', async (_e, macro: Macro): Promise<string | null> => {
-        const safeName = (macro.name || 'macro').replace(/[\\/:*?"<>|]/g, '_');
-        const result = await dialog.showSaveDialog(mainWindow!, {
-            title: '保存宏',
-            defaultPath: path.join(macrosDir, `${safeName}.json`),
-            filters: [{ name: 'JSON 宏文件', extensions: ['json'] }],
-        });
-        if (result.canceled || !result.filePath) {
-            logInfo('已取消保存宏。');
-            return null;
+    ipcMain.handle(
+        'save-macro',
+        async (_e, macro: Macro, captures?: MacroCaptures | null): Promise<string | null> => {
+            const safeName = (macro.name || 'macro').replace(/[\\/:*?"<>|]/g, '_');
+            const result = await dialog.showSaveDialog(mainWindow!, {
+                title: '保存宏',
+                defaultPath: path.join(macrosDir, `${safeName}.json`),
+                filters: [{ name: 'JSON 宏文件', extensions: ['json'] }],
+            });
+            if (result.canceled || !result.filePath) {
+                logInfo('已取消保存宏。');
+                return null;
+            }
+            const saved = await saveMacro(macro, result.filePath);
+            // 旁车上下文(离线 AI 校正用):有则写、无则清旧旁车。失败不致命
+            try {
+                await saveMacroCaptures(saved, captures);
+            } catch (err) {
+                logError(`保存选择器上下文旁车失败(不影响宏):${(err as Error).message}`);
+            }
+            logInfo(`宏已保存:${saved}`);
+            return saved;
         }
-        const saved = await saveMacro(macro, result.filePath);
-        logInfo(`宏已保存:${saved}`);
-        return saved;
-    });
+    );
 
-    ipcMain.handle('load-macro', async (): Promise<Macro | null> => {
-        const result = await dialog.showOpenDialog(mainWindow!, {
-            title: '加载宏',
-            defaultPath: fs.existsSync(examplesDir) ? examplesDir : macrosDir,
-            properties: ['openFile'],
-            filters: [{ name: 'JSON 宏文件', extensions: ['json'] }],
-        });
-        if (result.canceled || result.filePaths.length === 0) {
-            logInfo('已取消加载宏。');
-            return null;
+    ipcMain.handle(
+        'load-macro',
+        async (): Promise<{ macro: Macro; captures: MacroCaptures | null } | null> => {
+            const result = await dialog.showOpenDialog(mainWindow!, {
+                title: '加载宏',
+                defaultPath: fs.existsSync(examplesDir) ? examplesDir : macrosDir,
+                properties: ['openFile'],
+                filters: [{ name: 'JSON 宏文件', extensions: ['json'] }],
+            });
+            if (result.canceled || result.filePaths.length === 0) {
+                logInfo('已取消加载宏。');
+                return null;
+            }
+            try {
+                const macro = await loadMacro(result.filePaths[0]);
+                const captures = await loadMacroCaptures(result.filePaths[0]);
+                logInfo(
+                    `宏已加载:${result.filePaths[0]}(${macro.steps.length} 个步骤` +
+                        (captures ? `,含选择器上下文旁车` : '') +
+                        `)`
+                );
+                return { macro, captures };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                logError(`加载宏失败:${message}`);
+                throw err;
+            }
         }
-        try {
-            const macro = await loadMacro(result.filePaths[0]);
-            logInfo(`宏已加载:${result.filePaths[0]}(${macro.steps.length} 个步骤)`);
-            return macro;
-        } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            logError(`加载宏失败:${message}`);
-            throw err;
-        }
-    });
+    );
 
     ipcMain.handle('run-macro', async (e, macro: Macro): Promise<RunResult> => {
         const runId = ++runSeq;

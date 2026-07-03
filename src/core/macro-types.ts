@@ -37,6 +37,35 @@ export interface ElementFingerprint {
     anchor?: string;
 }
 
+/**
+ * 元素录制时的 DOM 上下文快照:供「AI 校正选择器」离线(不依赖当前页面)重挑选择器。
+ * 录制那一刻元素一定存在,故在此抓取;存到宏同名的旁车文件 `<宏名>.captures.json`,宏本体不含。
+ */
+export interface StepCapture {
+    /** 目标元素 outerHTML(截断,不含临时标记),喂给 AI */
+    outerHTML: string;
+    /** 祖先链摘要(tag+id+稳定属性+class,从近到远),喂给 AI */
+    ancestors: string;
+    /**
+     * 邻域子树 HTML(目标最近的、体积受控的祖先 outerHTML,目标元素上带 data-macro-cap 标记):
+     * 仅供离线验证「AI 新选择器在此子树内是否唯一命中被标记的目标」,AI 不接触。
+     */
+    contextHtml: string;
+}
+
+/** 旁车单条:与宏 steps 同序对齐;非选择器步骤或无上下文为 null。带 type/selector 作加载时的一致性校验 */
+export interface CaptureEntry {
+    type: string;
+    selector: string;
+    capture: StepCapture;
+}
+
+/** 宏旁车文件结构(`<宏名>.captures.json`):steps 与宏 steps 同序对齐 */
+export interface MacroCaptures {
+    version: number;
+    steps: (CaptureEntry | null)[];
+}
+
 /** 点击元素 */
 export interface ClickStep {
     type: 'click';

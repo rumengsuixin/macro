@@ -91,10 +91,22 @@ interface BrowserConfig {
     useSystemChrome: boolean;
 }
 
+/** 元素录制时的 DOM 上下文(离线 AI 校正用),与 core 的 StepCapture 对应 */
+interface StepCapture {
+    outerHTML: string;
+    ancestors: string;
+    contextHtml: string;
+}
+/** 宏旁车结构(与宏 steps 同序对齐) */
+interface MacroCaptures {
+    version: number;
+    steps: ({ type: string; selector: string; capture: StepCapture } | null)[];
+}
+
 interface ElectronAPI {
     getWebviewPreloadPath(): Promise<string>;
-    saveMacro(macro: Macro): Promise<string | null>;
-    loadMacro(): Promise<Macro | null>;
+    saveMacro(macro: Macro, captures?: MacroCaptures | null): Promise<string | null>;
+    loadMacro(): Promise<{ macro: Macro; captures: MacroCaptures | null } | null>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
@@ -202,12 +214,47 @@ let steps: Step[] = [];
 let lastRows: Record<string, string>[] = [];
 // 元素拾取(通用「取选择器+回调」服务):pendingPick 保存当前这次拾取的消费回调,
 // null 表示无进行中的拾取。用途由发起方通过回调决定(本文件 fingerprint 暂不消费,故用 unknown)。
-type PickedHandler = (selector: string, fingerprint?: unknown) => void;
+type PickedHandler = (selector: string, fingerprint?: unknown, context?: unknown) => void;
 let pendingPick: PickedHandler | null = null;
 // 已展开的连续滚动组——按「组首 step 对象引用」记录;默认折叠(不在集合里即折叠)。
 // 用对象引用而非下标:step 对象在 splice/push 中保持身份不变,插入/删除/拖拽后仍能命中;
 // 加载新宏时整个 steps 数组被替换为新对象,旧记录自动被 GC。
 const expandedScrollGroups = new WeakSet<Step>();
+
+// ===== 步骤元素上下文(离线 AI 校正选择器)=====
+// 录制时抓的 {outerHTML,ancestors,contextHtml} 存这里,按步骤内存字段 `cid` 关联。
+// 用 cid+Map(而非 WeakSet/WeakMap 按对象身份):undo/redo 走 JSON.parse 会重建 step 对象,
+// 但 cid 是普通字段随之保留,Map 独立于快照,故撤销后仍能查到上下文。cid 保存时从宏 JSON 剥离。
+const stepCaptures = new Map<string, StepCapture>();
+
+/** 生成一个内存用的短唯一 id(优先 crypto.randomUUID,不可用时回退) */
+function genCid(): string {
+    try {
+        return crypto.randomUUID();
+    } catch {
+        return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    }
+}
+
+/** 给某步挂上下文:复用已有 cid(如重新点选刷新),否则分配新 cid;空上下文忽略 */
+function attachCapture(step: Step, context: unknown): void {
+    const cap = context as StepCapture | undefined;
+    if (!cap || !cap.outerHTML) {
+        return;
+    }
+    let cid = typeof step.cid === 'string' ? step.cid : undefined;
+    if (!cid) {
+        cid = genCid();
+        step.cid = cid;
+    }
+    stepCaptures.set(cid, cap);
+}
+
+/** 取某步的录制上下文(无则 undefined) */
+function captureOf(step: Step): StepCapture | undefined {
+    const cid = typeof step.cid === 'string' ? step.cid : undefined;
+    return cid ? stepCaptures.get(cid) : undefined;
+}
 
 // ===== 步骤撤销/重做(通用快照机制)=====
 // 不给每种操作写逆操作,而是在 renderSteps() 顶部自动 diff `steps` 的 JSON:
@@ -541,13 +588,13 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     menu.appendChild(makeMenuItem('🎯', '在此后添加等待元素出现(点选)', () => {
         const at = index + 1;
         closeStepContextMenu();
-        requestPick((selector, fingerprint) => insertWaitForSelector(at, selector, fingerprint));
+        requestPick((selector, fingerprint, context) => insertWaitForSelector(at, selector, fingerprint, context));
     }));
     // 在此后添加「等待元素可点击」步骤(比「出现」更强:等到可交互;点选目标元素)
     menu.appendChild(makeMenuItem('🖱️', '在此后添加等待元素可点击(点选)', () => {
         const at = index + 1;
         closeStepContextMenu();
-        requestPick((selector, fingerprint) => insertWaitForClickable(at, selector, fingerprint));
+        requestPick((selector, fingerprint, context) => insertWaitForClickable(at, selector, fingerprint, context));
     }));
     // fill 步骤:就地修改要填写的文本内容(无需重录/改 JSON)
     if (step.type === 'fill') {
@@ -560,7 +607,7 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         const target = step; // 捕获对象引用:拾取异步期间即使排序变化也能定位到正确步骤
         menu.appendChild(makeMenuItem('🎯', '重新点选此步骤的选择器', () => {
             closeStepContextMenu();
-            requestPick((selector, fingerprint) => {
+            requestPick((selector, fingerprint, context) => {
                 const i = steps.indexOf(target);
                 if (i < 0) {
                     logLocal('该步骤已不存在,选择器未更新。', 'error');
@@ -571,6 +618,8 @@ function showStepContextMenu(x: number, y: number, index: number): void {
                 if (target.type === 'click') {
                     target.fingerprint = fingerprint;
                 }
+                // 刷新该步的录制上下文(重新点选的是新元素/新位置)
+                attachCapture(target, context);
                 renderSteps();
                 logLocal(`步骤 #${i + 1} 的选择器已更新为:${selector}`);
             });
@@ -834,22 +883,27 @@ function requestPick(onPicked: PickedHandler): void {
     logLocal('拾取模式已开启:请在页面中点击目标元素,按 ESC 取消。');
 }
 
-function insertWaitForSelector(at: number, selector: string, fingerprint?: unknown): void {
+function insertWaitForSelector(at: number, selector: string, fingerprint?: unknown, context?: unknown): void {
     const clamped = Math.max(0, Math.min(at, steps.length));
     // 一并保存语义指纹:供「AI 校正选择器」在旧选择器失效时重定位元素
-    steps.splice(clamped, 0, { type: 'waitForSelector', selector, ...(fingerprint ? { fingerprint } : {}) });
+    const step: Step = { type: 'waitForSelector', selector, ...(fingerprint ? { fingerprint } : {}) };
+    attachCapture(step, context); // 拾取时抓的 DOM 上下文,供离线校正
+    steps.splice(clamped, 0, step);
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素出现」:${selector}`);
 }
 
-function insertWaitForClickable(at: number, selector: string, fingerprint?: unknown): void {
+function insertWaitForClickable(at: number, selector: string, fingerprint?: unknown, context?: unknown): void {
     const clamped = Math.max(0, Math.min(at, steps.length));
-    steps.splice(clamped, 0, { type: 'waitForClickable', selector, ...(fingerprint ? { fingerprint } : {}) });
+    const step: Step = { type: 'waitForClickable', selector, ...(fingerprint ? { fingerprint } : {}) };
+    attachCapture(step, context);
+    steps.splice(clamped, 0, step);
     renderSteps();
     logLocal(`已在第 ${clamped + 1} 步位置添加「等待元素可点击」:${selector}`);
 }
 
-function addStep(step: Step): void {
+function addStep(step: Step, context?: unknown): void {
+    attachCapture(step, context); // 录制来的 click/fill 附带的元素上下文
     steps.push(step);
     renderSteps();
     logLocal(`录制步骤 #${steps.length}:${describeStep(step)}`);
@@ -923,9 +977,16 @@ function armRecorder(on: boolean): void {
 }
 
 // ===== 宏组装 =====
+/** 去掉仅内存字段(cid),保证宏 JSON 干净 */
+function stripInternal(s: Step): Step {
+    const { cid: _cid, ...rest } = s as Step & { cid?: string };
+    return rest;
+}
+
 function buildMacro(): Macro {
     const name = nameInput.value.trim() || 'untitled-macro';
-    const macro: Macro = { name, version: 1, steps };
+    // steps 剥掉内存字段 cid(元素上下文进旁车,不入宏 JSON)
+    const macro: Macro = { name, version: 1, steps: steps.map(stripInternal) };
     const raw = extractInput.value.trim();
     if (raw) {
         macro.extract = JSON.parse(raw); // 解析失败由调用方捕获
@@ -936,6 +997,37 @@ function buildMacro(): Macro {
         macro.postProcess = picked.map((type) => ({ type }));
     }
     return macro;
+}
+
+/** 组装与 steps 同序对齐的旁车上下文(供离线 AI 校正);无上下文的步骤为 null */
+function buildCaptures(): MacroCaptures {
+    return {
+        version: 1,
+        steps: steps.map((s) => {
+            const cap = captureOf(s);
+            const selector = typeof s.selector === 'string' ? s.selector : '';
+            if (cap && selector) {
+                return { type: s.type, selector, capture: cap };
+            }
+            return null;
+        }),
+    };
+}
+
+/** 加载宏后回挂旁车上下文:清空旧 Map,按同序 + type/selector 一致性校验给命中的步骤分配 cid */
+function relinkCaptures(captures: MacroCaptures | null): void {
+    stepCaptures.clear();
+    if (!captures || !Array.isArray(captures.steps)) {
+        return;
+    }
+    steps.forEach((s, i) => {
+        const entry = captures.steps[i];
+        if (entry && entry.capture && entry.type === s.type && entry.selector === s.selector) {
+            const cid = genCid();
+            s.cid = cid;
+            stepCaptures.set(cid, entry.capture);
+        }
+    });
 }
 
 /**
@@ -1137,7 +1229,9 @@ saveBtn.addEventListener('click', async () => {
         return;
     }
     try {
-        const filePath = await window.electronAPI.saveMacro(macro);
+        // 随宏保存旁车上下文(离线 AI 校正用);宏本体不含 cid/DOM
+        const captures = buildCaptures();
+        const filePath = await window.electronAPI.saveMacro(macro, captures);
         if (filePath) {
             logLocal(`宏已保存到:${filePath}`);
         }
@@ -1147,18 +1241,21 @@ saveBtn.addEventListener('click', async () => {
 });
 
 loadBtn.addEventListener('click', async () => {
-    let macro: Macro | null = null;
+    let loaded: { macro: Macro; captures: MacroCaptures | null } | null = null;
     try {
-        macro = await window.electronAPI.loadMacro();
+        loaded = await window.electronAPI.loadMacro();
     } catch (e) {
         logLocal('加载宏失败:' + (e as Error).message, 'error');
         return;
     }
-    if (!macro) {
+    if (!loaded) {
         return;
     }
+    const macro = loaded.macro;
     nameInput.value = macro.name ?? '';
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
+    // 回挂旁车上下文:按同序对齐 + type/selector 一致性校验,给命中的步骤分配 cid 并入 Map
+    relinkCaptures(loaded.captures);
     renderSteps();
     if (macro.extract) {
         extractInput.value = JSON.stringify(macro.extract, null, 4);
@@ -1675,16 +1772,93 @@ async function clearFixMarker(): Promise<void> {
     }
 }
 
-/** 对单个步骤做 AI 选择器校正;返回处理状态供批量汇总 */
-async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'> {
-    const step = steps[index];
-    const selector = step && step.selector;
-    if (typeof selector !== 'string' || !selector) {
-        return 'skip';
+/**
+ * 离线验证:在录制时抓的邻域子树(contextHtml,目标带 data-macro-cap 标记)里,
+ * 校验 AI 新选择器是否「唯一命中且正是被标记的目标」。纯 DOMParser,无 webview、与当前页无关。
+ */
+function verifyAgainstCapture(
+    selector: string,
+    cap: StepCapture
+): { count: number; ok: boolean; invalid: boolean } {
+    let doc: Document;
+    try {
+        doc = new DOMParser().parseFromString(cap.contextHtml, 'text/html');
+    } catch {
+        return { count: 0, ok: false, invalid: false };
     }
+    const target = doc.querySelector('[data-macro-cap]');
+    let matches: Element[];
+    try {
+        if (selector.indexOf('xpath=') === 0) {
+            const xr = doc.evaluate(selector.slice(6), doc, null, 7, null);
+            matches = [];
+            for (let i = 0; i < xr.snapshotLength; i += 1) {
+                matches.push(xr.snapshotItem(i) as Element);
+            }
+        } else {
+            matches = Array.from(doc.querySelectorAll(selector));
+        }
+    } catch {
+        return { count: 0, ok: false, invalid: true };
+    }
+    return { count: matches.length, ok: matches.length === 1 && !!target && matches[0] === target, invalid: false };
+}
+
+/**
+ * 离线校正(方案 A 主路径):用录制时抓的上下文喂 AI、离线验证,与当前页无关。
+ * 元素身份未变故保留原 fingerprint;成功更新 step.selector。
+ */
+async function fixWithCapture(
+    index: number,
+    step: Step,
+    selector: string,
+    cap: StepCapture
+): Promise<'fixed' | 'fail'> {
+    const reason = '当前选择器疑似含框架动态类名 / 随机 id,回放易失效';
+    let feedback: string | undefined;
+    let sessionKey: string | undefined;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const res = await window.electronAPI.aiFixSelector({
+            current: selector,
+            reason,
+            elementHtml: cap.outerHTML,
+            ancestors: cap.ancestors,
+            feedback,
+            sessionKey,
+        });
+        if (!res.ok || !res.selector) {
+            logLocal(`步骤 #${index + 1} AI 校正失败:${res.error || '未返回选择器'}`, 'error');
+            return 'fail';
+        }
+        sessionKey = res.sessionKey ?? sessionKey;
+        const v = verifyAgainstCapture(res.selector, cap);
+        if (v.ok) {
+            const old = String(step.selector);
+            step.selector = res.selector;
+            renderSteps();
+            logLocal(`步骤 #${index + 1} 选择器已校正(离线,${attempt} 轮):${old} → ${res.selector}`);
+            return 'fixed';
+        }
+        if (v.invalid) {
+            feedback = `选择器 \`${res.selector}\` 是非法选择器,请重挑。`;
+        } else if (v.count === 0) {
+            feedback = `选择器 \`${res.selector}\` 在给定的元素上下文里命中 0 个(可能引用了上下文之外的锚点),请只用提供的 outerHTML / 祖先链里真实出现的稳定特征,确保唯一命中目标元素。`;
+        } else if (v.count > 1) {
+            feedback = `选择器 \`${res.selector}\` 命中了 ${v.count} 个元素(不唯一),请缩小到只命中目标元素。`;
+        } else {
+            feedback = `选择器 \`${res.selector}\` 命中的不是目标元素,请重挑唯一命中目标元素的稳定选择器。`;
+        }
+        logLocal(`步骤 #${index + 1} 第 ${attempt} 轮离线实测未通过,带反馈重挑……`);
+    }
+    logLocal(`步骤 #${index + 1} 三轮仍未校正,保留原选择器,请人工核对。`, 'error');
+    return 'fail';
+}
+
+/** 回退路径(旧宏/无录制上下文):在当前 webview 实时 DOM 上定位+校正(依赖对应页面已加载) */
+async function fixWithLiveDom(index: number, step: Step, selector: string): Promise<'fixed' | 'skip' | 'fail'> {
     const snap = await locateAndSnapshot(selector, step.fingerprint);
     if (!snap.found || !snap.outerHTML) {
-        logLocal(`步骤 #${index + 1}(${describeStep(step as Step)}):当前页找不到该元素,已跳过(请先把对应页面/状态加载到浏览器里)。`);
+        logLocal(`步骤 #${index + 1}(${describeStep(step)}):无录制上下文,且当前页找不到该元素,已跳过(请先把对应页面/状态加载到浏览器里,或重录以获得离线上下文)。`);
         return 'skip';
     }
     try {
@@ -1729,6 +1903,23 @@ async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'
     } finally {
         await clearFixMarker();
     }
+}
+
+/**
+ * 对单个步骤做 AI 选择器校正。
+ * 有录制上下文(方案 A)→ 离线校正(与当前页无关);无 → 回退实时 DOM(旧宏,需先导航到对应页)。
+ */
+async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'> {
+    const step = steps[index];
+    const selector = step && step.selector;
+    if (typeof selector !== 'string' || !selector) {
+        return 'skip';
+    }
+    const cap = captureOf(step);
+    if (cap) {
+        return fixWithCapture(index, step, selector, cap);
+    }
+    return fixWithLiveDom(index, step, selector);
 }
 
 aiGenerateBtn.addEventListener('click', async () => {
@@ -1919,11 +2110,14 @@ webview.addEventListener('dom-ready', () => {
 webview.addEventListener('ipc-message', (e: any) => {
     if (e.channel === 'macro-step') {
         const step = e.args[0] as Step;
+        const context = e.args[1]; // preload 第 2 参:元素 DOM 上下文(离线校正用)
         if (step && typeof step.type === 'string') {
-            addStep(step);
+            addStep(step, context);
         }
     } else if (e.channel === 'picker-result') {
-        const r = e.args[0] as { selector?: string; fingerprint?: unknown; cancelled?: boolean } | undefined;
+        const r = e.args[0] as
+            | { selector?: string; fingerprint?: unknown; context?: unknown; cancelled?: boolean }
+            | undefined;
         const handler = pendingPick;
         pendingPick = null;
         // 恢复拾取前临时挂起的录制
@@ -1940,9 +2134,9 @@ webview.addEventListener('ipc-message', (e: any) => {
             logLocal('未能为所选元素生成选择器,请重试。', 'error');
             return;
         }
-        // 把选择器交给本次拾取的发起方(用途由回调决定)
+        // 把选择器 + DOM 上下文交给本次拾取的发起方(用途由回调决定)
         if (handler) {
-            handler(r.selector, r.fingerprint);
+            handler(r.selector, r.fingerprint, r.context);
         }
     }
 });

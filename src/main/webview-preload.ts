@@ -4,7 +4,7 @@
 // 运行在 guest 页面的隔离世界(主进程已为 webview 关闭 sandbox,故可 require 本地模块)。
 // 不向页面主世界暴露任何对象,仅监听 DOM 事件。
 import { ipcRenderer } from 'electron';
-import { generateSelector, buildFingerprint } from '../core/selector-generator';
+import { generateSelector, buildFingerprint, buildElementContext } from '../core/selector-generator';
 import type { Step } from '../core/macro-types';
 
 let recording = false;
@@ -114,8 +114,9 @@ function onPickerClick(event: MouseEvent): void {
     // 用户点的就是要等待的元素,直接生成选择器(不向上找可点击祖先)
     const selector = generateSelector(t);
     const fingerprint = buildFingerprint(t);
+    const context = buildElementContext(t); // DOM 上下文:供该步离线 AI 校正
     exitPicker(false); // 先清理高亮/监听,再回传
-    ipcRenderer.sendToHost('picker-result', { selector, fingerprint });
+    ipcRenderer.sendToHost('picker-result', { selector, fingerprint, context });
 }
 
 function onPickerKey(event: KeyboardEvent): void {
@@ -126,18 +127,22 @@ function onPickerKey(event: KeyboardEvent): void {
     }
 }
 
-function sendStep(step: Step): void {
-    ipcRenderer.sendToHost('macro-step', step);
+// 第 2 参 context 走独立 IPC 参数(不塞进 step),renderer 侧单独取用、不污染 step/宏 JSON
+function sendStep(step: Step, context?: unknown): void {
+    ipcRenderer.sendToHost('macro-step', step, context);
 }
 
 function flushPendingFill(): void {
     if (pendingFill) {
-        sendStep({
-            type: 'fill',
-            selector: pendingFill.selector,
-            value: pendingFill.value,
-            fingerprint: buildFingerprint(pendingFill.el),
-        });
+        sendStep(
+            {
+                type: 'fill',
+                selector: pendingFill.selector,
+                value: pendingFill.value,
+                fingerprint: buildFingerprint(pendingFill.el),
+            },
+            buildElementContext(pendingFill.el)
+        );
         pendingFill = null;
     }
 }
@@ -175,8 +180,8 @@ document.addEventListener(
         const el = resolveClickable(target);
         const selector = generateSelector(el);
         if (selector) {
-            // 附语义指纹:回放时主选择器命中 ≠1 可据此通用重定位
-            sendStep({ type: 'click', selector, fingerprint: buildFingerprint(el) });
+            // 附语义指纹(回放重定位)+ DOM 上下文(离线 AI 校正选择器)
+            sendStep({ type: 'click', selector, fingerprint: buildFingerprint(el) }, buildElementContext(el));
         }
     },
     true

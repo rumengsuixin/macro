@@ -13,6 +13,9 @@ browser-config.json
 release/
 build/ms-playwright/
 
+# 选择器上下文旁车(离线 AI 校正用,随宏生成,勿入库)
+*.captures.json
+
 # 日志与系统文件
 *.log
 .DS_Store

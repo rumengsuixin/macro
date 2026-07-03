@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
+import type { Macro, MacroCaptures, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
 
@@ -25,11 +25,13 @@ const api = {
     /** 获取 webview 录制 preload 的绝对路径 */
     getWebviewPreloadPath: (): Promise<string> => ipcRenderer.invoke('get-webview-preload-path'),
 
-    /** 保存宏(弹出保存对话框),返回写入路径或 null(取消) */
-    saveMacro: (macro: Macro): Promise<string | null> => ipcRenderer.invoke('save-macro', macro),
+    /** 保存宏(弹出保存对话框),返回写入路径或 null(取消);captures 为离线校正用的选择器上下文旁车 */
+    saveMacro: (macro: Macro, captures?: MacroCaptures | null): Promise<string | null> =>
+        ipcRenderer.invoke('save-macro', macro, captures),
 
-    /** 加载宏(弹出打开对话框),返回 Macro 或 null(取消) */
-    loadMacro: (): Promise<Macro | null> => ipcRenderer.invoke('load-macro'),
+    /** 加载宏(弹出打开对话框),返回 {macro, captures} 或 null(取消) */
+    loadMacro: (): Promise<{ macro: Macro; captures: MacroCaptures | null } | null> =>
+        ipcRenderer.invoke('load-macro'),
 
     /** 运行宏,返回结构化结果 */
     runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),
