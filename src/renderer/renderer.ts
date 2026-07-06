@@ -238,6 +238,12 @@ let pendingPick: PickedHandler | null = null;
 // 加载新宏时整个 steps 数组被替换为新对象,旧记录自动被 GC。
 const expandedScrollGroups = new WeakSet<Step>();
 
+// 步骤按「录制来源 URL」分组显示相关状态:
+// - stepUrls:每次 renderSteps() 刷新,与 steps 同序对齐,拖拽"同组"判定复用它;
+// - collapsedUrlGroups:已折叠的 URL 组(按 URL 字符串记忆,默认展开=不在集合里);加载新宏时清空。
+let stepUrls: string[] = [];
+const collapsedUrlGroups = new Set<string>();
+
 // ===== 步骤元素上下文(离线 AI 校正选择器)=====
 // 录制时抓的 {outerHTML,ancestors,contextHtml} 存这里,按步骤内存字段 `cid` 关联。
 // 用 cid+Map(而非 WeakSet/WeakMap 按对象身份):undo/redo 走 JSON.parse 会重建 step 对象,
@@ -414,6 +420,13 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
     });
     div.addEventListener('dragover', (e) => {
         e.preventDefault();
+        // 跨 URL 组不允许落下:鼠标显示禁止、不画指示线
+        if (dragFromIndex !== null && stepUrls[dragFromIndex] !== stepUrls[i]) {
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'none';
+            }
+            return;
+        }
         if (e.dataTransfer) {
             e.dataTransfer.dropEffect = 'move';
         }
@@ -431,6 +444,10 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
     div.addEventListener('drop', (e) => {
         e.preventDefault();
         if (dragFromIndex === null) {
+            return;
+        }
+        // 跨 URL 组落下:拒绝(只能在本组内重排,不能出界)
+        if (stepUrls[dragFromIndex] !== stepUrls[i]) {
             return;
         }
         const rect = div.getBoundingClientRect();
@@ -451,23 +468,88 @@ function isGroupableScroll(step: Step): boolean {
     return step.type === 'scroll' && step.pagination !== true;
 }
 
-function renderSteps(): void {
-    captureHistoryOnRender(); // 渲染前记账:steps 相对上次渲染若有变化则压入撤销栈
-    stepsEl.innerHTML = '';
-    let i = 0;
-    while (i < steps.length) {
+/**
+ * 派生每个步骤的"录制来源 URL"(与 steps 同序)。
+ * goto 的 url 与其它步骤的 recordedUrl 都更新"当前 URL",其余步骤(手动插入 / 旧宏无戳)向前继承;
+ * 空串代表未知来源。旧宏只有 goto 更新,退化为"按 goto 边界分组"。
+ */
+function computeStepUrls(): string[] {
+    const out: string[] = [];
+    let cur = '';
+    for (const s of steps) {
+        if (s.type === 'goto' && typeof (s as { url?: string }).url === 'string') {
+            cur = (s as { url?: string }).url ?? cur;
+        } else if (typeof s.recordedUrl === 'string' && s.recordedUrl) {
+            cur = s.recordedUrl;
+        }
+        out.push(cur);
+    }
+    return out;
+}
+
+/** URL → 分组标题友好显示:域名+路径,过长截断;解析失败回退原串;空串回退占位 */
+function friendlyUrl(u: string): string {
+    if (!u) {
+        return '(未记录来源)';
+    }
+    let s: string;
+    try {
+        const x = new URL(u);
+        s = x.hostname + x.pathname;
+    } catch {
+        s = u;
+    }
+    return s.length > 48 ? s.slice(0, 48) + '…' : s;
+}
+
+/** 创建一个 URL 分组标题行(折叠箭头 + 友好网址 + N步 计数);点击折叠/展开该组 */
+function createUrlGroupHead(url: string, count: number): HTMLDivElement {
+    const head = document.createElement('div');
+    head.className = 'url-group-head';
+    const collapsed = collapsedUrlGroups.has(url);
+    if (collapsed) {
+        head.classList.add('collapsed');
+    }
+    const chevron = document.createElement('span');
+    chevron.className = 'url-group-chevron';
+    chevron.textContent = collapsed ? '▸' : '▾';
+    const label = document.createElement('span');
+    label.className = 'url-group-label';
+    label.textContent = friendlyUrl(url);
+    label.title = url || '(未记录来源)'; // 悬停显示完整 URL
+    const cnt = document.createElement('span');
+    cnt.className = 'url-group-count';
+    cnt.textContent = `${count} 步`;
+    head.appendChild(chevron);
+    head.appendChild(label);
+    head.appendChild(cnt);
+    head.addEventListener('click', () => {
+        if (collapsedUrlGroups.has(url)) {
+            collapsedUrlGroups.delete(url);
+        } else {
+            collapsedUrlGroups.add(url);
+        }
+        renderSteps();
+    });
+    return head;
+}
+
+/** 把 [start,end) 区间的步骤渲染进 container(含连续滚动折叠);滚动折叠扫描不越出该区间 */
+function renderStepRange(container: HTMLElement, start: number, end: number): void {
+    let i = start;
+    while (i < end) {
         const step = steps[i];
-        // 连续滚动折叠:探测从 i 起的连续可分组滚动 [i, end)
+        // 连续滚动折叠:探测从 i 起的连续可分组滚动 [i, gEnd)(上限 end,不跨 URL 组)
         if (isGroupableScroll(step)) {
-            let end = i + 1;
-            while (end < steps.length && isGroupableScroll(steps[end])) {
-                end++;
+            let gEnd = i + 1;
+            while (gEnd < end && isGroupableScroll(steps[gEnd])) {
+                gEnd++;
             }
-            const groupLen = end - i;
+            const groupLen = gEnd - i;
             if (groupLen >= 2) {
                 const expanded = expandedScrollGroups.has(step); // 以组首对象引用为锚
-                const head = createStepLine(step, i);
-                head.classList.add('scroll-group-head');
+                const scHead = createStepLine(step, i);
+                scHead.classList.add('scroll-group-head');
                 const toggle = document.createElement('span');
                 toggle.className = 'scroll-group-toggle';
                 toggle.textContent = expanded ? `收起 ${groupLen} 条 ▴` : `连续滚动 ${groupLen} 条 ▾`;
@@ -480,23 +562,51 @@ function renderSteps(): void {
                     }
                     renderSteps();
                 });
-                head.appendChild(toggle);
-                stepsEl.appendChild(head);
+                scHead.appendChild(toggle);
+                container.appendChild(scHead);
                 // 展开态:逐条渲染后续滚动子项(缩进、淡色)
                 if (expanded) {
-                    for (let j = i + 1; j < end; j++) {
+                    for (let j = i + 1; j < gEnd; j++) {
                         const sub = createStepLine(steps[j], j);
                         sub.classList.add('scroll-group-item');
-                        stepsEl.appendChild(sub);
+                        container.appendChild(sub);
                     }
                 }
-                i = end;
+                i = gEnd;
                 continue;
             }
         }
         // 普通步骤(含单条滚动):正常单行渲染
-        stepsEl.appendChild(createStepLine(step, i));
+        container.appendChild(createStepLine(steps[i], i));
         i++;
+    }
+}
+
+function renderSteps(): void {
+    captureHistoryOnRender(); // 渲染前记账:steps 相对上次渲染若有变化则压入撤销栈
+    stepsEl.innerHTML = '';
+    stepUrls = computeStepUrls(); // 刷新拖拽"同组"判定所用的对齐 URL 表
+    let i = 0;
+    // 按连续同 URL 分块:每块一个 .url-group(标题 + body),body 内再做连续滚动折叠
+    while (i < steps.length) {
+        const url = stepUrls[i];
+        let runEnd = i + 1;
+        while (runEnd < steps.length && stepUrls[runEnd] === url) {
+            runEnd++;
+        }
+        const group = document.createElement('div');
+        group.className = 'url-group';
+        group.appendChild(createUrlGroupHead(url, runEnd - i));
+        if (collapsedUrlGroups.has(url)) {
+            group.classList.add('collapsed');
+        } else {
+            const body = document.createElement('div');
+            body.className = 'url-group-body';
+            renderStepRange(body, i, runEnd);
+            group.appendChild(body);
+        }
+        stepsEl.appendChild(group);
+        i = runEnd;
     }
     stepCountEl.textContent = String(steps.length);
     // 统一自动保存切入点:任何改动 steps 的操作都紧跟一次 renderSteps();签名去重挡掉非改动型渲染
@@ -923,6 +1033,13 @@ function insertWaitForClickable(at: number, selector: string, fingerprint?: unkn
 
 function addStep(step: Step, context?: unknown): void {
     attachCapture(step, context); // 录制来的 click/fill 附带的元素上下文
+    // 记录来源页面 URL(供步骤列表按 URL 分组);goto 自带 url 不重复打戳
+    if (step.type !== 'goto' && !step.recordedUrl) {
+        const u = safeGetUrl();
+        if (u && u !== 'about:blank') {
+            step.recordedUrl = u;
+        }
+    }
     steps.push(step);
     renderSteps();
     logLocal(`录制步骤 #${steps.length}:${describeStep(step)}`);
@@ -1446,6 +1563,7 @@ loadBtn.addEventListener('click', async () => {
     const macro = loaded.macro;
     nameInput.value = macro.name ?? '';
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
+    collapsedUrlGroups.clear(); // 换宏重置 URL 分组折叠态(集合按 URL 字符串记忆,不随数组替换自动清)
     // 回挂旁车上下文:按同序对齐 + type/selector 一致性校验,给命中的步骤分配 cid 并入 Map
     relinkCaptures(loaded.captures);
     // 记住来源文件路径:此后改动步骤 / 选择器可自动保存回此文件(宏 + 旁车)

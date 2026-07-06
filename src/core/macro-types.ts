@@ -144,6 +144,8 @@ export interface StepFlags {
     pagination?: boolean;
     /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次);仅 pagination=true 时有效 */
     pageCount?: number;
+    /** 录制此步骤时所在页面 URL(仅用于步骤列表按来源分组显示,回放忽略) */
+    recordedUrl?: string;
 }
 
 /** 步骤可辨识联合(交叉 StepFlags 以携带翻页标记,仍保持 type 可辨识) */
