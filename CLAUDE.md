@@ -10,6 +10,7 @@
 
 - `README.md` — 安装、运行、使用步骤、宏 DSL 与提取规则说明
 - `开发计划.md` — 模块状态、待办、已知问题(每次任务后持续维护)
+- `功能开发计划.md` — 欠缺功能路线图(独立文档,2026-07-06):基于六维度调研(交互录制/数据加工/自动化编排/反爬对抗/可靠性监控/宏资产管理)梳理缺口,按 P0/P1/P2 排优先级;P0 首推参数化(数据驱动)
 - `examples/demo-macro.json` — 演示宏(books.toscrape.com,采集 标题 / 价格 / 链接)
 - `examples/demo-list-action.json` — 演示宏(list-action 模式:列表逐项点击下载按钮,占位选择器需按实际页面替换)
 - `ai-config.json` — AI 提取配置(项目根,首次运行自动生成):openclaw agent 目标 profile 列表 + 系统/提示词模板
