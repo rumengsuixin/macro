@@ -1176,6 +1176,76 @@
             background: #0e7490;
         }
 
+        /* ============================ 通用确认模态框(风格同暂停模态框) ============================ */
+        #confirm-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 10002;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(9, 30, 37, .6);
+            backdrop-filter: blur(3px);
+        }
+
+        #confirm-overlay.show {
+            display: flex;
+        }
+
+        .confirm-modal {
+            width: 420px;
+            max-width: 90vw;
+            background: var(--surface);
+            border-radius: var(--r-lg);
+            box-shadow: var(--sh-lg);
+            padding: 24px 26px;
+            font-size: 14px;
+            border-top: 4px solid var(--primary);
+        }
+
+        .confirm-modal h3 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            color: var(--primary-strong);
+        }
+
+        .confirm-modal .confirm-message {
+            color: var(--text);
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .confirm-modal .confirm-actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        #confirm-cancel {
+            padding: 8px 18px;
+            background: var(--surface);
+            color: var(--text-soft);
+            border: 1px solid var(--border-strong);
+            box-shadow: none;
+        }
+
+        #confirm-cancel:hover {
+            background: var(--primary-soft);
+            color: var(--primary-strong);
+        }
+
+        #confirm-ok {
+            padding: 8px 20px;
+            background: var(--primary);
+            font-size: 14px;
+        }
+
+        #confirm-ok:hover {
+            background: var(--primary-strong);
+        }
+
         /* ============================ 元素拾取模式 ============================ */
         .app.picking .toolbar,
         .app.picking .sidebar,
@@ -1384,6 +1454,18 @@
             <div class="pause-actions">
                 <button id="pause-stop" class="danger">停止回放</button>
                 <button id="pause-continue">继续</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通用确认模态框 -->
+    <div id="confirm-overlay">
+        <div class="confirm-modal">
+            <h3 id="confirm-title">确认操作</h3>
+            <div class="confirm-message" id="confirm-message"></div>
+            <div class="confirm-actions">
+                <button id="confirm-cancel">取消</button>
+                <button id="confirm-ok">确定</button>
             </div>
         </div>
     </div>

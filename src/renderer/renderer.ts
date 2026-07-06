@@ -204,6 +204,11 @@ const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
 const pauseContinueBtn = byId<HTMLButtonElement>('pause-continue');
 const pauseStopBtn = byId<HTMLButtonElement>('pause-stop');
+const confirmOverlay = byId<HTMLDivElement>('confirm-overlay');
+const confirmTitleEl = byId<HTMLHeadingElement>('confirm-title');
+const confirmMessageEl = byId<HTMLDivElement>('confirm-message');
+const confirmOkBtn = byId<HTMLButtonElement>('confirm-ok');
+const confirmCancelBtn = byId<HTMLButtonElement>('confirm-cancel');
 const aiProfileSel = byId<HTMLSelectElement>('ai-profile');
 const aiModeSel = byId<HTMLSelectElement>('ai-mode');
 const aiRequirementInput = byId<HTMLTextAreaElement>('ai-requirement');
@@ -971,6 +976,52 @@ function showPauseModal(info: PauseEvent): void {
 function hidePauseModal(): void {
     pauseOverlay.classList.remove('show');
     currentPauseRunId = null;
+}
+
+/**
+ * 通用确认模态框(风格同暂停模态框):填标题/正文并显示,返回 Promise<boolean>。
+ * 点「确定」resolve(true),点「取消」/按 ESC resolve(false);仿暂停模态框不点击遮罩关闭。
+ */
+function confirmDialog(opts: {
+    title: string;
+    message: string;
+    okText?: string;
+    cancelText?: string;
+}): Promise<boolean> {
+    return new Promise((resolve) => {
+        confirmTitleEl.textContent = opts.title;
+        confirmMessageEl.textContent = opts.message;
+        confirmOkBtn.textContent = opts.okText ?? '确定';
+        confirmCancelBtn.textContent = opts.cancelText ?? '取消';
+
+        const cleanup = (): void => {
+            confirmOverlay.classList.remove('show');
+            confirmOkBtn.removeEventListener('click', onOk);
+            confirmCancelBtn.removeEventListener('click', onCancel);
+            document.removeEventListener('keydown', onKey, true);
+        };
+        const onOk = (): void => {
+            cleanup();
+            resolve(true);
+        };
+        const onCancel = (): void => {
+            cleanup();
+            resolve(false);
+        };
+        const onKey = (e: KeyboardEvent): void => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                onCancel();
+            }
+        };
+
+        confirmOkBtn.addEventListener('click', onOk);
+        confirmCancelBtn.addEventListener('click', onCancel);
+        document.addEventListener('keydown', onKey, true);
+        confirmOverlay.classList.add('show');
+        confirmOkBtn.focus();
+    });
 }
 
 pauseContinueBtn.addEventListener('click', () => {
@@ -2167,8 +2218,28 @@ async function fixAllSelectors(): Promise<void> {
     logLocal(`AI 批量校正完成:校正 ${fixed} 个、跳过 ${skip} 个、未成功 ${fail} 个。${tail}`);
 }
 
-aiFixAllBtn.addEventListener('click', () => {
-    void fixAllSelectors();
+aiFixAllBtn.addEventListener('click', async () => {
+    if (fixingAll || recording) {
+        return;
+    }
+    const n = steps.filter(
+        (s) =>
+            typeof (s as { selector?: unknown }).selector === 'string' &&
+            (s as { selector?: string }).selector,
+    ).length;
+    if (!n) {
+        logLocal('没有带选择器的步骤可校正。');
+        return;
+    }
+    const ok = await confirmDialog({
+        title: '校正全部选择器',
+        message: `将用 AI 逐个校正当前宏中 ${n} 个带选择器的步骤。\n有录制上下文的步骤离线校正,无上下文的需先在浏览器打开对应页面。\n确定继续?`,
+        okText: '开始校正',
+        cancelText: '取消',
+    });
+    if (ok) {
+        void fixAllSelectors();
+    }
 });
 
 aiGenerateBtn.addEventListener('click', async () => {
