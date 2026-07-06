@@ -296,6 +296,8 @@ export interface RunResult {
     downloads?: string[];
     /** 后处理器执行结果(由主进程在 runner 之后填充,如合并 zip 内 excel 的产物) */
     postProcessed?: PostProcessResult[];
+    /** 回放时记录的每步真实所在页面 URL(与 steps 同序,取不到为 null);供旧宏回填 recordedUrl 精确分组 */
+    stepUrls?: (string | null)[];
     /** 用户中途点「停止回放」主动中止(非失败):UI 据此提示"已停止"而非报错截图 */
     cancelled?: boolean;
     error?: RunError;

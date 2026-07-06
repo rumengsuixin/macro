@@ -72,6 +72,16 @@ export class MacroRunner {
         let activePage: Page | null = null; // 当前活动页(跟随新标签页弹窗切换),供 catch 取 url/截图
         let currentStepIndex = -1;
         let currentStep: Step | null = null;
+        // 回放中记录每步真实所在页面 URL(供旧宏回填 recordedUrl 精确分组);与 steps 同序,取不到为 null
+        const stepUrls: (string | null)[] = new Array(macro.steps.length).fill(null);
+        const snapUrl = (p: Page | null): string | null => {
+            try {
+                const u = p ? p.url() : '';
+                return u && u !== 'about:blank' ? u : null;
+            } catch {
+                return null;
+            }
+        };
 
         try {
             // 默认有头(回放可视);设置 MACRO_HEADLESS=1 可无头运行(便于自动化测试)
@@ -241,6 +251,8 @@ export class MacroRunner {
                 if (this.cancelled) {
                     throw new Error('回放已被用户停止。');
                 }
+                // 记录本步执行前所在页面 URL(即该步骤的来源页,语义与录制时打戳一致)
+                stepUrls[i] = snapUrl(activePage);
                 // 翻页步骤正常回放时跳过,改由提取流程在采完一页后驱动
                 if (step.pagination) {
                     logInfo(`第 ${i + 1}/${macro.steps.length} 步为翻页动作,正常回放跳过。`);
@@ -298,7 +310,12 @@ export class MacroRunner {
             if (downloads.length > 0) {
                 logInfo(`本次回放共保存下载文件 ${downloads.length} 个,目录:${this.downloadDir}`);
             }
-            return { ok: true, rows, downloads: downloads.length > 0 ? downloads : undefined };
+            return {
+                ok: true,
+                rows,
+                downloads: downloads.length > 0 ? downloads : undefined,
+                stepUrls,
+            };
         } catch (err) {
             // 用户主动停止:不当作失败,不尝试错误截图(此时页面/context 多半已关会抛错)
             if (this.cancelled) {
@@ -328,7 +345,8 @@ export class MacroRunner {
             if (screenshot) {
                 logError(`已保存错误截图:${screenshot}`);
             }
-            return { ok: false, error: runError };
+            // 部分执行也回传已记录的来源 URL,供旧宏回填(失败前跑到的步骤仍可精确分组)
+            return { ok: false, error: runError, stepUrls };
         } finally {
             // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser。
             // 停止(cancel)时 context 可能已被关过,故各自 try/catch,避免二次 close 抛错覆盖返回值。

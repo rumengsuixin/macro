@@ -51,6 +51,8 @@ interface RunResult {
     /** 用户中途点「停止回放」主动中止(非失败) */
     cancelled?: boolean;
     error?: RunError;
+    /** 回放记录的每步真实页面 URL(与 steps 同序,取不到为 null);供旧宏回填 recordedUrl */
+    stepUrls?: (string | null)[];
 }
 
 interface AiProfileSummary {
@@ -1471,11 +1473,37 @@ stopBtn.addEventListener('click', () => {
 });
 
 /** 统一处理回放结果的日志反馈(供「运行」按钮与插件面板共用) */
+/**
+ * 回放后回填步骤来源 URL:把回放引擎记录的每步真实页面 URL 写回缺失 recordedUrl 的步骤,
+ * 让旧宏(录制时无来源 URL 戳)跑一次后即可精确按页面分组。只补缺失、不覆盖已有戳与 goto。
+ */
+function backfillRecordedUrls(urls?: (string | null)[]): void {
+    if (!urls || urls.length !== steps.length) {
+        return; // 长度不对齐(理论上不会,运行期禁编辑)则不冒险回填
+    }
+    let changed = 0;
+    for (let i = 0; i < steps.length; i += 1) {
+        const u = urls[i];
+        const s = steps[i];
+        if (!u || s.type === 'goto' || s.recordedUrl) {
+            continue; // 无 URL / goto 自带 url / 已有戳(新宏)一律跳过
+        }
+        s.recordedUrl = u;
+        changed += 1;
+    }
+    if (changed > 0) {
+        logLocal(`已按回放实际页面回填 ${changed} 个步骤的来源 URL,分组更精确(改动已随自动保存落盘)。`);
+        renderSteps(); // 刷新分组;末尾 scheduleAutosave() 自动把 recordedUrl 落盘
+    }
+}
+
 function reportRunResult(result: RunResult): void {
     if (result.cancelled) {
         logLocal('回放已被用户停止。');
         return;
     }
+    // 无论成功/失败,先把已记录的来源 URL 回填(失败前跑到的步骤也能受益)
+    backfillRecordedUrls(result.stepUrls);
     if (result.ok) {
         lastRows = result.rows ?? [];
         const dlCount = result.downloads?.length ?? 0;
