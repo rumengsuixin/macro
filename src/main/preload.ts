@@ -29,9 +29,13 @@ const api = {
     saveMacro: (macro: Macro, captures?: MacroCaptures | null): Promise<string | null> =>
         ipcRenderer.invoke('save-macro', macro, captures),
 
-    /** 加载宏(弹出打开对话框),返回 {macro, captures} 或 null(取消) */
-    loadMacro: (): Promise<{ macro: Macro; captures: MacroCaptures | null } | null> =>
+    /** 加载宏(弹出打开对话框),返回 {macro, captures, filePath} 或 null(取消) */
+    loadMacro: (): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null> =>
         ipcRenderer.invoke('load-macro'),
+
+    /** 静默持久化宏 + 旁车到指定路径(不弹对话框),供实时自动保存;返回写入路径或 null */
+    persistMacro: (macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null> =>
+        ipcRenderer.invoke('persist-macro', macro, captures, filePath),
 
     /** 运行宏,返回结构化结果 */
     runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),

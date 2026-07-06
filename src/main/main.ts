@@ -162,7 +162,7 @@ function registerIpc(): void {
 
     ipcMain.handle(
         'load-macro',
-        async (): Promise<{ macro: Macro; captures: MacroCaptures | null } | null> => {
+        async (): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null> => {
             const result = await dialog.showOpenDialog(mainWindow!, {
                 title: '加载宏',
                 defaultPath: fs.existsSync(examplesDir) ? examplesDir : macrosDir,
@@ -174,19 +174,40 @@ function registerIpc(): void {
                 return null;
             }
             try {
-                const macro = await loadMacro(result.filePaths[0]);
-                const captures = await loadMacroCaptures(result.filePaths[0]);
+                const filePath = result.filePaths[0];
+                const macro = await loadMacro(filePath);
+                const captures = await loadMacroCaptures(filePath);
                 logInfo(
-                    `宏已加载:${result.filePaths[0]}(${macro.steps.length} 个步骤` +
+                    `宏已加载:${filePath}(${macro.steps.length} 个步骤` +
                         (captures ? `,含选择器上下文旁车` : '') +
                         `)`
                 );
-                return { macro, captures };
+                // 回传 filePath:渲染进程据此追踪当前宏文件,做实时自动保存(宏 + 旁车)
+                return { macro, captures, filePath };
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 logError(`加载宏失败:${message}`);
                 throw err;
             }
+        }
+    );
+
+    // 静默持久化宏 + 旁车到指定路径(不弹对话框):供渲染进程「自动保存」调用。
+    // 与 save-macro 的区别是不弹保存对话框、直接写入 filePath(由 load / 首次手动保存建立的当前路径)。
+    ipcMain.handle(
+        'persist-macro',
+        async (_e, macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null> => {
+            if (!filePath || typeof filePath !== 'string') {
+                return null;
+            }
+            const saved = await saveMacro(macro, filePath);
+            // 旁车上下文(离线 AI 校正用):有则写、无则清旧旁车。失败不致命
+            try {
+                await saveMacroCaptures(saved, captures);
+            } catch (err) {
+                logError(`自动保存选择器上下文旁车失败(不影响宏):${(err as Error).message}`);
+            }
+            return saved;
         }
     );
 

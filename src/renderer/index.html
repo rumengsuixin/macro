@@ -1251,11 +1251,15 @@
                 <button id="stop-run" class="danger" disabled title="中止正在自动运行的任务">停止回放</button>
                 <button id="save" title="把操作 + 采集配置存成文件,下次可复用">保存宏</button>
                 <button id="load" title="打开之前保存的操作文件">加载宏</button>
+                <button id="ai-fix-all" title="遍历当前宏所有带选择器的步骤,用 AI 逐个校正成更稳定的选择器;有录制上下文的步骤离线校正,无上下文的需先在浏览器打开对应页面">🤖 校正全部选择器</button>
                 <button id="export" class="ok" title="把采集到的数据存为 Excel 表格">导出 Excel</button>
                 <div class="more-wrap">
                     <button id="more-btn" type="button" title="更多操作">更多 ▾</button>
                     <div id="more-menu" class="more-menu"></div>
                 </div>
+                <label class="autosave-label" title="改动步骤 / 选择器后自动把宏和选择器上下文旁车写回当前文件(需先加载或保存过一次);关掉可临时改宏做实验而不覆盖原文件">
+                    <input type="checkbox" id="autosave-toggle" checked /> 自动保存
+                </label>
                 <label class="adv-toggle" title="显示 AI 生成规则、提取规则 JSON、插件、登录状态等高级设置">
                     <input type="checkbox" id="advanced-mode" /> ✨ 高级
                 </label>

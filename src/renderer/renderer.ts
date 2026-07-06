@@ -108,7 +108,8 @@ interface MacroCaptures {
 interface ElectronAPI {
     getWebviewPreloadPath(): Promise<string>;
     saveMacro(macro: Macro, captures?: MacroCaptures | null): Promise<string | null>;
-    loadMacro(): Promise<{ macro: Macro; captures: MacroCaptures | null } | null>;
+    loadMacro(): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
+    persistMacro(macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
@@ -197,6 +198,8 @@ const stopRunBtn = byId<HTMLButtonElement>('stop-run');
 const saveBtn = byId<HTMLButtonElement>('save');
 const loadBtn = byId<HTMLButtonElement>('load');
 const exportBtn = byId<HTMLButtonElement>('export');
+const aiFixAllBtn = byId<HTMLButtonElement>('ai-fix-all');
+const autosaveToggle = byId<HTMLInputElement>('autosave-toggle');
 const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
 const pauseContinueBtn = byId<HTMLButtonElement>('pause-continue');
@@ -217,6 +220,10 @@ const pickCancelBtn = byId<HTMLButtonElement>('pick-cancel');
 let recording = false;
 let steps: Step[] = [];
 let lastRows: Record<string, string>[] = [];
+// 当前宏文件路径(加载 / 首次手动保存后记住):实时自动保存(宏 + 旁车)写回此文件;null 表示尚无路径(新录未存),不自动保存
+let currentMacroPath: string | null = null;
+// 上次已落盘内容的签名:自动保存前比对,内容未变则跳过写盘(避免无意义 IO / 非改动型渲染触发写盘)
+let lastPersistedSig = '';
 // 元素拾取(通用「取选择器+回调」服务):pendingPick 保存当前这次拾取的消费回调,
 // null 表示无进行中的拾取。用途由发起方通过回调决定(本文件 fingerprint 暂不消费,故用 unknown)。
 type PickedHandler = (selector: string, fingerprint?: unknown, context?: unknown) => void;
@@ -487,6 +494,8 @@ function renderSteps(): void {
         i++;
     }
     stepCountEl.textContent = String(steps.length);
+    // 统一自动保存切入点:任何改动 steps 的操作都紧跟一次 renderSteps();签名去重挡掉非改动型渲染
+    scheduleAutosave();
 }
 
 // ===== 步骤拖拽排序 =====
@@ -920,6 +929,7 @@ function setRecordingUI(on: boolean): void {
     stopBtn.disabled = !on;
     recIndicator.textContent = on ? '● 录制中' : '未录制';
     recIndicator.className = on ? 'rec-indicator on' : 'rec-indicator';
+    aiFixAllBtn.disabled = on; // 录制中不批量校正(避免改动与录制交织)
 }
 
 function setBusy(busy: boolean): void {
@@ -928,6 +938,7 @@ function setBusy(busy: boolean): void {
     // 停止按钮与运行按钮相反:运行中可点、空闲禁用;每次切换复位其文案/禁用态
     stopRunBtn.disabled = !busy;
     stopRunBtn.textContent = '停止回放';
+    aiFixAllBtn.disabled = busy; // 回放中不批量校正
 }
 
 // ===== 运行/停止:runId 与暂停模态框 =====
@@ -1062,6 +1073,99 @@ function relinkCaptures(captures: MacroCaptures | null): void {
         }
     });
 }
+
+// ===== 实时自动保存(宏 + 旁车)=====
+// 复用「所有步骤改动都紧跟 renderSteps()」这一统一切入点:renderSteps() 末尾调 scheduleAutosave(),
+// debounce 后按签名去重落盘。宏 + 旁车一起写回当前文件(旁车靠下标+type+selector 与宏对齐,只存旁车会错位失效)。
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 自动保存是否开启(复选框 + 有当前文件路径才生效) */
+function autosaveEnabled(): boolean {
+    return !!autosaveToggle && autosaveToggle.checked;
+}
+
+/** 当前宏 + 旁车的内容签名;提取规则 JSON 非法时 buildMacro 抛错,调用方需 try/catch */
+function macroSignature(): string {
+    return JSON.stringify([buildMacro(), buildCaptures()]);
+}
+
+/** 把「已落盘」基准更新为当前内容(load / 手动保存 / 打开开关后调用,避免随后无谓地再写一遍相同内容) */
+function seedPersistedSig(): void {
+    try {
+        lastPersistedSig = macroSignature();
+    } catch {
+        lastPersistedSig = '';
+    }
+}
+
+/** 立即执行一次自动保存(去重后写盘);内容未变或条件不满足则静默跳过 */
+async function flushAutosave(): Promise<void> {
+    if (!autosaveEnabled() || !currentMacroPath) {
+        return;
+    }
+    let sig: string;
+    let macro: Macro;
+    let captures: MacroCaptures;
+    try {
+        macro = buildMacro();
+        captures = buildCaptures();
+        sig = JSON.stringify([macro, captures]);
+    } catch {
+        // 提取规则 JSON 非法等:自动保存静默跳过(手动保存会报该错),不刷屏
+        return;
+    }
+    if (sig === lastPersistedSig) {
+        return;
+    }
+    try {
+        const saved = await window.electronAPI.persistMacro(macro, captures, currentMacroPath);
+        if (saved) {
+            lastPersistedSig = sig;
+            logLocal(`已自动保存到:${saved}`);
+        }
+    } catch (e) {
+        // 失败不更新 lastPersistedSig,下次改动会重试
+        logLocal('自动保存失败:' + (e as Error).message, 'error');
+    }
+}
+
+/** 安排一次防抖自动保存(合并连续改动为一次写盘) */
+function scheduleAutosave(): void {
+    if (!autosaveEnabled() || !currentMacroPath) {
+        return;
+    }
+    if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+    }
+    autosaveTimer = setTimeout(() => {
+        autosaveTimer = null;
+        void flushAutosave();
+    }, 600);
+}
+
+// 自动保存开关:初值读 localStorage(默认开,同 HTML 的 checked);切换时存回,打开时立即落一次当前状态
+const AUTOSAVE_LS_KEY = 'macro.autosave';
+try {
+    const savedPref = localStorage.getItem(AUTOSAVE_LS_KEY);
+    if (savedPref !== null) {
+        autosaveToggle.checked = savedPref === '1';
+    }
+} catch {
+    // localStorage 不可用:沿用 HTML 默认 checked
+}
+autosaveToggle.addEventListener('change', () => {
+    try {
+        localStorage.setItem(AUTOSAVE_LS_KEY, autosaveToggle.checked ? '1' : '0');
+    } catch {
+        // 忽略存储失败
+    }
+    if (autosaveToggle.checked) {
+        logLocal('已开启自动保存(改动步骤 / 选择器后自动写回当前文件)。');
+        scheduleAutosave(); // 立即落一次当前状态
+    } else {
+        logLocal('已关闭自动保存(改动需手动点「保存宏」)。');
+    }
+});
 
 /**
  * 解析「提取规则」框,返回可作为 list-detail 基础的规则对象;不合法返回 null。
@@ -1267,6 +1371,9 @@ saveBtn.addEventListener('click', async () => {
         const captures = buildCaptures();
         const filePath = await window.electronAPI.saveMacro(macro, captures);
         if (filePath) {
+            // 记住路径:此后改动可自动保存回此文件;种子签名避免紧接着再写一遍相同内容
+            currentMacroPath = filePath;
+            seedPersistedSig();
             logLocal(`宏已保存到:${filePath}`);
         }
     } catch (e) {
@@ -1275,7 +1382,7 @@ saveBtn.addEventListener('click', async () => {
 });
 
 loadBtn.addEventListener('click', async () => {
-    let loaded: { macro: Macro; captures: MacroCaptures | null } | null = null;
+    let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
     try {
         loaded = await window.electronAPI.loadMacro();
     } catch (e) {
@@ -1290,6 +1397,8 @@ loadBtn.addEventListener('click', async () => {
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
     // 回挂旁车上下文:按同序对齐 + type/selector 一致性校验,给命中的步骤分配 cid 并入 Map
     relinkCaptures(loaded.captures);
+    // 记住来源文件路径:此后改动步骤 / 选择器可自动保存回此文件(宏 + 旁车)
+    currentMacroPath = loaded.filePath;
     renderSteps();
     if (macro.extract) {
         extractInput.value = JSON.stringify(macro.extract, null, 4);
@@ -1312,6 +1421,8 @@ loadBtn.addEventListener('click', async () => {
     }
     // 回显宏里启用的插件勾选
     refreshPluginSelection(macro.postProcess);
+    // 种子签名(须在 extract / 插件回显完成后):置基准,防止加载后 renderSteps 排的那次 scheduleAutosave 写一遍相同内容
+    seedPersistedSig();
     logLocal(
         `已加载宏「${macro.name}」,${steps.length} 个步骤。` +
             (macro.extract ? ' 已填充提取规则。' : '')
@@ -1999,6 +2110,67 @@ async function fixStepSelector(index: number): Promise<'fixed' | 'skip' | 'fail'
     return fixWithLiveDom(index, step, selector);
 }
 
+// ===== 批量 AI 校正(当前宏所有带选择器的步骤)=====
+let fixingAll = false;
+
+/** 批量校正忙态:禁用按钮并切文案 */
+function setFixBusy(busy: boolean): void {
+    fixingAll = busy;
+    aiFixAllBtn.disabled = busy;
+    aiFixAllBtn.textContent = busy ? '校正中…' : '🤖 校正全部选择器';
+}
+
+/**
+ * 遍历当前宏所有带选择器的步骤,逐个 AI 校正。复用单步 fixStepSelector(自动分流:
+ * 有录制上下文 → 离线校正、与当前页无关;无上下文 → 回退实时 DOM,当前页找不到元素则计入「跳过」)。
+ */
+async function fixAllSelectors(): Promise<void> {
+    if (fixingAll) {
+        return;
+    }
+    if (recording) {
+        logLocal('录制中不能批量校正选择器,请先停止录制。', 'error');
+        return;
+    }
+    const targets: number[] = [];
+    steps.forEach((s, i) => {
+        if (typeof (s as { selector?: unknown }).selector === 'string' && (s as { selector?: string }).selector) {
+            targets.push(i);
+        }
+    });
+    if (!targets.length) {
+        logLocal('没有带选择器的步骤可校正。');
+        return;
+    }
+    setFixBusy(true);
+    logLocal(`开始 AI 批量校正选择器:共 ${targets.length} 个带选择器的步骤……`);
+    let fixed = 0;
+    let skip = 0;
+    let fail = 0;
+    try {
+        for (let k = 0; k < targets.length; k += 1) {
+            const i = targets[k];
+            logLocal(`[${k + 1}/${targets.length}] 正在校正步骤 #${i + 1}……`);
+            const r = await fixStepSelector(i);
+            if (r === 'fixed') {
+                fixed += 1;
+            } else if (r === 'skip') {
+                skip += 1;
+            } else {
+                fail += 1;
+            }
+        }
+    } finally {
+        setFixBusy(false);
+    }
+    const tail = autosaveEnabled() && currentMacroPath ? '(改动会自动保存)' : '(改动尚未落盘,请点「保存宏」)';
+    logLocal(`AI 批量校正完成:校正 ${fixed} 个、跳过 ${skip} 个、未成功 ${fail} 个。${tail}`);
+}
+
+aiFixAllBtn.addEventListener('click', () => {
+    void fixAllSelectors();
+});
+
 aiGenerateBtn.addEventListener('click', async () => {
     const url = safeGetUrl();
     if (!url || url === 'about:blank') {
@@ -2380,8 +2552,8 @@ function setupAdvancedMode(): void {
 
 // 工具栏动作按钮:顺序即优先级;超过「显示数量」且排在后面的自动收进「更多」下拉。
 // 改顺序 / 显示数量只改这两个常量即可,溢出规则自动生效。
-const TOOLBAR_ACTIONS = ['start', 'stop', 'run', 'stop-run', 'save', 'load', 'export'];
-const MAX_VISIBLE_ACTIONS = 6;
+const TOOLBAR_ACTIONS = ['start', 'stop', 'run', 'stop-run', 'save', 'load', 'ai-fix-all', 'export'];
+const MAX_VISIBLE_ACTIONS = 7;
 
 /**
  * 工具栏「更多」下拉:①按规则把超出显示数量的靠后按钮移进下拉(自动溢出),
