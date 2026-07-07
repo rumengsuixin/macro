@@ -1,11 +1,50 @@
 // 宏存储:以 JSON 文件保存 / 加载宏。
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Macro, MacroCaptures } from '../core/macro-types';
+import type { Macro, MacroCaptures, MacroSummary } from '../core/macro-types';
 
 /** 由宏文件路径派生旁车文件路径 `<同名>.captures.json` */
 export function captureSidecarPath(macroPath: string): string {
     return macroPath.replace(/\.json$/i, '') + '.captures.json';
+}
+
+/**
+ * 列出目录下所有宏文件的摘要(用于宏库面板)。
+ * 排除 `*.captures.json` 旁车;单个文件损坏则跳过(不致命);按修改时间倒序返回。
+ */
+export async function listMacros(dir: string): Promise<MacroSummary[]> {
+    let entries: string[];
+    try {
+        entries = await fs.readdir(dir);
+    } catch {
+        // 目录不存在等:视为空库
+        return [];
+    }
+    const summaries: MacroSummary[] = [];
+    for (const entry of entries) {
+        // 只认 .json,排除旁车 .captures.json
+        if (!/\.json$/i.test(entry) || /\.captures\.json$/i.test(entry)) {
+            continue;
+        }
+        const filePath = path.join(dir, entry);
+        try {
+            const stat = await fs.stat(filePath);
+            if (!stat.isFile()) {
+                continue;
+            }
+            const content = await fs.readFile(filePath, 'utf-8');
+            const macro = JSON.parse(content) as Macro;
+            if (!macro || !Array.isArray(macro.steps)) {
+                continue; // 非宏文件,跳过
+            }
+            const name = typeof macro.name === 'string' && macro.name.trim() ? macro.name : entry.replace(/\.json$/i, '');
+            summaries.push({ filePath, name, stepCount: macro.steps.length, modifiedMs: stat.mtimeMs });
+        } catch {
+            // 损坏 / 非法 JSON / 读取失败:跳过该文件
+        }
+    }
+    summaries.sort((a, b) => b.modifiedMs - a.modifiedMs);
+    return summaries;
 }
 
 /**

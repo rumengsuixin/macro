@@ -269,6 +269,18 @@ export interface Macro {
     postProcess?: PostProcessSpec[];
 }
 
+/** 宏库列表项摘要(扫描 macros/ 目录得到,用于渲染宏库面板) */
+export interface MacroSummary {
+    /** 宏文件绝对路径 */
+    filePath: string;
+    /** 宏名称(取 macro.name,缺省用文件名) */
+    name: string;
+    /** 步骤数 */
+    stepCount: number;
+    /** 文件最后修改时间(unix 毫秒),用于排序 */
+    modifiedMs: number;
+}
+
 /** 提取结果的一行 */
 export type ExtractRow = Record<string, string>;
 

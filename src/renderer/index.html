@@ -618,6 +618,113 @@
             background: var(--plugin-strong);
         }
 
+        /* ---------- 宏库面板(基础视图可见) ---------- */
+        .macro-lib-panel {
+            background: linear-gradient(180deg, #fff2ec 0%, #ffffff 70%);
+            border-color: #ffdccf;
+        }
+
+        .macro-lib-panel > .panel-title {
+            border-left: 3px solid var(--accent);
+            background: linear-gradient(180deg, #ffe6dc, #fff2ec);
+        }
+
+        .macro-lib-body {
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .collapsible.collapsed > .macro-lib-body {
+            display: none;
+        }
+
+        .macro-lib-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .macro-lib-actions button {
+            padding: 5px 12px;
+            font-size: 12px;
+            background: var(--accent);
+        }
+
+        .macro-lib-actions button:hover {
+            background: var(--accent-strong);
+        }
+
+        #macro-lib-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 240px;
+            overflow-y: auto;
+        }
+
+        .macro-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 9px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            background: var(--surface);
+            transition: background .12s, border-color .12s;
+        }
+
+        .macro-item:hover {
+            background: #fff7f3;
+            border-color: var(--accent);
+        }
+
+        .macro-item input {
+            cursor: pointer;
+        }
+
+        .macro-item-info {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .macro-item-name {
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .macro-item-meta {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .macro-item button {
+            padding: 4px 10px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .macro-item-open {
+            background: var(--primary);
+        }
+
+        .macro-item-open:hover {
+            background: var(--primary-strong);
+        }
+
+        .macro-item-run {
+            background: var(--ok);
+        }
+
+        .macro-item-run:hover {
+            filter: brightness(.94);
+        }
+
         /* ---------- 登录状态复用面板(高级) ---------- */
         .browser-body {
             padding: 10px 12px;
@@ -1486,6 +1593,16 @@
                             <input type="checkbox" id="bc-localstorage" />
                             <span>回放前注入录制 localStorage(仅当前页 origin)</span>
                         </label>
+                    </div>
+                </div>
+                <div class="panel collapsible macro-lib-panel" id="macro-lib-panel">
+                    <div class="panel-title" id="macro-lib-title">📚 宏库(已保存的宏,可直接运行)</div>
+                    <div class="macro-lib-body">
+                        <div class="macro-lib-actions">
+                            <button id="macro-lib-refresh" title="重新扫描 macros 目录">🔄 刷新</button>
+                            <button id="macro-lib-run-selected" title="按勾选顺序依次运行选中的宏">▶ 运行选中</button>
+                        </div>
+                        <div id="macro-lib-list"><span class="hint">正在扫描宏库…</span></div>
                     </div>
                 </div>
                 <div class="panel steps-panel collapsible" id="steps-panel">

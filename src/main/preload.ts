@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, MacroCaptures, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
+import type { Macro, MacroCaptures, MacroSummary, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
 
@@ -36,6 +36,13 @@ const api = {
     /** 静默持久化宏 + 旁车到指定路径(不弹对话框),供实时自动保存;返回写入路径或 null */
     persistMacro: (macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null> =>
         ipcRenderer.invoke('persist-macro', macro, captures, filePath),
+
+    /** 列出 macros/ 目录下所有宏摘要(驱动宏库面板) */
+    listMacros: (): Promise<MacroSummary[]> => ipcRenderer.invoke('list-macros'),
+
+    /** 按路径读取宏(不弹对话框),返回 {macro, captures, filePath} 或 null;供宏库面板「打开」/「后台运行」 */
+    readMacro: (filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null> =>
+        ipcRenderer.invoke('read-macro', filePath),
 
     /** 运行宏,返回结构化结果 */
     runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),

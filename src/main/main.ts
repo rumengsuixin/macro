@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
 import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
-import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures } from '../storage/macro-store';
+import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
@@ -208,6 +208,31 @@ function registerIpc(): void {
                 logError(`自动保存选择器上下文旁车失败(不影响宏):${(err as Error).message}`);
             }
             return saved;
+        }
+    );
+
+    // 列出 macros/ 目录下所有宏摘要(驱动渲染进程的宏库面板)
+    ipcMain.handle('list-macros', async () => {
+        ensureDirs();
+        return listMacros(macrosDir);
+    });
+
+    // 按路径读取宏(无对话框):语义同 load-macro 但不弹框,供宏库面板「打开」/「后台运行」取宏对象
+    ipcMain.handle(
+        'read-macro',
+        async (_e, filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null> => {
+            if (!filePath || typeof filePath !== 'string') {
+                return null;
+            }
+            try {
+                const macro = await loadMacro(filePath);
+                const captures = await loadMacroCaptures(filePath);
+                return { macro, captures, filePath };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                logError(`读取宏失败:${message}`);
+                return null;
+            }
         }
     );
 

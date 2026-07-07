@@ -55,6 +55,14 @@ interface RunResult {
     stepUrls?: (string | null)[];
 }
 
+/** 宏库列表项摘要(与主进程 MacroSummary 对应) */
+interface MacroSummary {
+    filePath: string;
+    name: string;
+    stepCount: number;
+    modifiedMs: number;
+}
+
 interface AiProfileSummary {
     id: string;
     label: string;
@@ -112,6 +120,8 @@ interface ElectronAPI {
     saveMacro(macro: Macro, captures?: MacroCaptures | null): Promise<string | null>;
     loadMacro(): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
     persistMacro(macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null>;
+    listMacros(): Promise<MacroSummary[]>;
+    readMacro(filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
@@ -1054,6 +1064,7 @@ function setRecordingUI(on: boolean): void {
     recIndicator.textContent = on ? '● 录制中' : '未录制';
     recIndicator.className = on ? 'rec-indicator on' : 'rec-indicator';
     aiFixAllBtn.disabled = on; // 录制中不批量校正(避免改动与录制交织)
+    setMacroLibButtonsDisabled(on); // 录制中禁用宏库运行入口
 }
 
 function setBusy(busy: boolean): void {
@@ -1063,6 +1074,7 @@ function setBusy(busy: boolean): void {
     stopRunBtn.disabled = !busy;
     stopRunBtn.textContent = '停止回放';
     aiFixAllBtn.disabled = busy; // 回放中不批量校正
+    setMacroLibButtonsDisabled(busy); // 运行中禁用宏库运行入口,避免叠跑
 }
 
 // ===== 运行/停止:runId 与暂停模态框 =====
@@ -1497,13 +1509,17 @@ function backfillRecordedUrls(urls?: (string | null)[]): void {
     }
 }
 
-function reportRunResult(result: RunResult): void {
+function reportRunResult(result: RunResult, opts?: { fromEditor?: boolean }): void {
+    const fromEditor = opts?.fromEditor !== false; // 默认视为编辑区自身的宏
     if (result.cancelled) {
         logLocal('回放已被用户停止。');
         return;
     }
     // 无论成功/失败,先把已记录的来源 URL 回填(失败前跑到的步骤也能受益)
-    backfillRecordedUrls(result.stepUrls);
+    // 后台运行宏库里的别的宏(fromEditor=false)时跳过:回填只针对编辑区当前的宏,否则会污染编辑区
+    if (fromEditor) {
+        backfillRecordedUrls(result.stepUrls);
+    }
     if (result.ok) {
         lastRows = result.rows ?? [];
         const dlCount = result.downloads?.length ?? 0;
@@ -1571,23 +1587,16 @@ saveBtn.addEventListener('click', async () => {
             currentMacroPath = filePath;
             seedPersistedSig();
             logLocal(`宏已保存到:${filePath}`);
+            void renderMacroLibrary(); // 新宏即时出现在宏库列表
         }
     } catch (e) {
         logLocal('保存宏失败:' + (e as Error).message, 'error');
     }
 });
 
-loadBtn.addEventListener('click', async () => {
-    let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
-    try {
-        loaded = await window.electronAPI.loadMacro();
-    } catch (e) {
-        logLocal('加载宏失败:' + (e as Error).message, 'error');
-        return;
-    }
-    if (!loaded) {
-        return;
-    }
+/** 把已读取的宏应用到编辑区(载入):回显名称/步骤/旁车/提取规则/插件,并追踪文件路径。
+ *  供工具栏「加载宏」(弹框)与宏库面板「打开」(按路径)共用。 */
+function applyLoadedMacro(loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string }): void {
     const macro = loaded.macro;
     nameInput.value = macro.name ?? '';
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
@@ -1631,6 +1640,20 @@ loadBtn.addEventListener('click', async () => {
         addressInput.value = first.url;
         webview.src = first.url;
     }
+}
+
+loadBtn.addEventListener('click', async () => {
+    let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
+    try {
+        loaded = await window.electronAPI.loadMacro();
+    } catch (e) {
+        logLocal('加载宏失败:' + (e as Error).message, 'error');
+        return;
+    }
+    if (!loaded) {
+        return;
+    }
+    applyLoadedMacro(loaded);
 });
 
 exportBtn.addEventListener('click', async () => {
@@ -1769,6 +1792,202 @@ function refreshPluginSelection(postProcess: Macro['postProcess']): void {
         cb.checked = !!type && wanted.has(type);
     });
 }
+
+// ===== 宏库:批量列出 macros/ 目录、逐个/批量运行、一键载入 =====
+const macroLibPanel = byId<HTMLDivElement>('macro-lib-panel');
+const macroLibTitle = byId<HTMLElement>('macro-lib-title');
+const macroLibList = byId<HTMLDivElement>('macro-lib-list');
+const macroLibRefreshBtn = byId<HTMLButtonElement>('macro-lib-refresh');
+const macroLibRunSelectedBtn = byId<HTMLButtonElement>('macro-lib-run-selected');
+
+macroLibTitle.addEventListener('click', () => {
+    macroLibPanel.classList.toggle('collapsed');
+});
+
+/** 扫描 macros/ 目录并渲染宏库列表(每项:勾选 + 名称/步数 + 打开 + 运行) */
+async function renderMacroLibrary(): Promise<void> {
+    let macros: MacroSummary[];
+    try {
+        macros = await window.electronAPI.listMacros();
+    } catch (e) {
+        logLocal('扫描宏库失败:' + (e as Error).message, 'error');
+        return;
+    }
+    macroLibList.innerHTML = '';
+    if (macros.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'hint';
+        empty.textContent = '宏库为空。录制并「保存宏」后,会出现在这里。';
+        macroLibList.appendChild(empty);
+        return;
+    }
+    for (const m of macros) {
+        const row = document.createElement('div');
+        row.className = 'macro-item';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.filePath = m.filePath;
+        cb.title = '勾选后可用「运行选中」批量顺序运行';
+
+        const info = document.createElement('div');
+        info.className = 'macro-item-info';
+        const name = document.createElement('span');
+        name.className = 'macro-item-name';
+        name.textContent = m.name;
+        name.title = m.filePath;
+        const meta = document.createElement('span');
+        meta.className = 'macro-item-meta';
+        meta.textContent = `${m.stepCount} 步`;
+        info.appendChild(name);
+        info.appendChild(meta);
+
+        const openBtn = document.createElement('button');
+        openBtn.className = 'macro-item-open';
+        openBtn.textContent = '打开';
+        openBtn.title = '载入到左侧编辑区(可查看/修改步骤)';
+        openBtn.addEventListener('click', () => void openMacroFromLibrary(m.filePath));
+
+        const runBtn2 = document.createElement('button');
+        runBtn2.className = 'macro-item-run';
+        runBtn2.textContent = '运行';
+        runBtn2.title = '后台直接运行此宏(不改动当前编辑区)';
+        runBtn2.addEventListener('click', () => void runMacroFromLibrary(m));
+
+        row.appendChild(cb);
+        row.appendChild(info);
+        row.appendChild(openBtn);
+        row.appendChild(runBtn2);
+        macroLibList.appendChild(row);
+    }
+    // 忙态下同步禁用列表内按钮(与主运行按钮一致)
+    setMacroLibButtonsDisabled(runBtn.disabled || startBtn.disabled);
+}
+
+/** 统一切换宏库面板内所有按钮的禁用态(运行/录制忙时禁用,避免叠跑) */
+function setMacroLibButtonsDisabled(disabled: boolean): void {
+    macroLibRefreshBtn.disabled = disabled;
+    macroLibRunSelectedBtn.disabled = disabled;
+    macroLibList.querySelectorAll('button').forEach((b) => {
+        (b as HTMLButtonElement).disabled = disabled;
+    });
+}
+
+/** 宏库「打开」:按路径读取并载入编辑区(复用 applyLoadedMacro) */
+async function openMacroFromLibrary(filePath: string): Promise<void> {
+    let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
+    try {
+        loaded = await window.electronAPI.readMacro(filePath);
+    } catch (e) {
+        logLocal('打开宏失败:' + (e as Error).message, 'error');
+        return;
+    }
+    if (!loaded) {
+        logLocal('打开宏失败:文件可能已被移动或损坏。请点🔄刷新。', 'error');
+        return;
+    }
+    applyLoadedMacro(loaded);
+}
+
+/** 宏库「运行」:后台直接运行该宏,不改动编辑区(结果不回填编辑区步骤) */
+async function runMacroFromLibrary(summary: MacroSummary): Promise<void> {
+    let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
+    try {
+        loaded = await window.electronAPI.readMacro(summary.filePath);
+    } catch (e) {
+        logLocal('读取宏失败:' + (e as Error).message, 'error');
+        return;
+    }
+    if (!loaded) {
+        logLocal('读取宏失败:文件可能已被移动或损坏。请点🔄刷新。', 'error');
+        return;
+    }
+    if (!Array.isArray(loaded.macro.steps) || loaded.macro.steps.length === 0) {
+        logLocal(`宏「${summary.name}」没有任何步骤,已跳过。`, 'error');
+        return;
+    }
+    setBusy(true);
+    setMacroLibButtonsDisabled(true);
+    logLocal(`后台运行宏「${summary.name}」……(将弹出 Playwright 浏览器窗口,当前编辑区不受影响)`);
+    try {
+        const result = await window.electronAPI.runMacro(loaded.macro);
+        reportRunResult(result, { fromEditor: false });
+    } catch (e) {
+        logLocal('运行宏异常:' + (e as Error).message, 'error');
+    } finally {
+        setBusy(false);
+        setMacroLibButtonsDisabled(false);
+        activeRunId = null;
+        hidePauseModal();
+    }
+}
+
+/** 宏库「运行选中」:按勾选顺序依次运行选中的多个宏,逐个汇报 + 末尾汇总 */
+async function runSelectedMacros(): Promise<void> {
+    const boxes = macroLibList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-file-path]');
+    const picked: string[] = [];
+    boxes.forEach((cb) => {
+        if (cb.checked && cb.dataset.filePath) {
+            picked.push(cb.dataset.filePath);
+        }
+    });
+    if (picked.length === 0) {
+        logLocal('请先勾选要批量运行的宏。', 'error');
+        return;
+    }
+    setBusy(true);
+    setMacroLibButtonsDisabled(true);
+    logLocal(`开始批量运行 ${picked.length} 个宏(依次顺序执行)……`);
+    let okCount = 0;
+    let failCount = 0;
+    try {
+        for (let k = 0; k < picked.length; k += 1) {
+            const filePath = picked[k];
+            let loaded: { macro: Macro; captures: MacroCaptures | null; filePath: string } | null = null;
+            try {
+                loaded = await window.electronAPI.readMacro(filePath);
+            } catch (e) {
+                loaded = null;
+                logLocal(`[${k + 1}/${picked.length}] 读取失败:${(e as Error).message}`, 'error');
+            }
+            if (!loaded || !Array.isArray(loaded.macro.steps) || loaded.macro.steps.length === 0) {
+                if (loaded) {
+                    logLocal(`[${k + 1}/${picked.length}] 宏「${loaded.macro.name}」无步骤,已跳过。`, 'error');
+                }
+                failCount += 1;
+                continue;
+            }
+            const label = loaded.macro.name || filePath;
+            logLocal(`[${k + 1}/${picked.length}] 运行「${label}」……`);
+            try {
+                const result = await window.electronAPI.runMacro(loaded.macro);
+                reportRunResult(result, { fromEditor: false });
+                if (result.ok) {
+                    okCount += 1;
+                } else if (!result.cancelled) {
+                    failCount += 1;
+                }
+                if (result.cancelled) {
+                    logLocal('批量运行已被用户停止,后续宏不再执行。');
+                    break;
+                }
+            } catch (e) {
+                failCount += 1;
+                logLocal(`[${k + 1}/${picked.length}] 运行异常:${(e as Error).message}`, 'error');
+            }
+            activeRunId = null;
+        }
+        logLocal(`批量运行结束:成功 ${okCount} 个,失败/跳过 ${failCount} 个。`);
+    } finally {
+        setBusy(false);
+        setMacroLibButtonsDisabled(false);
+        activeRunId = null;
+        hidePauseModal();
+    }
+}
+
+macroLibRefreshBtn.addEventListener('click', () => void renderMacroLibrary());
+macroLibRunSelectedBtn.addEventListener('click', () => void runSelectedMacros());
 
 // ===== 浏览器登录态(回放复用)=====
 const browserPanel = byId<HTMLDivElement>('browser-panel');
@@ -2827,7 +3046,7 @@ async function init(): Promise<void> {
         activeRunId = runId; // 记录本次运行 runId,供「停止回放」按钮回传
     });
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
-    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins()]);
+    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins(), renderMacroLibrary()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
     hideBootOverlay();
 }
