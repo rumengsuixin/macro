@@ -2341,6 +2341,11 @@ async function clearFixMarker(): Promise<void> {
     }
 }
 
+/** 选择器是否用了「随交互/校验实时变化」的易变状态属性——这类选择器录制态≠回放态,会命中 0 个致超时 */
+function hasVolatileAttr(selector: string): boolean {
+    return /\[\s*@?(?:aria-(?:invalid|expanded|selected|checked|pressed|busy|disabled|current)|value)\b/i.test(selector);
+}
+
 /** 元素是否「可点击」(点击语义的祖先白名单):tag=a/button 或 role∈交互角色集 */
 function isActionable(el: Element): boolean {
     const tag = el.tagName ? el.tagName.toLowerCase() : '';
@@ -2435,6 +2440,11 @@ async function fixWithCapture(
             return 'fail';
         }
         sessionKey = res.sessionKey ?? sessionKey;
+        if (hasVolatileAttr(res.selector)) {
+            feedback = `选择器 \`${res.selector}\` 用了随交互/校验变化的易变状态属性(如 aria-invalid/value 等),回放时该状态不存在会命中 0 个导致超时。请改用 data-*/id/name/aria-label/可见文本 等稳定锚点重挑。`;
+            logLocal(`步骤 #${index + 1} 第 ${attempt} 轮返回含易变状态属性的选择器,带反馈重挑……`);
+            continue;
+        }
         const v = verifyAgainstCapture(res.selector, cap, step.type === 'click');
         if (v.ok) {
             const old = String(step.selector);
@@ -2483,6 +2493,11 @@ async function fixWithLiveDom(index: number, step: Step, selector: string): Prom
                 return 'fail';
             }
             sessionKey = res.sessionKey ?? sessionKey;
+            if (hasVolatileAttr(res.selector)) {
+                feedback = `选择器 \`${res.selector}\` 用了随交互/校验变化的易变状态属性(如 aria-invalid/value 等),回放时该状态不存在会命中 0 个导致超时。请改用 data-*/id/name/aria-label/可见文本 等稳定锚点重挑。`;
+                logLocal(`步骤 #${index + 1} 第 ${attempt} 轮返回含易变状态属性的选择器,带反馈重挑……`);
+                continue;
+            }
             const v = await verifyFixed(res.selector, step.type === 'click');
             if (v.ok) {
                 const old = String(step.selector);

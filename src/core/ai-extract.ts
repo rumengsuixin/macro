@@ -76,7 +76,9 @@ export interface GenerateResult {
 const SELECTOR_QUALITY_GUIDE =
     '【选择器质量准则(完整规范见你的〈选择器质量准则〉)】选择器务必稳定可命中:优先用 ' +
     'data-*/id/aria-label/语义 class/可见文本等稳定锚点,避免框架运行时动态类名、结构性伪类与隐藏的' +
-    '克隆 DOM;actionSelector 须能在每个列表项内点中。';
+    '克隆 DOM;actionSelector 须能在每个列表项内点中。严禁把随用户交互/表单校验实时变化的**状态属性**' +
+    '作为选择条件(如 aria-invalid/aria-expanded/aria-selected/aria-checked/aria-pressed/aria-busy/' +
+    'aria-disabled/aria-current 及元素 value)——录制那一刻的状态回放时往往不存在,会命中 0 个导致超时。';
 
 const DEFAULT_SYSTEM_PROMPT =
     '只输出一个 JSON 对象作为网页提取规则,不要任何解释、前言或 Markdown 代码块标记。';
