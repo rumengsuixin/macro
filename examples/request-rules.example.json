@@ -1,0 +1,24 @@
+{
+    "_说明": "录制端请求改写规则示例。把本文件内容拷到项目根(或打包态 userData)的 request-rules.json 并按需修改。首次运行程序也会自动在那里生成一份 enabled=false 的模板。",
+    "_字段": {
+        "enabled": "总开关,true 才拦截;改动本文件即时生效(fs.watchFile 热更新),无需重启",
+        "rules[].urlPattern": "CDP glob 匹配请求 URL,* 任意串、? 单字符,如 */api/search*",
+        "rules[].bodyType": "可选 json | form;省略则按请求 Content-Type / body 内容自动嗅探",
+        "rules[].set": "设置/覆盖 body 顶层字段(json 保留原始类型,form 转字符串)",
+        "rules[].remove": "删除的 body 顶层字段名数组"
+    },
+    "enabled": false,
+    "rules": [
+        {
+            "urlPattern": "*/api/search*",
+            "bodyType": "json",
+            "set": { "pageSize": 100, "keyword": "替换成你要的值" },
+            "remove": ["debugFlag"]
+        },
+        {
+            "urlPattern": "*/submitForm*",
+            "bodyType": "form",
+            "set": { "page": 1 }
+        }
+    ]
+}

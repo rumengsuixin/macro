@@ -10,6 +10,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
+import { RequestInterceptor } from './request-interceptor';
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import type {
@@ -42,6 +43,9 @@ const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在�
 // 浏览器登录态复用配置:文件路径与默认 profile 目录
 const browserConfigPath = path.join(dataRoot, 'browser-config.json');
 const defaultProfileDir = path.join(dataRoot, 'browser-profile');
+
+// 录制端请求改写规则:文件路径(默认 enabled=false,不干预录制)
+const requestRulesPath = path.join(dataRoot, 'request-rules.json');
 
 // webview 录制 preload 的绝对路径(与 main.js 同目录)
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
@@ -99,7 +103,11 @@ function createWindow(): void {
     mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
         // 持有 guest 引用供回放前读取 localStorage;webview 销毁时置回 null 防失效引用
         recordingWebContents = guestContents;
+        // 录制端请求改写器:按 request-rules.json 拦截并改写命中的 POST 请求体(CDP Fetch 域)
+        const interceptor = new RequestInterceptor(requestRulesPath);
+        interceptor.attach(guestContents);
         guestContents.once('destroyed', () => {
+            interceptor.detach();
             if (recordingWebContents === guestContents) {
                 recordingWebContents = null;
             }

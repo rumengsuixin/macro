@@ -8,6 +8,7 @@ macros/
 downloads/
 browser-profile/
 browser-config.json
+request-rules.json
 
 # 打包产物
 release/

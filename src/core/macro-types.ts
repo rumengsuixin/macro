@@ -315,6 +315,29 @@ export interface RunResult {
     error?: RunError;
 }
 
+/**
+ * 录制端请求改写规则:命中 urlPattern 的 POST 请求,按 set/remove 改写其 body 顶层字段。
+ * 存于 request-rules.json(项目根/打包 userData);仅作用于录制阶段的 Electron webview。
+ */
+export interface RequestRule {
+    /** URL 匹配模式(CDP glob,`*` 通配),如 `* /api/search*`(勿含空格,示例避开注释闭合) */
+    urlPattern: string;
+    /** body 类型;省略则按请求 Content-Type 嗅探(json / form) */
+    bodyType?: 'json' | 'form';
+    /** 设置/覆盖的 body 顶层字段(json 保留原始类型,form 转字符串) */
+    set?: Record<string, unknown>;
+    /** 删除的 body 顶层字段名 */
+    remove?: string[];
+}
+
+/** 录制端请求改写配置(存于 request-rules.json;默认 enabled=false 不干预) */
+export interface RequestRulesConfig {
+    /** 总开关:false 时完全不拦截 */
+    enabled: boolean;
+    /** 规则列表(按序尝试匹配,命中即改写) */
+    rules: RequestRule[];
+}
+
 /** 浏览器会话/登录态复用配置(存于项目根 browser-config.json) */
 export interface BrowserConfig {
     /** 启用持久化回放 profile(Playwright launchPersistentContext) */
