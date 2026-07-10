@@ -6,6 +6,7 @@ exports/
 errors/
 macros/
 downloads/
+timelines/
 browser-profile/
 browser-config.json
 request-rules.json

@@ -1,15 +1,18 @@
 {
     "_说明": "录制端请求改写规则示例。把本文件内容拷到项目根(或打包态 userData)的 request-rules.json 并按需修改。首次运行程序也会自动在那里生成一份 enabled=false 的模板。数组值直接写真 JSON 数组(如 [\"a\",\"b\"]),不要外面加引号写成字符串。",
     "_字段": {
-        "enabled": "总开关,true 才拦截;改动本文件即时生效(fs.watchFile 热更新),无需重启",
+        "enabled": "总开关(仅管改写),true 才拦截并改写;改动本文件即时生效(fs.watchFile 热更新),无需重启",
         "rules[].urlPattern": "CDP glob 匹配请求 URL,* 任意串、? 单字符,如 */api/search*",
         "rules[].bodyType": "可选 json | form;省略则按请求 Content-Type / body 内容自动嗅探",
         "rules[].set": "设置/覆盖 body 顶层字段(整体替换整个字段值)。json 保留原始类型(数组/对象/数字照写照留),form 转字符串。数组值就写真数组 [\"x\"]",
         "rules[].append": "往 body 顶层数组字段追加元素(字段不存在则新建数组、原为单值则包成数组,追加时去重)。json 值写要追加的元素数组;form 追加为重复参数",
         "rules[].remove": "删除的 body 顶层字段名数组",
-        "_执行顺序": "同一条规则内按 set → append → remove 依次执行"
+        "_执行顺序": "同一条规则内按 set → append → remove 依次执行",
+        "record": "「只记录不修改」支路,独立开关(与 enabled 无关):record.enabled=true 即拦截所有请求(不限 method)+ 响应,写入 timelines/timeline-*.jsonl(每行一条 JSON,含 url/method/headers/请求body/状态码/耗时),供事后分析。不改写任何请求。录制端(CDP Network)与回放端(Playwright)共用本段。urlPattern 缺省/* 记录所有;includeBody=false 则不记请求 body",
+        "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
     },
     "enabled": false,
+    "record": { "enabled": false, "urlPattern": "*", "includeBody": true },
     "rules": [
         {
             "_注": "json:覆盖数值字段 + 把 videoIds 整体设成一个真数组 + 删除 debugFlag",

@@ -332,12 +332,28 @@ export interface RequestRule {
     remove?: string[];
 }
 
+/**
+ * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
+ * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
+ * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
+ */
+export interface TimelineRecordConfig {
+    /** 独立开关:true 即开启记录,与改写总开关无关 */
+    enabled: boolean;
+    /** 只记录命中该 CDP glob 的 URL;缺省/`*` → 记录所有请求 */
+    urlPattern?: string;
+    /** 是否记录完整请求 body(缺省视为 true;禁止截断) */
+    includeBody?: boolean;
+}
+
 /** 录制端请求改写配置(存于 request-rules.json;默认 enabled=false 不干预) */
 export interface RequestRulesConfig {
-    /** 总开关:false 时完全不拦截 */
+    /** 总开关:false 时完全不拦截(改写) */
     enabled: boolean;
     /** 规则列表(按序尝试匹配,命中即改写) */
     rules: RequestRule[];
+    /** 只记录不修改支路(独立开关);缺省视为不记录 */
+    record?: TimelineRecordConfig;
 }
 
 /** 浏览器会话/登录态复用配置(存于项目根 browser-config.json) */

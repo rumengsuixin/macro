@@ -26,6 +26,7 @@ import type {
 import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
 import { matchRule, decideBodyType, rewritePostBody, headerValue } from './request-rewrite';
+import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
 
 export class MacroRunner {
@@ -37,6 +38,8 @@ export class MacroRunner {
     private session: SessionOptions;
     /** 下载文件保存目录;缺省回退到 errorDir 同级的 downloads */
     private downloadDir: string;
+    /** 请求时间线记录输出目录(record 支路);缺省回退到 errorDir 同级的 timelines */
+    private timelinesDir: string;
     /** 用户已请求停止:主循环每步前检查,已置位则抛出并跳过后续步骤/提取 */
     private cancelled = false;
     /** 当前 context 引用:停止时主动关闭以打断正在进行的 Playwright 操作(慢步骤/提取阶段) */
@@ -47,7 +50,8 @@ export class MacroRunner {
         timeoutMs?: number,
         onPause?: OnPause,
         session?: SessionOptions,
-        downloadDir?: string
+        downloadDir?: string,
+        timelinesDir?: string
     ) {
         this.errorDir = errorDir;
         // 回放默认超时:默认 60 秒;可用环境变量 MACRO_TIMEOUT(毫秒)覆盖
@@ -56,6 +60,7 @@ export class MacroRunner {
         this.onPause = onPause ?? (async (): Promise<void> => {});
         this.session = session ?? {};
         this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
+        this.timelinesDir = timelinesDir ?? path.join(errorDir, '..', 'timelines');
     }
 
     /**
@@ -183,6 +188,8 @@ export class MacroRunner {
 
             // 回放端请求改写:必须早于第一个 goto 注册;挂在 context 上自动覆盖初始页与后续所有弹窗
             await this.installRequestRoutes(context);
+            // 回放端「只记录不修改」支路:同样早于第一个 goto、挂 context 覆盖初始页与弹窗;与改写路径独立
+            this.installTimelineRecording(context);
 
             // 反检测注入脚本(必须在任何导航前注册;早于 cookie 注入):抹掉自动化痕迹、补齐常见浏览器特征
             await context.addInitScript(() => {
@@ -451,6 +458,96 @@ export class MacroRunner {
                 } catch {
                     /* 请求可能已失效,忽略 */
                 }
+            }
+        });
+    }
+
+    /**
+     * 回放端「只记录不修改」支路:被动监听 context 级请求/响应事件,把命中的请求+响应写入
+     * 时间线 JSONL 文件,供事后分析。**独立于 installRequestRoutes 的改写门槛**——即便改写关闭,
+     * 只要 record.enabled 就记录;记录不改写、不进 route,与改写彻底解耦。
+     *
+     * 记录到的是页面**原始 body**(改写前):context.on('request') 的 postData() 反映页面本来要发什么,
+     * 与 route.continue({postData}) 的改写解耦——这正是「支路互不影响」的正确表现。
+     * context 级事件天然覆盖初始页与后续所有弹窗(同 installRequestRoutes / DownloadManager)。
+     */
+    private installTimelineRecording(context: BrowserContext): void {
+        const rec = this.session.requestRules?.record;
+        if (!rec || !rec.enabled) {
+            return; // 未开启记录支路:零监听开销
+        }
+        const recorder = new TimelineRecorder(this.timelinesDir, 'replay', rec.urlPattern);
+        const wantBody = rec.includeBody !== false;
+        // Playwright 无 CDP requestId,用 WeakMap 记住每个请求的关联 id 与起始时刻(自增计数分配 id)
+        const meta = new WeakMap<Request, { id: string; start: number }>();
+        let seq = 0;
+        logInfo(
+            `回放请求记录:已启用(记录所有请求到时间线,不改写),匹配 URL:${rec.urlPattern || '全部'};` +
+                `输出:${recorder.file}`
+        );
+
+        context.on('request', (req: Request) => {
+            try {
+                if (!recorder.matches(req.url())) {
+                    return;
+                }
+                seq += 1;
+                const id = String(seq);
+                meta.set(req, { id, start: Date.now() });
+                // Playwright 直接给完整 body(不截断);wantBody=false 时跳过
+                const reqBody = wantBody ? req.postData() ?? undefined : undefined;
+                recorder.writeRequest({
+                    id,
+                    method: req.method(),
+                    url: req.url(),
+                    reqHeaders: req.headers(),
+                    reqBody,
+                });
+            } catch {
+                /* 记录支路不得影响主流程 */
+            }
+        });
+
+        // 用 response 事件(而非 requestfinished)写响应行:响应头到达即触发,早于 body 完成与 context 关闭,
+        // 且 status/headers 同步可取——避免「宏结束后 context 立即关闭,异步 req.response() 来不及」的竞态。
+        context.on('response', (resp) => {
+            try {
+                const req = resp.request();
+                const m = meta.get(req);
+                if (!m) {
+                    return; // 未命中记录条件(matches 未过)的请求
+                }
+                const respHeaders = resp.headers();
+                const mimeType = headerValue(respHeaders, 'content-type');
+                recorder.writeResponse({
+                    id: m.id,
+                    method: req.method(),
+                    url: req.url(),
+                    status: resp.status(),
+                    timingMs: Date.now() - m.start, // 墙钟耗时(足够分析用)
+                    respHeaders,
+                    mimeType: mimeType || undefined,
+                });
+            } catch {
+                /* 记录支路不得影响主流程 */
+            }
+        });
+
+        context.on('requestfailed', (req: Request) => {
+            try {
+                const m = meta.get(req);
+                if (!m) {
+                    return;
+                }
+                recorder.writeResponse({
+                    id: m.id,
+                    method: req.method(),
+                    url: req.url(),
+                    timingMs: Date.now() - m.start,
+                    error: req.failure()?.errorText,
+                });
+            } catch {
+                /* 记录支路不得影响主流程 */
             }
         });
     }

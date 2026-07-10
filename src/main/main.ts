@@ -39,6 +39,7 @@ const macrosDir = path.join(dataRoot, 'macros');
 const exportsDir = path.join(dataRoot, 'exports');
 const errorsDir = path.join(dataRoot, 'errors');
 const downloadsDir = path.join(dataRoot, 'downloads');
+const timelinesDir = path.join(dataRoot, 'timelines'); // 「只记录不修改」支路的请求时间线 JSONL 输出
 const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在程序目录内
 
 // 浏览器登录态复用配置:文件路径与默认 profile 目录
@@ -62,7 +63,7 @@ let runSeq = 0;
 
 /** 确保运行时目录存在 */
 function ensureDirs(): void {
-    for (const dir of [macrosDir, exportsDir, errorsDir, downloadsDir]) {
+    for (const dir of [macrosDir, exportsDir, errorsDir, downloadsDir, timelinesDir]) {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -104,8 +105,9 @@ function createWindow(): void {
     mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
         // 持有 guest 引用供回放前读取 localStorage;webview 销毁时置回 null 防失效引用
         recordingWebContents = guestContents;
-        // 录制端请求改写器:按 request-rules.json 拦截并改写命中的 POST 请求体(CDP Fetch 域)
-        const interceptor = new RequestInterceptor(requestRulesPath);
+        // 录制端请求改写器:按 request-rules.json 拦截并改写命中的 POST 请求体(CDP Fetch 域);
+        // 同时承载「只记录不修改」支路(CDP Network 域,记录所有请求到 timelines/)
+        const interceptor = new RequestInterceptor(requestRulesPath, timelinesDir);
         interceptor.attach(guestContents);
         guestContents.once('destroyed', () => {
             interceptor.detach();
@@ -280,7 +282,14 @@ function registerIpc(): void {
         // 运行前组装会话选项:持久化目录 + 录制 cookie 注入(均按 browser-config.json 开关)
         ensureDirs();
         const sessionOptions = await buildSessionOptions();
-        const runner = new MacroRunner(errorsDir, undefined, onPause, sessionOptions, downloadsDir);
+        const runner = new MacroRunner(
+            errorsDir,
+            undefined,
+            onPause,
+            sessionOptions,
+            downloadsDir,
+            timelinesDir
+        );
 
         // 「停止回放」信号:匹配 runId 时调用 runner.cancel() 主动中止(与 resume 同一 runId 隔离机制)
         const stopListener = (_ev: unknown, id: number): void => {
@@ -510,12 +519,23 @@ async function buildSessionOptions(): Promise<SessionOptions> {
             logInfo('录制会话无可注入的 localStorage(当前页非 http(s) 或为空)。');
         }
     }
-    // 回放端请求改写:复用录制端同一份 request-rules.json(requestRulesPath 与录制端共用),
+    // 回放端请求改写 + 只记录不修改支路:复用录制端同一份 request-rules.json(与录制端共用),
     // 每次回放开始都重新读取,天然取到最新规则(无需运行中热更新)。
+    // 门槛放宽:改写(enabled+规则)或记录(record.enabled)任一开启,都把 config 带给 runner——
+    // record-only(改写 enabled:false)也要能记录。两支路在 runner 内各自独立判断,互不启停。
     const requestRules = loadRequestRules(requestRulesPath);
-    if (requestRules.enabled && requestRules.rules.length > 0) {
+    const rewriteActive = requestRules.enabled && requestRules.rules.length > 0;
+    const recordActive = requestRules.record?.enabled === true;
+    if (rewriteActive || recordActive) {
         options.requestRules = requestRules;
-        logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
+        if (rewriteActive) {
+            logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
+        }
+        if (recordActive) {
+            logInfo(
+                `回放将记录请求时间线(只记录不修改),匹配 URL:${requestRules.record?.urlPattern || '全部'}。`
+            );
+        }
     }
     return options;
 }
