@@ -326,6 +326,8 @@ export interface RequestRule {
     bodyType?: 'json' | 'form';
     /** 设置/覆盖的 body 顶层字段(json 保留原始类型,form 转字符串) */
     set?: Record<string, unknown>;
+    /** 往 body 顶层字段追加(json:确保为数组后 push,值为数组则逐元素,已存在的值去重;form:追加为重复参数、同值去重) */
+    append?: Record<string, unknown>;
     /** 删除的 body 顶层字段名 */
     remove?: string[];
 }

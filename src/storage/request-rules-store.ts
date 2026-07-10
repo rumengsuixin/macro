@@ -19,7 +19,10 @@ function templateConfig(): RequestRulesConfig {
             {
                 urlPattern: '*/api/example*',
                 bodyType: 'json',
-                set: { pageSize: 100, keyword: '替换成你要的值' },
+                // set:整体覆盖顶层字段。数组值直接写真 JSON 数组(勿加引号),会保留为数组
+                set: { pageSize: 100, keyword: '替换成你要的值', videoIds: ['id-1', 'id-2'] },
+                // append:往顶层数组字段追加(字段不存在则新建,已存在的值去重)
+                append: { videoIds: ['要追加的-id'] },
                 remove: [],
             },
         ],
@@ -41,6 +44,9 @@ function normalizeRule(raw: unknown): RequestRule | null {
     }
     if (r.set && typeof r.set === 'object' && !Array.isArray(r.set)) {
         rule.set = r.set as Record<string, unknown>;
+    }
+    if (r.append && typeof r.append === 'object' && !Array.isArray(r.append)) {
+        rule.append = r.append as Record<string, unknown>;
     }
     if (Array.isArray(r.remove)) {
         rule.remove = r.remove.filter((x): x is string => typeof x === 'string');

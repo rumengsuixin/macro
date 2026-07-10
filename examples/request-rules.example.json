@@ -1,24 +1,35 @@
 {
-    "_说明": "录制端请求改写规则示例。把本文件内容拷到项目根(或打包态 userData)的 request-rules.json 并按需修改。首次运行程序也会自动在那里生成一份 enabled=false 的模板。",
+    "_说明": "录制端请求改写规则示例。把本文件内容拷到项目根(或打包态 userData)的 request-rules.json 并按需修改。首次运行程序也会自动在那里生成一份 enabled=false 的模板。数组值直接写真 JSON 数组(如 [\"a\",\"b\"]),不要外面加引号写成字符串。",
     "_字段": {
         "enabled": "总开关,true 才拦截;改动本文件即时生效(fs.watchFile 热更新),无需重启",
         "rules[].urlPattern": "CDP glob 匹配请求 URL,* 任意串、? 单字符,如 */api/search*",
         "rules[].bodyType": "可选 json | form;省略则按请求 Content-Type / body 内容自动嗅探",
-        "rules[].set": "设置/覆盖 body 顶层字段(json 保留原始类型,form 转字符串)",
-        "rules[].remove": "删除的 body 顶层字段名数组"
+        "rules[].set": "设置/覆盖 body 顶层字段(整体替换整个字段值)。json 保留原始类型(数组/对象/数字照写照留),form 转字符串。数组值就写真数组 [\"x\"]",
+        "rules[].append": "往 body 顶层数组字段追加元素(字段不存在则新建数组、原为单值则包成数组,追加时去重)。json 值写要追加的元素数组;form 追加为重复参数",
+        "rules[].remove": "删除的 body 顶层字段名数组",
+        "_执行顺序": "同一条规则内按 set → append → remove 依次执行"
     },
     "enabled": false,
     "rules": [
         {
+            "_注": "json:覆盖数值字段 + 把 videoIds 整体设成一个真数组 + 删除 debugFlag",
             "urlPattern": "*/api/search*",
             "bodyType": "json",
-            "set": { "pageSize": 100, "keyword": "替换成你要的值" },
+            "set": { "pageSize": 100, "keyword": "替换成你要的值", "videoIds": ["B5IvLw_ihbU"] },
             "remove": ["debugFlag"]
         },
         {
+            "_注": "json:不动原有 encryptedVideoIds 数组,只往里追加一个 id(去重);字段不存在时会新建数组",
+            "urlPattern": "*/api/creator/get_videos*",
+            "bodyType": "json",
+            "append": { "encryptedVideoIds": ["B5IvLw_ihbU"] }
+        },
+        {
+            "_注": "form:设置 page、并往 tags 追加两个值(编码为重复参数 tags=a&tags=b)",
             "urlPattern": "*/submitForm*",
             "bodyType": "form",
-            "set": { "page": 1 }
+            "set": { "page": 1 },
+            "append": { "tags": ["a", "b"] }
         }
     ]
 }

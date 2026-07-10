@@ -65,9 +65,67 @@ console.log('4) rewritePostBody —— 表单改写');
     assert(!p.has('debug'), 'remove 删除 debug');
 }
 
-console.log('5) rewritePostBody —— 无动作规则返回 null');
-assert(rewritePostBody('a=1', 'form', { urlPattern: '*' }) === null, '无 set/remove → null(不改写)');
-assert(rewritePostBody('a=1', 'form', { urlPattern: '*', set: {}, remove: [] }) === null, '空 set/remove → null');
+console.log('5) rewritePostBody —— set 数组值原样保留(JSON)');
+{
+    const out = rewritePostBody('{"a":1}', 'json', {
+        urlPattern: '*',
+        set: { encryptedVideoIds: ['B5IvLw_ihbU'] },
+    });
+    const obj = JSON.parse(out);
+    assert(Array.isArray(obj.encryptedVideoIds), 'set 真数组落成真数组(非字符串)');
+    assert(obj.encryptedVideoIds.length === 1 && obj.encryptedVideoIds[0] === 'B5IvLw_ihbU', '数组元素正确');
+}
+
+console.log('6) rewritePostBody —— append 追加去重(JSON)');
+{
+    const out = rewritePostBody('{"ids":["a","b"]}', 'json', {
+        urlPattern: '*',
+        append: { ids: ['c'] },
+    });
+    assert(JSON.stringify(JSON.parse(out).ids) === JSON.stringify(['a', 'b', 'c']), '向已有数组末尾追加元素');
+}
+{
+    const out = rewritePostBody('{}', 'json', { urlPattern: '*', append: { ids: ['x'] } });
+    assert(JSON.stringify(JSON.parse(out).ids) === JSON.stringify(['x']), '字段不存在 → 新建数组');
+}
+{
+    const out = rewritePostBody('{"id":"a"}', 'json', { urlPattern: '*', append: { id: ['b'] } });
+    assert(JSON.stringify(JSON.parse(out).id) === JSON.stringify(['a', 'b']), '原为单值 → 包成数组再追加');
+}
+{
+    const out = rewritePostBody('{"ids":["a"]}', 'json', { urlPattern: '*', append: { ids: ['b', 'c'] } });
+    assert(JSON.stringify(JSON.parse(out).ids) === JSON.stringify(['a', 'b', 'c']), '值为数组 → 逐元素追加');
+}
+{
+    const out = rewritePostBody('{"ids":["a","b"]}', 'json', { urlPattern: '*', append: { ids: ['b', 'c', 'c'] } });
+    assert(JSON.stringify(JSON.parse(out).ids) === JSON.stringify(['a', 'b', 'c']), '追加重复值 → 去重(含追加批次内自去重)');
+}
+{
+    // set → append 顺序:先把 videoIds 设成数组,再往里追加
+    const out = rewritePostBody('{}', 'json', {
+        urlPattern: '*',
+        set: { videoIds: ['a'] },
+        append: { videoIds: ['b'] },
+    });
+    assert(JSON.stringify(JSON.parse(out).videoIds) === JSON.stringify(['a', 'b']), 'set 后 append 在其结果上追加');
+}
+
+console.log('7) rewritePostBody —— append 追加(表单)');
+{
+    const out = rewritePostBody('tags=a', 'form', { urlPattern: '*', append: { tags: ['b', 'c'] } });
+    const p = new URLSearchParams(out);
+    assert(JSON.stringify(p.getAll('tags')) === JSON.stringify(['a', 'b', 'c']), 'form 追加为重复参数');
+}
+{
+    const out = rewritePostBody('tags=a&tags=b', 'form', { urlPattern: '*', append: { tags: ['b', 'd'] } });
+    const p = new URLSearchParams(out);
+    assert(JSON.stringify(p.getAll('tags')) === JSON.stringify(['a', 'b', 'd']), 'form 追加已存在值 → 去重');
+}
+
+console.log('8) rewritePostBody —— 无动作规则返回 null');
+assert(rewritePostBody('a=1', 'form', { urlPattern: '*' }) === null, '无 set/append/remove → null(不改写)');
+assert(rewritePostBody('a=1', 'form', { urlPattern: '*', set: {}, append: {}, remove: [] }) === null, '空 set/append/remove → null');
+assert(rewritePostBody('{"ids":["a"]}', 'json', { urlPattern: '*', append: { ids: ['b'] } }) !== null, '只有 append 的规则不返回 null');
 
 if (failed > 0) {
     console.error(`\n自检失败:${failed} 项未通过。`);

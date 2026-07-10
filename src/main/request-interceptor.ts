@@ -69,14 +69,19 @@ export function rewritePostBody(
     rule: RequestRule
 ): string | null {
     const setEntries = rule.set ? Object.entries(rule.set) : [];
+    const appendEntries = rule.append ? Object.entries(rule.append) : [];
     const removeKeys = rule.remove ?? [];
-    if (setEntries.length === 0 && removeKeys.length === 0) {
+    if (setEntries.length === 0 && appendEntries.length === 0 && removeKeys.length === 0) {
         return null; // 规则没定义任何改写动作
     }
+    // 执行顺序:set(整体覆盖)→ append(追加到数组)→ remove(删除)
     if (bodyType === 'json') {
         const obj = original ? (JSON.parse(original) as Record<string, unknown>) : {};
         for (const [k, v] of setEntries) {
             obj[k] = v;
+        }
+        for (const [k, v] of appendEntries) {
+            appendJsonField(obj, k, v);
         }
         for (const k of removeKeys) {
             delete obj[k];
@@ -88,10 +93,55 @@ export function rewritePostBody(
     for (const [k, v] of setEntries) {
         params.set(k, String(v));
     }
+    for (const [k, v] of appendEntries) {
+        appendFormField(params, k, v);
+    }
     for (const k of removeKeys) {
         params.delete(k);
     }
     return params.toString();
+}
+
+/**
+ * 往 JSON 对象的顶层字段追加(去重):
+ * - value 为数组则逐元素追加,否则追加单个值;
+ * - obj[key] 不存在→新建 []、原为数组→在其上追加、原为单值→先包成 [原值];
+ * - 用 JSON 序列化比对去重,已存在的值跳过(基本类型/对象/数组均适用)。
+ */
+function appendJsonField(obj: Record<string, unknown>, key: string, value: unknown): void {
+    const items = Array.isArray(value) ? value : [value];
+    const current = obj[key];
+    const base: unknown[] = Array.isArray(current)
+        ? current.slice()
+        : current === undefined
+          ? []
+          : [current];
+    const seen = new Set(base.map((x) => JSON.stringify(x)));
+    for (const item of items) {
+        const sig = JSON.stringify(item);
+        if (!seen.has(sig)) {
+            base.push(item);
+            seen.add(sig);
+        }
+    }
+    obj[key] = base;
+}
+
+/**
+ * 往 form 参数追加为重复参数(去重):
+ * - value 为数组则逐元素,否则单个;各元素 String 化;
+ * - 已存在同名同值的参数跳过(按当前该 key 的全部取值去重)。
+ */
+function appendFormField(params: URLSearchParams, key: string, value: unknown): void {
+    const items = Array.isArray(value) ? value : [value];
+    const existing = new Set(params.getAll(key));
+    for (const item of items) {
+        const s = String(item);
+        if (!existing.has(s)) {
+            params.append(key, s);
+            existing.add(s);
+        }
+    }
 }
 
 export class RequestInterceptor {
@@ -294,6 +344,7 @@ export class RequestInterceptor {
         const contentType = headerValue(request.headers, 'content-type');
         const bodyType = decideBodyType(rule, contentType, original);
         const setKeys = rule.set ? Object.keys(rule.set) : [];
+        const appendKeys = rule.append ? Object.keys(rule.append) : [];
         const removeKeys = rule.remove ?? [];
 
         try {
@@ -303,7 +354,8 @@ export class RequestInterceptor {
             }
             logInfo(
                 `请求改写器:已改写${bodyType === 'json' ? ' JSON ' : '表单'}请求体 [${request.url}];` +
-                    `set=${setKeys.join(',') || '无'};remove=${removeKeys.join(',') || '无'}`
+                    `set=${setKeys.join(',') || '无'};append=${appendKeys.join(',') || '无'};` +
+                    `remove=${removeKeys.join(',') || '无'}`
             );
             return out;
         } catch (err) {
