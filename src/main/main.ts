@@ -10,6 +10,7 @@ import { exportToExcel } from '../core/excel-exporter';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
+import { loadRequestRules } from '../storage/request-rules-store';
 import { RequestInterceptor } from './request-interceptor';
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
@@ -508,6 +509,13 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         } else {
             logInfo('录制会话无可注入的 localStorage(当前页非 http(s) 或为空)。');
         }
+    }
+    // 回放端请求改写:复用录制端同一份 request-rules.json(requestRulesPath 与录制端共用),
+    // 每次回放开始都重新读取,天然取到最新规则(无需运行中热更新)。
+    const requestRules = loadRequestRules(requestRulesPath);
+    if (requestRules.enabled && requestRules.rules.length > 0) {
+        options.requestRules = requestRules;
+        logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
     }
     return options;
 }

@@ -1,7 +1,15 @@
 // 宏回放引擎:读取 JSON 宏,使用 Playwright 启动浏览器并逐步执行。
 // 每种 step 类型都有独立的处理方法;每一步执行前后打印中文日志;
 // 出错时截图保存到 errors/ 目录,并返回结构化错误信息。
-import { chromium, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
+import {
+    chromium,
+    type Browser,
+    type BrowserContext,
+    type Page,
+    type Locator,
+    type Route,
+    type Request,
+} from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs';
 import type {
@@ -17,6 +25,7 @@ import type {
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
+import { matchRule, decideBodyType, rewritePostBody, headerValue } from './request-rewrite';
 import { logInfo, logError } from './logger';
 
 export class MacroRunner {
@@ -171,6 +180,9 @@ export class MacroRunner {
             if (this.cancelled) {
                 throw new Error('回放已被用户停止。');
             }
+
+            // 回放端请求改写:必须早于第一个 goto 注册;挂在 context 上自动覆盖初始页与后续所有弹窗
+            await this.installRequestRoutes(context);
 
             // 反检测注入脚本(必须在任何导航前注册;早于 cookie 注入):抹掉自动化痕迹、补齐常见浏览器特征
             await context.addInitScript(() => {
@@ -368,6 +380,79 @@ export class MacroRunner {
                 logInfo('浏览器已关闭。');
             }
         }
+    }
+
+    /**
+     * 回放端请求改写:在 context 上注册全量 route,命中规则的 POST 改写其 body 再放行。
+     * 与录制端(CDP)共用 core/request-rewrite 的 matchRule/decideBodyType/rewritePostBody,
+     * 用全量 route(匹配所有 URL)+ 内部 globToRegExp 匹配,保证 glob 方言与录制端完全一致
+     *(不把 rule.urlPattern 直接交给 Playwright route,两者 glob 方言不同会致命中集漂移)。
+     * 仅在 enabled 且有规则时注册 → 未启用零 route 开销;每条请求都必须 continue,否则页面卡死。
+     */
+    private async installRequestRoutes(context: BrowserContext): Promise<void> {
+        const cfg = this.session.requestRules;
+        if (!cfg || !cfg.enabled || cfg.rules.length === 0) {
+            return; // 未启用 / 无规则:完全不注册,回放零额外开销
+        }
+        const rules = cfg.rules;
+        logInfo(
+            `回放请求改写器:已启用,共 ${rules.length} 条规则,` +
+                `匹配 URL:${rules.map((r) => r.urlPattern).join(' | ')}`
+        );
+        await context.route('**/*', async (route: Route, request: Request) => {
+            try {
+                // 非 POST → 原样放行
+                if (request.method().toUpperCase() !== 'POST') {
+                    await route.continue();
+                    return;
+                }
+                const rule = matchRule(rules, request.url());
+                if (!rule) {
+                    await route.continue(); // 未命中规则
+                    return;
+                }
+                // Playwright 直接给完整 body(无需像 CDP 单独取);无 body 可改则放行
+                const original = request.postData();
+                if (!original) {
+                    await route.continue();
+                    return;
+                }
+                const contentType = headerValue(request.headers(), 'content-type');
+                const bodyType = decideBodyType(rule, contentType, original);
+                let newBody: string | null = null;
+                try {
+                    newBody = rewritePostBody(original, bodyType, rule);
+                } catch (err) {
+                    // 非法 JSON 等:记日志、原样放行(与录制端 rewriteBody 一致)
+                    logError(
+                        `回放请求改写器:解析/改写 body 失败(原样放行):${(err as Error).message}`
+                    );
+                    newBody = null;
+                }
+                if (newBody !== null) {
+                    const setKeys = rule.set ? Object.keys(rule.set) : [];
+                    const appendKeys = rule.append ? Object.keys(rule.append) : [];
+                    const removeKeys = rule.remove ?? [];
+                    logInfo(
+                        `回放请求改写器:已改写${bodyType === 'json' ? ' JSON ' : '表单'}请求体 [${request.url()}];` +
+                            `set=${setKeys.join(',') || '无'};append=${appendKeys.join(',') || '无'};` +
+                            `remove=${removeKeys.join(',') || '无'}`
+                    );
+                    // Playwright 收普通字符串(非 base64);Content-Length 由网络栈重算
+                    await route.continue({ postData: newBody });
+                } else {
+                    await route.continue(); // 规则没定义任何改写动作
+                }
+            } catch (err) {
+                // 兜底:出任何错都尝试放行,避免页面卡死(铁律:每条请求必 continue)
+                logError(`回放请求改写器:处理请求出错:${(err as Error).message}`);
+                try {
+                    await route.continue();
+                } catch {
+                    /* 请求可能已失效,忽略 */
+                }
+            }
+        });
     }
 
     /**

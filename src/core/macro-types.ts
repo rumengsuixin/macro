@@ -377,4 +377,6 @@ export interface SessionOptions {
     localStorage?: Record<string, Record<string, string>>;
     /** 真 → 优先用本机 Chrome/Edge 内核(反检测),失败回退捆绑 Chromium */
     preferSystemChrome?: boolean;
+    /** 有值且 enabled → 回放时按规则拦截改写命中的 POST body(与录制端共用同一份规则/函数) */
+    requestRules?: RequestRulesConfig;
 }
