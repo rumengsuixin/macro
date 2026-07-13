@@ -301,6 +301,22 @@ function registerIpc(): void {
         ipcMain.on('stop-macro', stopListener);
         listeners.push(() => ipcMain.removeListener('stop-macro', stopListener));
 
+        // 运行期热更新:盯 request-rules.json,改动即把最新规则(改写 + 记录)推给正在跑的 runner,
+        // 让回放中途也能开关拦截/记录(复刻录制端 RequestInterceptor 的 fs.watchFile 热更新)。
+        const rulesWatcher = (): void => runner.updateRequestRules(loadRequestRules(requestRulesPath));
+        try {
+            fs.watchFile(requestRulesPath, { interval: 1000 }, rulesWatcher);
+        } catch {
+            /* 监听失败不致命,仅失去回放期热更新 */
+        }
+        listeners.push(() => {
+            try {
+                fs.unwatchFile(requestRulesPath, rulesWatcher);
+            } catch {
+                /* 忽略 */
+            }
+        });
+
         // 通知渲染进程:本次运行已开始(带 runId),供其「停止回放」按钮回传对应 runId
         if (!wc.isDestroyed()) {
             wc.send('macro-run-started', { runId });

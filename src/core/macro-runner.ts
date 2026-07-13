@@ -22,6 +22,8 @@ import type {
     OnPause,
     SessionOptions,
     ElementFingerprint,
+    RequestRule,
+    RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
@@ -44,6 +46,20 @@ export class MacroRunner {
     private cancelled = false;
     /** 当前 context 引用:停止时主动关闭以打断正在进行的 Playwright 操作(慢步骤/提取阶段) */
     private activeContext: BrowserContext | null = null;
+
+    // --- 请求改写/记录的运行期热更新状态(main 侧 fs.watchFile 改动即经 updateRequestRules 推入) ---
+    /** 改写 route handler:只建一次,注册/注销都用同一引用 */
+    private rewriteHandler: ((route: Route, request: Request) => Promise<void>) | null = null;
+    /** 当前生效的改写规则(handler 实时读,支持规则热更新) */
+    private rewriteRules: RequestRule[] = [];
+    /** 改写 route 是否已注册(仅 enabled 且有规则时注册 → 未启用零 route 开销) */
+    private rewriteInstalled = false;
+    /** 记录器;record.enabled 时创建(非 null 即正在记录),关闭时置 null。监听常挂,靠它决定是否写 */
+    private recorder: TimelineRecorder | null = null;
+    /** 是否记录完整请求 body */
+    private recordWantBody = true;
+    /** 当前 record 段签名:去重 + 判 urlPattern/includeBody 是否变化 */
+    private recordCfgKey = '';
 
     constructor(
         errorDir: string,
@@ -186,10 +202,9 @@ export class MacroRunner {
                 throw new Error('回放已被用户停止。');
             }
 
-            // 回放端请求改写:必须早于第一个 goto 注册;挂在 context 上自动覆盖初始页与后续所有弹窗
-            await this.installRequestRoutes(context);
-            // 回放端「只记录不修改」支路:同样早于第一个 goto、挂 context 覆盖初始页与弹窗;与改写路径独立
-            this.installTimelineRecording(context);
+            // 回放端请求改写 + 只记录不修改支路:必须早于第一个 goto,挂在 context 上覆盖初始页与后续弹窗。
+            // 建 route handler + 常挂记录监听 + 应用初始配置;之后 main 侧 fs.watchFile 经 updateRequestRules 热更新。
+            await this.setupRequestHandling(context);
 
             // 反检测注入脚本(必须在任何导航前注册;早于 cookie 注入):抹掉自动化痕迹、补齐常见浏览器特征
             await context.addInitScript(() => {
@@ -390,35 +405,28 @@ export class MacroRunner {
     }
 
     /**
-     * 回放端请求改写:在 context 上注册全量 route,命中规则的 POST 改写其 body 再放行。
-     * 与录制端(CDP)共用 core/request-rewrite 的 matchRule/decideBodyType/rewritePostBody,
-     * 用全量 route(匹配所有 URL)+ 内部 globToRegExp 匹配,保证 glob 方言与录制端完全一致
-     *(不把 rule.urlPattern 直接交给 Playwright route,两者 glob 方言不同会致命中集漂移)。
-     * 仅在 enabled 且有规则时注册 → 未启用零 route 开销;每条请求都必须 continue,否则页面卡死。
+     * 装配回放端请求处理(改写 + 只记录不修改两支路),并应用初始配置。
+     * 必须早于第一个 goto 调用(挂 context 上覆盖初始页与后续所有弹窗)。此后 main 侧 fs.watchFile
+     * 经 updateRequestRules 运行期热更新——改写走 route 注册/注销、记录靠常挂监听 + recorder 标志。
+     *
+     * 记录到的是页面**原始 body**(改写前):context.on('request') 的 postData() 反映页面本来要发什么,
+     * 与 route.continue({postData}) 的改写解耦——这正是「支路互不影响」的正确表现。
      */
-    private async installRequestRoutes(context: BrowserContext): Promise<void> {
-        const cfg = this.session.requestRules;
-        if (!cfg || !cfg.enabled || cfg.rules.length === 0) {
-            return; // 未启用 / 无规则:完全不注册,回放零额外开销
-        }
-        const rules = cfg.rules;
-        logInfo(
-            `回放请求改写器:已启用,共 ${rules.length} 条规则,` +
-                `匹配 URL:${rules.map((r) => r.urlPattern).join(' | ')}`
-        );
-        await context.route('**/*', async (route: Route, request: Request) => {
+    private async setupRequestHandling(context: BrowserContext): Promise<void> {
+        // ① 改写 route handler:只建一次,读实时 this.rewriteRules;与录制端(CDP)共用
+        // core/request-rewrite 的 matchRule/decideBodyType/rewritePostBody,用全量 route + 内部
+        // globToRegExp 匹配(不把 urlPattern 交给 Playwright,避免 glob 方言漂移)。每条必 continue。
+        this.rewriteHandler = async (route: Route, request: Request): Promise<void> => {
             try {
-                // 非 POST → 原样放行
                 if (request.method().toUpperCase() !== 'POST') {
                     await route.continue();
                     return;
                 }
-                const rule = matchRule(rules, request.url());
+                const rule = matchRule(this.rewriteRules, request.url());
                 if (!rule) {
-                    await route.continue(); // 未命中规则
+                    await route.continue();
                     return;
                 }
-                // Playwright 直接给完整 body(无需像 CDP 单独取);无 body 可改则放行
                 const original = request.postData();
                 if (!original) {
                     await route.continue();
@@ -430,7 +438,6 @@ export class MacroRunner {
                 try {
                     newBody = rewritePostBody(original, bodyType, rule);
                 } catch (err) {
-                    // 非法 JSON 等:记日志、原样放行(与录制端 rewriteBody 一致)
                     logError(
                         `回放请求改写器:解析/改写 body 失败(原样放行):${(err as Error).message}`
                     );
@@ -445,13 +452,11 @@ export class MacroRunner {
                             `set=${setKeys.join(',') || '无'};append=${appendKeys.join(',') || '无'};` +
                             `remove=${removeKeys.join(',') || '无'}`
                     );
-                    // Playwright 收普通字符串(非 base64);Content-Length 由网络栈重算
                     await route.continue({ postData: newBody });
                 } else {
-                    await route.continue(); // 规则没定义任何改写动作
+                    await route.continue();
                 }
             } catch (err) {
-                // 兜底:出任何错都尝试放行,避免页面卡死(铁律:每条请求必 continue)
                 logError(`回放请求改写器:处理请求出错:${(err as Error).message}`);
                 try {
                     await route.continue();
@@ -459,43 +464,25 @@ export class MacroRunner {
                     /* 请求可能已失效,忽略 */
                 }
             }
-        });
-    }
+        };
 
-    /**
-     * 回放端「只记录不修改」支路:被动监听 context 级请求/响应事件,把命中的请求+响应写入
-     * 时间线 JSONL 文件,供事后分析。**独立于 installRequestRoutes 的改写门槛**——即便改写关闭,
-     * 只要 record.enabled 就记录;记录不改写、不进 route,与改写彻底解耦。
-     *
-     * 记录到的是页面**原始 body**(改写前):context.on('request') 的 postData() 反映页面本来要发什么,
-     * 与 route.continue({postData}) 的改写解耦——这正是「支路互不影响」的正确表现。
-     * context 级事件天然覆盖初始页与后续所有弹窗(同 installRequestRoutes / DownloadManager)。
-     */
-    private installTimelineRecording(context: BrowserContext): void {
-        const rec = this.session.requestRules?.record;
-        if (!rec || !rec.enabled) {
-            return; // 未开启记录支路:零监听开销
-        }
-        const recorder = new TimelineRecorder(this.timelinesDir, 'replay', rec.urlPattern);
-        const wantBody = rec.includeBody !== false;
-        // Playwright 无 CDP requestId,用 WeakMap 记住每个请求的关联 id 与起始时刻(自增计数分配 id)
-        const meta = new WeakMap<Request, { id: string; start: number }>();
+        // ② 记录监听:一次性常挂(被动本地事件、开销可忽略),靠 this.recorder 是否存在决定写不写。
+        // Playwright 无 CDP requestId,用 WeakMap 记住每个请求的关联 id/起始时刻/记录它的 recorder
+        //(响应写回同一 recorder,保证请求行与响应行落在同一文件、并能完成中途关闭前已开始的交换)。
+        const meta = new WeakMap<Request, { id: string; start: number; recorder: TimelineRecorder }>();
         let seq = 0;
-        logInfo(
-            `回放请求记录:已启用(记录所有请求到时间线,不改写),匹配 URL:${rec.urlPattern || '全部'};` +
-                `输出:${recorder.file}`
-        );
 
         context.on('request', (req: Request) => {
             try {
-                if (!recorder.matches(req.url())) {
+                const recorder = this.recorder;
+                if (!recorder || !recorder.matches(req.url())) {
                     return;
                 }
                 seq += 1;
                 const id = String(seq);
-                meta.set(req, { id, start: Date.now() });
-                // Playwright 直接给完整 body(不截断);wantBody=false 时跳过
-                const reqBody = wantBody ? req.postData() ?? undefined : undefined;
+                meta.set(req, { id, start: Date.now(), recorder });
+                // Playwright 直接给完整 body(不截断);recordWantBody=false 时跳过
+                const reqBody = this.recordWantBody ? req.postData() ?? undefined : undefined;
                 recorder.writeRequest({
                     id,
                     method: req.method(),
@@ -512,14 +499,14 @@ export class MacroRunner {
         // 且 status/headers 同步可取——避免「宏结束后 context 立即关闭,异步 req.response() 来不及」的竞态。
         context.on('response', (resp) => {
             try {
-                const req = resp.request();
-                const m = meta.get(req);
+                const m = meta.get(resp.request());
                 if (!m) {
-                    return; // 未命中记录条件(matches 未过)的请求
+                    return; // 未记录该请求(记录关闭时发出 / matches 未过)
                 }
+                const req = resp.request();
                 const respHeaders = resp.headers();
                 const mimeType = headerValue(respHeaders, 'content-type');
-                recorder.writeResponse({
+                m.recorder.writeResponse({
                     id: m.id,
                     method: req.method(),
                     url: req.url(),
@@ -539,7 +526,7 @@ export class MacroRunner {
                 if (!m) {
                     return;
                 }
-                recorder.writeResponse({
+                m.recorder.writeResponse({
                     id: m.id,
                     method: req.method(),
                     url: req.url(),
@@ -550,6 +537,81 @@ export class MacroRunner {
                 /* 记录支路不得影响主流程 */
             }
         });
+
+        // ③ 应用初始配置(初始改写注册须 await,保证 route 早于第一个 goto 就位)
+        const initial = this.session.requestRules ?? { enabled: false, rules: [] };
+        await this.applyReplayRewrite(initial);
+        this.applyReplayRecord(initial);
+    }
+
+    /**
+     * 运行期热更新入口:main 侧 fs.watchFile 侦测到 request-rules.json 改动后,读入最新配置调用本方法,
+     * 把改写/记录两支路幂等地上/下线。run 未开始/已结束(activeContext 为空)则忽略。
+     */
+    updateRequestRules(cfg: RequestRulesConfig): void {
+        if (!this.activeContext) {
+            return; // 兜住「watcher 晚于 run 结束一拍触发」的竞态
+        }
+        void this.applyReplayRewrite(cfg).catch(() => undefined);
+        this.applyReplayRecord(cfg);
+    }
+
+    /**
+     * 按配置启用/停用改写 route(仿录制端 applyPatterns):enabled 且有规则才 context.route,
+     * 否则 context.unroute——**未启用零 route 开销**(不给不用改写的回放加延迟)。规则变化时
+     * handler 读实时 this.rewriteRules 自动生效(rules 一并热更新)。
+     */
+    private async applyReplayRewrite(cfg: RequestRulesConfig): Promise<void> {
+        const ctx = this.activeContext;
+        if (!ctx || !this.rewriteHandler) {
+            return;
+        }
+        this.rewriteRules = cfg.rules ?? [];
+        const want = cfg.enabled && this.rewriteRules.length > 0;
+        try {
+            if (want && !this.rewriteInstalled) {
+                await ctx.route('**/*', this.rewriteHandler);
+                this.rewriteInstalled = true;
+                logInfo(
+                    `回放请求改写器:已启用,共 ${this.rewriteRules.length} 条规则,` +
+                        `匹配 URL:${this.rewriteRules.map((r) => r.urlPattern).join(' | ')}`
+                );
+            } else if (!want && this.rewriteInstalled) {
+                await ctx.unroute('**/*', this.rewriteHandler);
+                this.rewriteInstalled = false;
+                logInfo('回放请求改写器:已停用(enabled=false 或无规则)。');
+            }
+        } catch (err) {
+            logError(`回放请求改写器:切换 route 失败:${(err as Error).message}`);
+        }
+    }
+
+    /**
+     * 按配置启用/停用/更新记录支路(仿录制端 applyRecording):监听已常挂,这里只建/停 recorder。
+     * 开→关置 null 停写;关→开建**新** TimelineRecorder(新文件);仅 urlPattern/includeBody 变则原地更新。
+     */
+    private applyReplayRecord(cfg: RequestRulesConfig): void {
+        const rec = cfg.record;
+        const want = rec?.enabled === true;
+        const key = JSON.stringify(rec ?? null);
+        if (want && !this.recorder) {
+            this.recorder = new TimelineRecorder(this.timelinesDir, 'replay', rec?.urlPattern);
+            this.recordWantBody = rec?.includeBody !== false;
+            this.recordCfgKey = key;
+            logInfo(
+                `回放请求记录:已启用(记录所有请求到时间线,不改写),匹配 URL:${rec?.urlPattern || '全部'};` +
+                    `输出:${this.recorder.file}`
+            );
+        } else if (want && this.recorder && key !== this.recordCfgKey) {
+            this.recorder.setPattern(rec?.urlPattern);
+            this.recordWantBody = rec?.includeBody !== false;
+            this.recordCfgKey = key;
+            logInfo(`回放请求记录:配置已更新,匹配 URL:${rec?.urlPattern || '全部'}。`);
+        } else if (!want && this.recorder) {
+            this.recorder = null;
+            this.recordCfgKey = '';
+            logInfo('回放请求记录:已停用。');
+        }
     }
 
     /**
