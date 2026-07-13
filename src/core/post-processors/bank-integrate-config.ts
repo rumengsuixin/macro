@@ -1,37 +1,52 @@
-// bank-integrate 插件的桥接配置:指向本机 xlsxIntgration(Python 银行整合工具)的
-// 可执行 / 项目根 / 各业务线入口。仿 storage/request-rules-store:不存在写 inert 模板 + 坏 JSON 兜底。
-// 放在 core 内(只用 node:fs,不依赖 Electron / storage),供后处理器 handler 直接读。
+// bank-integrate 插件的桥接配置:按平台指向 xlsxIntgration 的打包可执行文件(不再依赖 Python 脚本+venv)。
+// 仿 storage/request-rules-store:不存在写模板 + 坏 JSON 兜底。放 core 内(只用 node:fs/path,不依赖 Electron)。
 import fs from 'node:fs';
+import path from 'node:path';
 
-/** 单条业务线(mode)的入口:Python 脚本名 + 产物文件名 */
+/** 单条业务线(mode):当前平台可执行文件 + 产物文件名 */
 export interface BankIntegrateMode {
-    /** xlsxIntgration 里的入口脚本,如 '整合1.py' */
-    entryScript: string;
+    /** 当前平台可执行文件绝对路径(Windows exe / Mac 二进制) */
+    executable: string;
     /** 该模式产出的汇总文件名(位于 BANK_OUTPUT_DIR),如 '国内银行汇总.xlsx' */
     summaryFile: string;
 }
 
 /** bank-integrate 桥接配置 */
 export interface BankIntegrateConfig {
-    /** Python 可执行(开发态=venv python;分发态=打包二进制) */
-    pythonExe: string;
-    /** xlsxIntgration 项目根(spawn 的 cwd) */
-    projectRoot: string;
     /** 单次整合超时(毫秒),缺省 300000 */
     timeoutMs?: number;
-    /** 插件 type → 业务线入口 */
+    /** 插件 type → 业务线可执行文件入口 */
     modes: Record<string, BankIntegrateMode>;
 }
 
-/** 默认/模板配置:指向本机常见安装位置,首次自动写出供用户按需改路径 */
+/** 本机 xlsxIntgration 项目根默认值(用户可在配置里改路径) */
+const DEFAULT_XLSX_ROOT = 'D:\\git_object\\xlsxIntgration';
+
+/**
+ * 按平台给出某 mode 的默认可执行文件路径(仅支持 win32/darwin,其它留空)。
+ * - win32:PyInstaller onedir 产物 dist/银行流水整合/国内银行整合.exe
+ * - darwin:需在 Mac 上跑 build_mac.sh 打出 dist/bank-integration/domestic_bank_integration
+ */
+function defaultExecutable(type: string, xlsxRoot: string): string {
+    if (type !== 'bank-integrate-domestic') {
+        return '';
+    }
+    if (process.platform === 'win32') {
+        return path.join(xlsxRoot, 'dist', '银行流水整合', '国内银行整合.exe');
+    }
+    if (process.platform === 'darwin') {
+        return path.join(xlsxRoot, 'dist', 'bank-integration', 'domestic_bank_integration');
+    }
+    return '';
+}
+
+/** 默认/模板配置:按当前平台生成默认可执行文件路径 */
 function templateConfig(): BankIntegrateConfig {
     return {
-        pythonExe: 'D:\\git_object\\xlsxIntgration\\venv\\Scripts\\python.exe',
-        projectRoot: 'D:\\git_object\\xlsxIntgration',
         timeoutMs: 300000,
         modes: {
             'bank-integrate-domestic': {
-                entryScript: '整合1.py',
+                executable: defaultExecutable('bank-integrate-domestic', DEFAULT_XLSX_ROOT),
                 summaryFile: '国内银行汇总.xlsx',
             },
         },
@@ -40,8 +55,9 @@ function templateConfig(): BankIntegrateConfig {
 
 /**
  * 加载 bank-integrate 配置。
- * - 不存在:写模板并返回(便于用户改路径,首次运行不致命)。
- * - 坏 JSON / 字段缺失:逐字段回退模板默认(保证 handler 有可用字段)。
+ * - 不存在:写模板并返回(便于用户改路径)。
+ * - 坏 JSON:回退模板默认。
+ * - 某 mode 缺 executable:回退当前平台默认(兼容旧格式配置、不阻塞)。
  * @param filePath 配置文件路径(dataRoot/bank-integrate.json)
  */
 export function loadBankIntegrateConfig(filePath: string): BankIntegrateConfig {
@@ -56,22 +72,27 @@ export function loadBankIntegrateConfig(filePath: string): BankIntegrateConfig {
             return tpl;
         }
         const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<BankIntegrateConfig>;
+        const rawModes =
+            raw.modes && typeof raw.modes === 'object' && !Array.isArray(raw.modes) ? raw.modes : {};
+        // 以模板 modes 为底(保证默认 domestic 在),再并入用户配置;逐字段校验/回退
+        const modes: Record<string, BankIntegrateMode> = { ...tpl.modes };
+        for (const [type, m] of Object.entries(rawModes)) {
+            const mm = (m && typeof m === 'object' ? m : {}) as Partial<BankIntegrateMode>;
+            modes[type] = {
+                executable:
+                    typeof mm.executable === 'string' && mm.executable.trim()
+                        ? mm.executable
+                        : defaultExecutable(type, DEFAULT_XLSX_ROOT),
+                summaryFile:
+                    typeof mm.summaryFile === 'string' && mm.summaryFile.trim()
+                        ? mm.summaryFile
+                        : (tpl.modes[type]?.summaryFile ?? '国内银行汇总.xlsx'),
+            };
+        }
         return {
-            pythonExe:
-                typeof raw.pythonExe === 'string' && raw.pythonExe.trim()
-                    ? raw.pythonExe
-                    : tpl.pythonExe,
-            projectRoot:
-                typeof raw.projectRoot === 'string' && raw.projectRoot.trim()
-                    ? raw.projectRoot
-                    : tpl.projectRoot,
             timeoutMs:
                 typeof raw.timeoutMs === 'number' && raw.timeoutMs > 0 ? raw.timeoutMs : tpl.timeoutMs,
-            // 合并:保底带上模板里的默认 mode,用户可覆盖/新增
-            modes:
-                raw.modes && typeof raw.modes === 'object' && !Array.isArray(raw.modes)
-                    ? { ...tpl.modes, ...raw.modes }
-                    : tpl.modes,
+            modes,
         };
     } catch {
         // 坏 JSON 等异常:回退模板默认

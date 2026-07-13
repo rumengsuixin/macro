@@ -10,7 +10,7 @@ import type { PostProcessSpec, PostProcessResult } from '../macro-types';
 import { logInfo, logError } from '../logger';
 import { registerPostProcessor, type PostProcessContext, type PostProcessHandler } from './index';
 import { loadBankIntegrateConfig } from './bank-integrate-config';
-import { runPython } from './python-bridge';
+import { runSubprocess } from './subprocess-bridge';
 
 /** 可作为银行流水源的扩展名(小写含点) */
 const SUPPORTED_EXT = ['.csv', '.xls', '.xlsx'];
@@ -27,10 +27,11 @@ const handler: PostProcessHandler = async (
     if (!mode) {
         return { type: spec.type, message: `bank-integrate.json 未配置模式「${spec.type}」。` };
     }
-    if (!fs.existsSync(cfg.pythonExe)) {
+    const executable = mode.executable;
+    if (!executable || !fs.existsSync(executable)) {
         return {
             type: spec.type,
-            message: `未找到 Python 可执行:${cfg.pythonExe}(请在 bank-integrate.json 配置正确路径)。`,
+            message: `未找到可执行文件:${executable || '(未配置)'}(请在 bank-integrate.json 配置,或先在 xlsxIntgration 侧打包)。`,
         };
     }
 
@@ -51,12 +52,12 @@ const handler: PostProcessHandler = async (
         for (const f of sources) {
             fs.copyFileSync(f, path.join(inputDir, path.basename(f)));
         }
-        logInfo(`银行整合:已准备 ${sources.length} 个输入文件,调用 Python(${mode.entryScript})……`);
+        logInfo(`银行整合:已准备 ${sources.length} 个输入文件,调用可执行文件(${path.basename(executable)})……`);
 
-        const res = await runPython({
-            exe: cfg.pythonExe,
-            args: [mode.entryScript],
-            cwd: cfg.projectRoot,
+        const res = await runSubprocess({
+            exe: executable,
+            args: [],
+            cwd: path.dirname(executable),
             env: { BANK_INPUT_DIR: inputDir, BANK_OUTPUT_DIR: outputDir },
             timeoutMs: cfg.timeoutMs ?? 300000,
             onLog: (line) => logInfo(`[py] ${line}`),

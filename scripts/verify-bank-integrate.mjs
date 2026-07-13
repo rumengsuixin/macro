@@ -14,7 +14,7 @@ const ExcelJS = require('exceljs');
 const { runPostProcessors } = require('../dist/core/post-processors/index.js');
 
 const XLSX_ROOT = 'D:\\git_object\\xlsxIntgration';
-const PY = path.join(XLSX_ROOT, 'venv', 'Scripts', 'python.exe');
+const EXE = path.join(XLSX_ROOT, 'dist', '银行流水整合', '国内银行整合.exe');
 const SAMPLE_DIR = path.join(XLSX_ROOT, 'data', 'input', '1');
 const SUPPORTED = ['.csv', '.xls', '.xlsx'];
 
@@ -23,8 +23,8 @@ function skip(msg) {
     process.exit(0);
 }
 
-if (!existsSync(PY)) {
-    skip('未找到 Python 可执行 ' + PY);
+if (!existsSync(EXE)) {
+    skip('未找到可执行文件 ' + EXE + '(请先在 xlsxIntgration 侧打包)');
 }
 if (!existsSync(SAMPLE_DIR)) {
     skip('未找到样本目录 ' + SAMPLE_DIR);
@@ -50,11 +50,9 @@ writeFileSync(
     path.join(dataRoot, 'bank-integrate.json'),
     JSON.stringify(
         {
-            pythonExe: PY,
-            projectRoot: XLSX_ROOT,
             timeoutMs: 300000,
             modes: {
-                'bank-integrate-domestic': { entryScript: '整合1.py', summaryFile: '国内银行汇总.xlsx' },
+                'bank-integrate-domestic': { executable: EXE, summaryFile: '国内银行汇总.xlsx' },
             },
         },
         null,
