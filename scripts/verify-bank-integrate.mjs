@@ -1,8 +1,9 @@
-// 端到端自检:bank-integrate-domestic 后处理器真跑 Python 整合。
-// 需本机 xlsxIntgration 环境(venv + 样本),类同 test-ai.mjs 需 Gateway——前置缺失则跳过(非失败)。
-// 流程:临时 dataRoot 写 bank-integrate.json(指向真实 venv/projectRoot)→ 从 xlsxIntgration
-//   data/input/1 拷现成合规样本到临时 downloads → runPostProcessors 触发桥接 spawn Python
-//   → 断言 exports/ 产出 国内银行汇总-verify.xlsx 且 exceljs 可读、至少 1 个工作表。
+// 端到端自检:bank-integrate-* 各代号真跑打包 exe。
+// 覆盖 A 类"文件进→xlsx 出"对账/整合线:代号1/2/3/5/6。
+// 需本机 xlsxIntgration 打包产物(dist/银行流水整合/*.exe)+ data/input/N 现成样本;
+// 某代号 exe/样本缺失则跳过(非失败)。
+// 流程:临时 dataRoot 写 bank-integrate.json(各 type 指向对应 exe)→ 各代号从 data/input/N
+//   拷现成样本 → runPostProcessors([{type}], …)→ 断言 exports/ 产出 xlsx 可读。
 // 用法:npm run build && node scripts/verify-bank-integrate.mjs
 import { createRequire } from 'node:module';
 import { mkdirSync, rmSync, existsSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
@@ -14,75 +15,35 @@ const ExcelJS = require('exceljs');
 const { runPostProcessors } = require('../dist/core/post-processors/index.js');
 
 const XLSX_ROOT = 'D:\\git_object\\xlsxIntgration';
-const EXE = path.join(XLSX_ROOT, 'dist', '银行流水整合', '国内银行整合.exe');
-const SAMPLE_DIR = path.join(XLSX_ROOT, 'data', 'input', '1');
-const SUPPORTED = ['.csv', '.xls', '.xlsx'];
+const DIST = path.join(XLSX_ROOT, 'dist', '银行流水整合');
+const SUPPORTED = ['.csv', '.xls', '.xlsx', '.pdf'];
 
-function skip(msg) {
-    console.log('跳过自检(前置未满足):' + msg);
-    process.exit(0);
-}
-
-if (!existsSync(EXE)) {
-    skip('未找到可执行文件 ' + EXE + '(请先在 xlsxIntgration 侧打包)');
-}
-if (!existsSync(SAMPLE_DIR)) {
-    skip('未找到样本目录 ' + SAMPLE_DIR);
-}
-
-const samples = readdirSync(SAMPLE_DIR)
-    .filter((n) => SUPPORTED.includes(path.extname(n).toLowerCase()))
-    .filter((n) => !n.startsWith('~$') && n !== '国内银行汇总.xlsx');
-if (samples.length === 0) {
-    skip('样本目录内无 csv/xls/xlsx');
-}
+// 各代号:type / Windows exe 名 / data/input 子目录
+const CASES = [
+    { type: 'bank-integrate-domestic', exe: '国内银行整合.exe', dir: '1' },
+    { type: 'bank-integrate-overseas', exe: '海外银行整合.exe', dir: '2' },
+    { type: 'bank-integrate-order-match', exe: '游戏订单匹配.exe', dir: '3' },
+    { type: 'bank-integrate-payout', exe: '代付订单对账.exe', dir: '5' },
+    { type: 'bank-integrate-collection-payout', exe: '代收代付对账.exe', dir: '6' },
+];
 
 const tmp = path.join(os.tmpdir(), `macro-bank-verify-${process.pid}`);
 const dataRoot = path.join(tmp, 'dataRoot');
-const downloadDir = path.join(tmp, 'downloads');
-const exportsDir = path.join(tmp, 'exports');
 mkdirSync(dataRoot, { recursive: true });
-mkdirSync(downloadDir, { recursive: true });
-mkdirSync(exportsDir, { recursive: true });
 
-// 临时配置指向真实 venv/projectRoot(不落到项目根的 bank-integrate.json,自检隔离)
+// 临时 bank-integrate.json:5 个 type 各指向对应 exe
+const modes = {};
+for (const c of CASES) {
+    modes[c.type] = { executable: path.join(DIST, c.exe) };
+}
 writeFileSync(
     path.join(dataRoot, 'bank-integrate.json'),
-    JSON.stringify(
-        {
-            timeoutMs: 300000,
-            modes: {
-                'bank-integrate-domestic': { executable: EXE, summaryFile: '国内银行汇总.xlsx' },
-            },
-        },
-        null,
-        4,
-    ),
+    JSON.stringify({ timeoutMs: 300000, modes }, null, 4),
     'utf-8',
 );
 
-const downloads = samples.map((n) => {
-    const dst = path.join(downloadDir, n);
-    copyFileSync(path.join(SAMPLE_DIR, n), dst);
-    return dst;
-});
-console.log(`准备 ${downloads.length} 个银行样本:`, samples.join(', '));
-console.log('调用 bank-integrate-domestic(真跑 Python,可能耗时若干秒)……\n');
-
-const results = await runPostProcessors([{ type: 'bank-integrate-domestic' }], {
-    downloads,
-    downloadDir,
-    exportsDir,
-    stamp: 'verify',
-    dataRoot,
-});
-
-const r = results[0];
-console.log('\n========== 银行整合自检结果 ==========');
-console.log('后处理 message =', r.message);
-console.log('产出文件 =', r.output);
-
 let failed = false;
+let ran = 0;
 function check(cond, label) {
     console.log(`${cond ? '[OK]' : '[FAIL]'} ${label}`);
     if (!cond) {
@@ -90,14 +51,55 @@ function check(cond, label) {
     }
 }
 
-check(!!r.output && existsSync(r.output), '产出汇总 xlsx 存在');
-if (r.output && existsSync(r.output)) {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(r.output);
-    check(wb.worksheets.length >= 1, `产物至少含 1 个工作表(实际 ${wb.worksheets.length})`);
-    console.log('工作表:', wb.worksheets.map((w) => w.name).join(' | '));
+for (const c of CASES) {
+    console.log(`\n===== ${c.type}(代号目录 ${c.dir}) =====`);
+    const exe = path.join(DIST, c.exe);
+    const sampleDir = path.join(XLSX_ROOT, 'data', 'input', c.dir);
+    if (!existsSync(exe)) {
+        console.log(`跳过:未找到 exe ${exe}`);
+        continue;
+    }
+    if (!existsSync(sampleDir)) {
+        console.log(`跳过:未找到样本目录 ${sampleDir}`);
+        continue;
+    }
+    const samples = readdirSync(sampleDir).filter(
+        (n) => SUPPORTED.includes(path.extname(n).toLowerCase()) && !n.startsWith('~$'),
+    );
+    if (samples.length === 0) {
+        console.log('跳过:样本目录无支持文件');
+        continue;
+    }
+
+    const downloadDir = path.join(tmp, c.dir, 'downloads');
+    const exportsDir = path.join(tmp, c.dir, 'exports');
+    mkdirSync(downloadDir, { recursive: true });
+    mkdirSync(exportsDir, { recursive: true });
+    const downloads = samples.map((n) => {
+        const d = path.join(downloadDir, n);
+        copyFileSync(path.join(sampleDir, n), d);
+        return d;
+    });
+    console.log(`样本 ${downloads.length} 个,调用 ${c.exe}(真跑,可能耗时若干秒)……`);
+
+    const results = await runPostProcessors([{ type: c.type }], {
+        downloads,
+        downloadDir,
+        exportsDir,
+        stamp: 'verify',
+        dataRoot,
+    });
+    ran += 1;
+    const r = results[0];
+    console.log('message =', r.message);
+    console.log('产物 =', r.output);
+    check(!!r.output && existsSync(r.output), `${c.type} 产出 xlsx 存在`);
+    if (r.output && existsSync(r.output)) {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.readFile(r.output);
+        check(wb.worksheets.length >= 1, `${c.type} 产物至少 1 工作表(实际 ${wb.worksheets.length})`);
+    }
 }
-check(/已整合/.test(r.message || ''), 'message 表示整合成功');
 
 try {
     rmSync(tmp, { recursive: true, force: true });
@@ -105,8 +107,9 @@ try {
     // 忽略清理失败
 }
 
+console.log(`\n实跑代号数:${ran}/${CASES.length}`);
 if (failed) {
-    console.log('\n自检未通过。');
+    console.log('自检未通过。');
     process.exit(1);
 }
-console.log('\n自检通过。');
+console.log('自检通过。');

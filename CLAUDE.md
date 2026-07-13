@@ -22,8 +22,8 @@
 - `scripts/test-ai.mjs` — AI 自检脚本(验证对接 openclaw agent 整链能否跑通)
 - `scripts/verify-pagination.mjs` — 翻页健壮性自检脚本(脆弱选择器 + 语义指纹 anchor 重定位,quotes.toscrape.com 实跑采满 3 页 30 行;需网络)
 - `scripts/verify-merge.mjs` — 合并后处理器离线自检(本地造 xlsx→打 zip→跑 merge-zip-excel,断言行数/列并集;不需网络,需先 `npm run build`)
-- `bank-integrate.json` — 银行整合桥接配置(项目根/打包 userData,首次运行 bank-integrate 插件时自动生成模板,已 gitignore):`{pythonExe,projectRoot,timeoutMs?,modes:{type→{entryScript,summaryFile}}}`;指向本机 xlsxIntgration 的 venv python 与项目根,`bank-integrate-domestic` 插件据此 spawn `整合1.py`
-- `scripts/verify-bank-integrate.mjs` — 银行整合端到端自检(**真跑 Python**:拷 xlsxIntgration `data/input/1` 现成合规样本→桥接 spawn `整合1.py`→断言产出 `国内银行汇总-verify.xlsx` 可读、含多工作表;需本机 xlsxIntgration venv,前置缺失则跳过非失败;需先 `npm run build`)
+- `bank-integrate.json` — 银行整合桥接配置(项目根/打包 userData,首次运行自动生成模板,已 gitignore):`{timeoutMs?,modes:{type→{executable,summaryFile?}}}`;`executable` 按 `process.platform` 指向 xlsxIntgration 打包**可执行文件**(win `dist\银行流水整合\<代号>.exe`/mac `dist/bank-integration/<代号>`),覆盖 5 个代号 `bank-integrate-domestic/overseas/order-match/payout/collection-payout`;插件据此 spawn 对应 exe(无脚本参)
+- `scripts/verify-bank-integrate.mjs` — 银行整合端到端自检(**5 代号各真跑 exe**:代号1/2/3/5/6 各拷 xlsxIntgration `data/input/N` 现成样本→桥接 spawn 对应 exe→断言 exports 产出 xlsx 可读、含多工作表;某代号 exe/样本缺失则跳过非失败;需先 `npm run build` + 该 exe 已打包)
 - `scripts/verify-selector-class.mjs` — 选择器稳定类判定离线自检(断言 `isStableClass` 过滤 FB Stylex/Twitter 原子类、保留语义类含 next/previous;需先 `npm run build`,不需网络)
 - `scripts/verify-popup-wait.mjs` — 新窗口等待竞态离线自检(本地造两 html:page1 有 target=_blank 链接、page2 延迟 1.5s 才插入 `#target`;宏 goto→click 开新窗→waitForSelector `#target`,断言 `ok=true` 即等待步骤跟随了新窗口;需先 `npm run build`,`MACRO_HEADLESS=1` 运行,不需网络)
 - `scripts/test-selector-fix.mjs` — 选择器校正自检脚本(造「脆弱选择器 + 稳定锚点」上下文调 `fixSelector`,断言返回选择器非空且不含随机 id/原子类/nth-of-type;需先 `npm run build` 且 Gateway 运行 + 已建 selector-fix agent)
