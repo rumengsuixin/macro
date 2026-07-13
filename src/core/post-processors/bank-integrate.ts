@@ -1,7 +1,7 @@
 // 后处理器:bank-integrate-domestic —— 把一批合规命名的国内银行流水文件,
 // 交给外部 xlsxIntgration(Python)整合成「国内银行汇总.xlsx」,回收到 exports/。
 // 桥接方式:临时输入/输出目录(隔离,不污染 xlsxIntgration 的 data/)+ 环境变量
-//   BANK_INPUT_DIR/BANK_OUTPUT_DIR + spawn Python(见 python-bridge)。
+//   BANK_INPUT_DIR/BANK_OUTPUT_DIR + spawn 各平台可执行文件(见 subprocess-bridge)。
 // 命名约定:输入文件名须为 {公司}-{银行}.{xls|xlsx|csv}(PoC 假设已合规,自动映射留后续)。
 import path from 'node:path';
 import fs from 'node:fs';
