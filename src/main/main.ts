@@ -334,6 +334,7 @@ function registerIpc(): void {
                     downloadDir: downloadsDir,
                     exportsDir,
                     stamp: timestamp(),
+                    dataRoot,
                 });
                 result.postProcessed = postProcessed;
             }
@@ -405,6 +406,7 @@ function registerIpc(): void {
                 downloadDir: path.dirname(files[0]),
                 exportsDir,
                 stamp: timestamp(),
+                dataRoot,
             });
             const out = results.filter((r) => r.output).pop()?.output;
             if (out) {

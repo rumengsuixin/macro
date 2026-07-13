@@ -15,6 +15,8 @@ export interface PostProcessContext {
     exportsDir: string;
     /** 输出文件命名用时间戳(由主进程传入,core 层不调时间 API) */
     stamp: string;
+    /** macro userData 根目录(由主进程传入),供需要读自身配置的后处理器定位,如 bank-integrate.json */
+    dataRoot?: string;
 }
 
 /** 后处理器处理函数签名 */
@@ -67,3 +69,4 @@ export async function runPostProcessors(
 
 // 自注册内置后处理器(import 即触发其 registerPostProcessor 调用)
 import './merge-zip-excel';
+import './bank-integrate';
