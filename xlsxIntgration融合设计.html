@@ -318,6 +318,64 @@ OUTPUT_DIR = Path(os.environ.get("BANK_OUTPUT_DIR", DATA_DIR / "output"))</pre>
     </ul>
 </div>
 
+<h2>九、平台差异与打包策略</h2>
+<p><strong>一句话:代码改动小,真正成本在打包 / 分发;平台差异真实存在,但集中在浏览器抓取线(代号4系列),而那条线的终局是被 macro 取代 —— 越往后走差异越小,不是越大。</strong></p>
+
+<h3>1) 改动量分层</h3>
+<table class="files">
+    <tr><th>层面</th><th>改动量</th><th>说明</th></tr>
+    <tr><td>macro 侧代码</td><td><span class="badge new">小</span></td><td>3 新文件 + <code>index.ts</code> 1 行 import + <code>.gitignore</code> + 1 自检脚本;<strong>回放引擎 / preload / renderer / UI 全不动</strong>(热插拔自动上架)</td></tr>
+    <tr><td>xlsxIntgration 侧代码</td><td><span class="badge new">极小</span></td><td><code>config.py</code> 2 行环境变量覆盖,向后兼容</td></tr>
+    <tr><td>PoC 跑通(代号1)</td><td><span class="badge new">小 · 1~2 天</span></td><td>纯 pandas/openpyxl,<strong>Windows 上零平台风险</strong></td></tr>
+    <tr><td>做成可分发成品</td><td><span class="badge mod">中偏大</span></td><td>复杂度几乎全在打包 / 分发 / 平台适配,与融合逻辑解耦</td></tr>
+</table>
+
+<h3>2) 三条必须知道的平台事实</h3>
+<div class="panel limits">
+    <ul>
+        <li><strong>macro 目前只打 Windows 包</strong>。<code>package.json</code> 的 build 只配了 <code>win nsis</code>,<strong>无 mac target</strong>。Electron/Playwright 本身跨平台,但出 mac 版要额外做:mac target + Playwright 的 mac Chromium + 签名/公证。</li>
+        <li><strong>xlsxIntgration 真跨平台,但产物天然分裂</strong>。Win 是 <code>dist/</code>(PyInstaller 自包含 exe),Mac 是 <code>dist_mac/</code>。<code>build_mac.sh</code> 明写 "PyInstaller 不支持跨平台编译" —— <strong>Win 包只能在 Win 上打、Mac 包只能在 Mac 上打</strong>(已备 <code>.github/workflows/build-mac.yml</code> 云端构建)。且 mac 的 <code>安装环境.sh</code> 走 "用户自备 python3 + venv" 路线,与 Win 的免装 exe <strong>两端 Python 运行时来源不一致</strong>。</li>
+        <li><strong>OS 特定代码只集中在代号4系列</strong>。平台分支全在 <code>app4.py</code>:<code>.xls→.xlsx</code> 转换的 <strong>Windows Excel COM(仅 Win,走 PowerShell)</strong> vs LibreOffice(跨平台)兜底,以及 Chrome 路径查找。<strong>代号1/2/3/5/6(整合/对账)完全跨平台、零 OS 分支。</strong></li>
+    </ul>
+</div>
+
+<h3>3) 平台差异 × 融合阶段</h3>
+<table class="files">
+    <tr><th>阶段</th><th>内容</th><th>平台差异影响</th></tr>
+    <tr><td>阶段1 PoC(代号1)</td><td>国内银行整合</td><td>✅ <strong>无</strong> —— 纯 pandas,跨平台一致</td></tr>
+    <tr><td>阶段2(代号3/5/6)</td><td>对账线</td><td>✅ <strong>无</strong> —— 同为纯数据处理</td></tr>
+    <tr><td>阶段3(代号4/BC/EPIN)</td><td>浏览器抓取</td><td>⚠️ <strong>有</strong>(Excel COM / Chrome 路径)—— 但方案本就用 macro 的 Playwright <strong>替换</strong>这段,反而抹平这些 OS 差异</td></tr>
+</table>
+
+<h3>4) 桥接层要写的 "平台适配"(仅一小块)</h3>
+<div class="panel">
+    <ul>
+        <li>按 <code>process.platform</code> 选 Python 产物:win 找 <code>.exe</code>、mac 找二进制/<code>.command</code>;mac 二进制补执行权限(<code>chmod +x</code>);路径分隔符用 Node <code>path</code> 已自动处理。</li>
+        <li>Python 来源做成<strong>可配置</strong>(而非硬绑 PyInstaller):<code>bank-integrate.json</code> 的 <code>pythonExe</code> + <code>projectRoot</code> + <code>modes</code> 字段已预留 —— 开发态填 <code>venv</code> 的 python、分发态填打包二进制,<strong>同一套桥接代码三种环境通吃</strong>,无需改代码。</li>
+        <li>这一小块是唯一 "平台专属" 代码,其余业务逻辑跨平台。</li>
+    </ul>
+</div>
+
+<h3>5) 分发策略三选一(PoC 成功后再定)</h3>
+<table class="files">
+    <tr><th>方案</th><th>优点</th><th>代价</th></tr>
+    <tr><td>A. 各 OS 各自 CI 打包</td><td>最干净、产物纯净</td><td>需双平台构建流水线(xlsxIntgration 已有 <code>build-mac.yml</code> 可复用)</td></tr>
+    <tr><td>B. mac 随附源码 + 首次 <code>安装环境.sh</code> 建 venv</td><td>体积小</td><td>要求用户本机有 Python</td></tr>
+    <tr><td>C. 全捆绑 PyInstaller 产物</td><td>用户免装 Python</td><td>每平台几百 MB,安装包显著变大</td></tr>
+</table>
+
+<h3>6) Bottom line</h3>
+<div class="verdict">
+    <div class="card yes">
+        <div class="lbl">✓ 内部自用 / 验证可行性</div>
+        <div>改动很小,PoC(代号1)一两天跑通,<strong>Windows 上零平台风险</strong>。</div>
+    </div>
+    <div class="card no" style="border-top-color:var(--warn);">
+        <div class="lbl" style="color:var(--warn);">△ 双平台正式分发</div>
+        <div>代码仍不大,但要额外补 <strong>macro 的 mac 打包 + 双平台构建流水线 + Python 捆绑策略</strong>;与融合逻辑解耦,可推迟到 PoC 成功后。</div>
+    </div>
+</div>
+
 <div class="foot">
     macro × xlsxIntgration 融合设计 · 2026-07-13 · 本文档为设计与计划,尚未实施代码<br>
     配套计划文件:<code>C:\Users\Administrator\.claude\plans\d-git-object-xlsxintgration-tingly-badger.md</code>
