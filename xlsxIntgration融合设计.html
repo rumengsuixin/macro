@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>macro × xlsxIntgration 融合设计</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --primary-d: #0a8c93;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --ok: #16a34a;
+        --danger: #dc2626;
+        --warn: #d97706;
+        --ink: #14343d;
+        --muted: #5b7480;
+        --line: #d9e6ea;
+        --panel: #ffffff;
+        --bg: #f2f8f9;
+        --r: 14px;
+        --r-sm: 9px;
+        --sh: 0 6px 22px rgba(14, 42, 51, .08);
+        --sh-sm: 0 2px 8px rgba(14, 42, 51, .06);
+        --font: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+        --mono: "Cascadia Code", "Consolas", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--ink);
+        background:
+            radial-gradient(1200px 500px at 15% -10%, rgba(15, 176, 184, .10), transparent 60%),
+            radial-gradient(900px 500px at 110% 10%, rgba(255, 122, 89, .08), transparent 55%),
+            var(--bg);
+        line-height: 1.7;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 40px 28px 80px; }
+
+    header.hero {
+        background: linear-gradient(135deg, var(--deep), #12414c);
+        color: #eafcff;
+        border-radius: var(--r);
+        padding: 30px 34px;
+        box-shadow: var(--sh);
+        position: relative;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, .06);
+    }
+    header.hero::after {
+        content: "";
+        position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+        background: linear-gradient(90deg, var(--primary), var(--accent));
+    }
+    header.hero h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: .3px; }
+    header.hero .sub { color: #9fd7dc; font-size: 14px; margin: 0; }
+    header.hero .brand { font-size: 22px; margin-right: 8px; }
+    .meta-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag {
+        font-size: 12.5px; padding: 4px 11px; border-radius: 999px;
+        background: rgba(15, 176, 184, .18); color: #bdf2f5;
+        border: 1px solid rgba(15, 176, 184, .35);
+    }
+    .tag.accent { background: rgba(255, 122, 89, .16); color: #ffd3c6; border-color: rgba(255, 122, 89, .4); }
+
+    h2 {
+        font-size: 20px; margin: 40px 0 14px; padding-left: 13px;
+        border-left: 5px solid var(--primary); color: var(--deep);
+    }
+    h3 { font-size: 16px; margin: 22px 0 8px; color: var(--primary-d); }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0; padding-left: 22px; }
+    li { margin: 5px 0; }
+    code {
+        font-family: var(--mono); font-size: 13px;
+        background: #e6f4f5; color: var(--primary-d);
+        padding: 1.5px 6px; border-radius: 5px;
+    }
+    strong { color: var(--deep); }
+
+    .panel {
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: var(--r); padding: 20px 24px; box-shadow: var(--sh-sm);
+        margin: 14px 0;
+    }
+
+    .verdict { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+    .verdict .card {
+        border-radius: var(--r); padding: 18px 20px; box-shadow: var(--sh-sm);
+        border: 1px solid var(--line); background: var(--panel);
+    }
+    .verdict .card .lbl { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .verdict .no  { border-top: 4px solid var(--danger); }
+    .verdict .no .lbl  { color: var(--danger); }
+    .verdict .yes { border-top: 4px solid var(--ok); }
+    .verdict .yes .lbl { color: var(--ok); }
+    @media (max-width: 720px) { .verdict { grid-template-columns: 1fr; } }
+
+    .reasons { counter-reset: r; list-style: none; padding-left: 0; }
+    .reasons > li {
+        position: relative; padding: 12px 16px 12px 52px; margin: 10px 0;
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: var(--r-sm); box-shadow: var(--sh-sm);
+    }
+    .reasons > li::before {
+        counter-increment: r; content: counter(r);
+        position: absolute; left: 14px; top: 14px;
+        width: 26px; height: 26px; border-radius: 50%;
+        background: linear-gradient(135deg, var(--primary), var(--primary-d));
+        color: #fff; font-weight: 700; font-size: 14px;
+        display: flex; align-items: center; justify-content: center;
+    }
+
+    .limits { border-left: 4px solid var(--warn); background: #fff8ef; }
+    .limits li::marker { color: var(--warn); }
+
+    /* 架构数据流 */
+    .flow { margin: 18px 0; }
+    .node {
+        border-radius: var(--r-sm); padding: 12px 16px; margin: 0 auto;
+        max-width: 640px; text-align: center; box-shadow: var(--sh-sm);
+        border: 1px solid var(--line);
+    }
+    .node .t { font-weight: 700; }
+    .node .d { font-size: 12.5px; color: var(--muted); }
+    .node.macro { background: #e7f6f7; border-color: #b5e2e5; }
+    .node.plugin { background: #fff0ea; border-color: #ffcbb9; }
+    .node.py { background: #eef4ee; border-color: #cfe3cf; }
+    .node.out { background: #f4f0fb; border-color: #ddd0f0; }
+    .arrow { text-align: center; color: var(--primary); font-size: 22px; line-height: 1; margin: 6px 0; }
+    .arrow small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+    .files { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+    .files th, .files td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .files th { background: #e6f4f5; color: var(--deep); }
+    .files td code { background: none; padding: 0; color: var(--primary-d); }
+    .badge { font-size: 11px; padding: 1.5px 8px; border-radius: 999px; font-weight: 700; }
+    .badge.new { background: #dcfce7; color: var(--ok); }
+    .badge.mod { background: #fef3c7; color: var(--warn); }
+
+    .phase { border-left: 3px solid var(--primary); padding-left: 16px; margin: 12px 0; }
+    .phase h3 { margin-top: 0; }
+    .poc { border-left-color: var(--accent); }
+    .poc h3 { color: var(--accent); }
+
+    pre {
+        background: var(--deep); color: #cdeef0; border-radius: var(--r-sm);
+        padding: 14px 16px; overflow-x: auto; font-family: var(--mono);
+        font-size: 12.5px; line-height: 1.55;
+    }
+    .foot { margin-top: 46px; color: var(--muted); font-size: 12.5px; text-align: center; border-top: 1px solid var(--line); padding-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+    <h1><span class="brand">🐟</span>macro × xlsxIntgration 融合设计</h1>
+    <p class="sub">以 macro 为主体,把 xlsxIntgration 的整合/对账能力做成 macro 的后处理插件(子进程桥接 Python)</p>
+    <div class="meta-row">
+        <span class="tag">日期 2026-07-13</span>
+        <span class="tag">交付形态:设计文档(暂不写代码)</span>
+        <span class="tag accent">方向:macro 为主体</span>
+    </div>
+</header>
+
+<h2>一、背景与结论</h2>
+<div class="panel">
+    <p>目标:评估本项目 <code>d:\git_object\macro</code>(Electron + TypeScript 的网页录制/回放/数据提取工具)与外部项目 <code>D:\git_object\xlsxIntgration</code> 能否融合。</p>
+    <p><strong>关键事实</strong>:外部项目<strong>名叫 xlsxIntgration 但其实是纯 Python 3.8 项目</strong>(pandas / openpyxl / xlrd / pdfplumber + websocket-client 手写 CDP),是某公司内部的<strong>银行流水整合 + 支付平台对账</strong>工具集(7+ 条业务线,输入=文件、输出=xlsx)。两项目语言与运行时完全不同。</p>
+</div>
+
+<div class="verdict">
+    <div class="card no">
+        <div class="lbl">✗ 代码级"合并成一个项目"</div>
+        <div>不可行 —— Node/TS vs Python 3.8,无法函数级复用。</div>
+    </div>
+    <div class="card yes">
+        <div class="lbl">✓ 集成式"融合 / 协作"</div>
+        <div>可行且有价值 —— 通过子进程 + 文件契约桥接。本文即其落地设计。</div>
+    </div>
+</div>
+
+<h2>二、有融合可能的三点理由</h2>
+<ol class="reasons">
+    <li><strong>数据流天然互补衔接。</strong>macro 强在"从网页采集 / 触发下载"(通用录制回放 + 请求改写 + 时间线 + 反检测),xlsxIntgration 强在"把下载的银行/支付文件清洗、匹配、对账成统一 xlsx"。<strong>前者的输出正是后者的输入</strong>。更关键:xlsxIntgration 的代号4/BC/EPIN 三条线正用手写 CDP 驱动 Chrome 逐日下载订单,而这恰是 macro 最成熟的能力,可替代那段脆弱代码。</li>
+    <li><strong>macro 早已备好"外部能力接入"的热插拔扩展点。</strong><code>registerPostProcessor</code>(吃 <code>ctx.downloads: string[]</code> 文件路径、吐产物文件)+ <code>run-plugin</code>(用户选文件→处理→<code>showItemInFolder</code> 定位)是完整闭环。xlsxIntgration 每条业务线的本质就是"一批文件进、一个 xlsx 出",与后处理器契约几乎完全吻合。</li>
+    <li><strong>子进程桥接可做松耦合集成,两边核心都不必重写。</strong>macro 主进程是 Node,能 <code>spawn</code> Python 调用 xlsxIntgration 的入口脚本(<code>整合N.py</code> 的 <code>main() -&gt; int</code>),把 macro 采集/下载的文件当输入,Python 产出 xlsx 后返回路径给 macro 定位展示。低侵入、进程隔离、各自演进。</li>
+</ol>
+
+<h2>三、诚实说明的限制(设计取舍)</h2>
+<div class="panel limits">
+    <ul>
+        <li>只能走<strong>进程 + 文件契约</strong>桥接,拿不到函数级复用。</li>
+        <li>xlsxIntgration 高度定制(硬编码银行/平台规则、模板坐标、输入文件严格命名 <code>{公司代号}-{银行}.{ext}</code>),只能作为<strong>专用插件</strong>接入,不能并入 macro 通用内核。</li>
+        <li>引入 <strong>Python 运行时依赖</strong>(需 venv 或 PyInstaller 打包 exe);macro 打包分发时体积增大。</li>
+        <li>xlsxIntgration 只暴露 <code>main()</code>、路径硬编码在 <code>config.py</code>,集成需<strong>为它补一层环境变量 / 目录约定</strong>。</li>
+    </ul>
+</div>
+
+<h2>四、目标架构</h2>
+<div class="flow">
+    <div class="node macro">
+        <div class="t">macro(Electron / Node / TS)</div>
+        <div class="d">录制回放 + 下载捕获(list-action → 下载文件)→ <code>runPostProcessors(specs, ctx)</code></div>
+    </div>
+    <div class="arrow">▼<small>ctx.downloads = 文件路径数组</small></div>
+    <div class="node plugin">
+        <div class="t">bank-integrate(新增后处理插件)</div>
+        <div class="d">准备临时输入目录 → 按命名规则放入下载文件 → <code>spawn</code> Python</div>
+    </div>
+    <div class="arrow">▼<small>子进程 · env: BANK_INPUT_DIR / BANK_OUTPUT_DIR</small></div>
+    <div class="node py">
+        <div class="t">xlsxIntgration(Python 3.8)</div>
+        <div class="d"><code>整合1.py → app.main()</code>:读 input → openpyxl 写 → output/*.xlsx;返回退出码 0/非0 + 日志</div>
+    </div>
+    <div class="arrow">▼<small>回收产物 xlsx 路径</small></div>
+    <div class="node out">
+        <div class="t">macro exports/ 定位展示</div>
+        <div class="d"><code>PostProcessResult{ output }</code> → <code>shell.showItemInFolder</code></div>
+    </div>
+</div>
+<p>要点:xlsxIntgration 作为一个<strong>黑盒 CLI</strong>,由 macro 新插件通过子进程调用;输入=一批文件路径,输出=一个 xlsx。<strong>前端 UI 零改动</strong>(热插拔机制自动收纳新插件)。</p>
+
+<h2>五、关键设计</h2>
+
+<h3>1) 新增后处理插件 <code>bank-integrate</code>(模仿 merge-zip-excel.ts)</h3>
+<div class="panel">
+    <ul>
+        <li>新文件 <code>src/core/post-processors/bank-integrate.ts</code>:实现 <code>PostProcessHandler</code>,末尾 <code>registerPostProcessor({type,label,description}, handler)</code> 自注册。</li>
+        <li>在 <code>src/core/post-processors/index.ts</code> 末尾加 <code>import './bank-integrate';</code>。</li>
+        <li>handler 契约(与既有一致):入 <code>ctx.downloads / exportsDir / stamp</code> + <code>spec.options</code>;出 <code>Promise&lt;PostProcessResult&gt; = { type, output?, message }</code>;失败可直接 <code>throw</code>(注册表 catch 成非致命 message)。</li>
+        <li>多业务线:PoC 先做<strong>一个 type</strong>(<code>bank-integrate-domestic</code> = 代号1);后续每线一个 type 或复用 <code>spec.options.mode</code>。type 即 UI 列表项,自动上架、支持"勾选随运行"与"直接运行"。</li>
+    </ul>
+</div>
+
+<h3>2) 子进程桥接层 <code>python-bridge</code></h3>
+<div class="panel">
+    <ul>
+        <li>新文件 <code>src/core/post-processors/python-bridge.ts</code>,仅用 Node 内置 <code>child_process/fs/path</code>,不引入 Electron。</li>
+        <li>定位 Python:<strong>开发态</strong> = xlsxIntgration 的 <code>venv/Scripts/python.exe</code>;<strong>分发态</strong> = PyInstaller 打包 exe。由配置指定。</li>
+        <li><code>spawn(pythonExe, [entryScript], { cwd: xlsxRoot, env: { …, BANK_INPUT_DIR, BANK_OUTPUT_DIR } })</code>;采集 stdout/stderr 转发到 macro 日志;<strong>退出码</strong>判成败;加<strong>超时保护</strong>;从输出目录回收 xlsx 拷回 <code>ctx.exportsDir</code>。</li>
+    </ul>
+</div>
+
+<h3>3) xlsxIntgration 侧唯一改动 —— <code>config.py</code> 环境变量覆盖(向后兼容)</h3>
+<div class="panel">
+    <p>当前 <code>src/bank_integration/config.py</code> 把 <code>INPUT_DIR / OUTPUT_DIR</code> 硬编码为模块级常量。改为环境变量优先、缺省回退原值:</p>
+    <pre>INPUT_DIR  = Path(os.environ.get("BANK_INPUT_DIR",  DATA_DIR / "input" / "1"))
+OUTPUT_DIR = Path(os.environ.get("BANK_OUTPUT_DIR", DATA_DIR / "output"))</pre>
+    <p>不传环境变量时行为<strong>完全不变</strong>(现有双击启动器、命令行、测试不受影响),<code>template/</code> 仍用仓库自带模板。若坚持零改动,退而用<em>方案 B</em>(直接把文件拷进 <code>data/input/1</code>、从 <code>data/output/</code> 取产物),代价是污染固定目录、难并发、需清理 —— <strong>推荐上面的环境变量方案 A</strong>。</p>
+</div>
+
+<h3>4) 配置读取 <code>bank-integrate.json</code>(仿 request-rules-store)</h3>
+<div class="panel">
+    <ul>
+        <li>新文件 <code>src/storage/bank-integrate-store.ts</code>,读项目根 <code>bank-integrate.json</code>(gitignore)。</li>
+        <li>字段:<code>pythonExe</code>(可执行/打包 exe)、<code>projectRoot</code>(xlsxIntgration 根 = spawn 的 cwd)、<code>modes</code>(<code>type → entryScript</code>)、<code>naming</code>(下载文件名 → <code>{公司代号}-{银行}.{ext}</code> 映射规则)。</li>
+        <li>首次运行自动生成 inert 模板(路径留空 + 说明),避免误跑。</li>
+    </ul>
+</div>
+
+<h3>5) 文件命名适配(真实摩擦点)</h3>
+<div class="panel">
+    <p>xlsxIntgration 要求输入文件名严格匹配 <code>^([A-Z]|公司名)-(银行名)\.(xls|xlsx|csv)$</code>(<code>scanner.py</code> + <code>app.py</code>)。macro 下载文件名未必符合。两条路线择一:</p>
+    <ul>
+        <li><strong>简单</strong>:约定下载时已产出合规命名文件(文档说明)。</li>
+        <li><strong>稳妥</strong>:插件按 <code>options.naming</code> 规则,把 <code>ctx.downloads</code> 拷入临时输入目录时<strong>重命名</strong>为合规文件名。</li>
+    </ul>
+</div>
+
+<h2>六、分阶段路线</h2>
+<div class="phase">
+    <h3>阶段 0 · 前置</h3>
+    <ul>
+        <li><strong>铁律</strong>:动手前对 macro 项目 <code>git commit</code> 当前工作区。</li>
+        <li>确认本机 xlsxIntgration 能在其 venv 跑通代号1(备 1~2 个合规样本银行文件 + 模板)。</li>
+    </ul>
+</div>
+<div class="phase poc">
+    <h3>阶段 1 · PoC:代号1 国内银行整合 ← 最小闭环</h3>
+    <ul>
+        <li>xlsxIntgration:<code>config.py</code> 加环境变量覆盖(方案 A)。</li>
+        <li>macro:新增 <code>bank-integrate.ts</code> + <code>python-bridge.ts</code> + <code>bank-integrate-store.ts</code>;<code>index.ts</code> 加 import。</li>
+        <li>自检 <code>scripts/verify-bank-integrate.mjs</code>(仿 <code>verify-merge.mjs</code>):离线造合规银行文件 → 直接运行插件 → 断言 <code>exports/</code> 产出汇总 xlsx(sheet/行数正确)。</li>
+    </ul>
+</div>
+<div class="phase">
+    <h3>阶段 2 · 扩展对账线</h3>
+    <p>代号3/5/6(多平台文件对账),每线一个 type 或 <code>options.mode</code>,桥接层复用。</p>
+</div>
+<div class="phase">
+    <h3>阶段 3 · 数据流真正打通(高级目标)</h3>
+    <p>用 macro 录制回放替换 xlsxIntgration 代号4/BC/EPIN 的手写 CDP 抓取 —— macro 录"登录后台→逐日下载"宏(list-action)→ 回放下载 → 勾选 bank-integrate 插件随运行 → 直接产出对账 xlsx。可逐步淘汰 <code>browser_operator.py</code> + 内嵌 Chrome profile。</p>
+</div>
+
+<h2>七、涉及 / 新增关键文件</h2>
+<table class="files">
+    <tr><th>文件</th><th>动作</th><th>说明</th></tr>
+    <tr><td><code>src/core/post-processors/bank-integrate.ts</code></td><td><span class="badge new">新增</span></td><td>插件,模仿 merge-zip-excel.ts</td></tr>
+    <tr><td><code>src/core/post-processors/python-bridge.ts</code></td><td><span class="badge new">新增</span></td><td>spawn Python 桥接</td></tr>
+    <tr><td><code>src/storage/bank-integrate-store.ts</code></td><td><span class="badge new">新增</span></td><td>配置读取,仿 request-rules-store.ts</td></tr>
+    <tr><td><code>src/core/post-processors/index.ts</code></td><td><span class="badge mod">改</span></td><td>末尾加 <code>import './bank-integrate';</code></td></tr>
+    <tr><td><code>scripts/verify-bank-integrate.mjs</code></td><td><span class="badge new">新增</span></td><td>离线自检</td></tr>
+    <tr><td><code>.gitignore</code></td><td><span class="badge mod">改</span></td><td>加 <code>bank-integrate.json</code></td></tr>
+    <tr><td><code>xlsxIntgration:src/bank_integration/config.py</code></td><td><span class="badge mod">改</span></td><td>唯一外部改动:INPUT_DIR/OUTPUT_DIR 环境变量覆盖(向后兼容)</td></tr>
+</table>
+<p><strong>不改动</strong>:macro 的回放引擎 / preload / renderer / 宏 JSON / 旁车 / 既有 merge-zip-excel 与主线导出;xlsxIntgration 的读写内核 / 对账逻辑 / 浏览器自动化(阶段3前不动)。类型无需改(<code>PostProcessSpec.options</code> 已是 <code>Record&lt;string,unknown&gt;</code>)。</p>
+
+<h2>八、验证方案(实施后)</h2>
+<div class="panel">
+    <ul>
+        <li><strong>离线自检</strong>(不需网络/Electron):<code>node scripts/verify-bank-integrate.mjs</code> —— 临时目录造合规银行样本 + 复制模板 → 调 <code>runPostProcessors(…)</code> → 断言退出码 0、<code>exports/</code> 产出汇总 xlsx、目标 sheet 行数正确。</li>
+        <li><strong>端到端(手动)</strong>:macro 里"直接运行"该插件 → 弹文件多选选合规银行文件 → 观察日志转发的 Python 输出 → 产物在文件管理器高亮定位。</li>
+        <li><strong>回归</strong>:<code>npm run build</code> + <code>verify-merge.mjs</code> + <code>verify-pagination.mjs</code>(证明不影响既有后处理与回放路径)。</li>
+        <li><strong>xlsxIntgration 回归</strong>:不传环境变量时 <code>venv\Scripts\python.exe 整合1.py</code> 行为不变(证明 config.py 改动向后兼容)。</li>
+    </ul>
+</div>
+
+<div class="foot">
+    macro × xlsxIntgration 融合设计 · 2026-07-13 · 本文档为设计与计划,尚未实施代码<br>
+    配套计划文件:<code>C:\Users\Administrator\.claude\plans\d-git-object-xlsxintgration-tingly-badger.md</code>
+</div>
+
+</div>
+</body>
+</html>
