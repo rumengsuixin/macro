@@ -121,7 +121,7 @@ const handler: PostProcessHandler = async (
     }
 };
 
-/** 各代号的插件元数据(type 须与 bank-integrate-config 的 MODE_EXES 键一致);handler 共享 */
+/** 各代号的插件元数据(type 须与 bank-integrate-config 的 EXE_NAMES 键一致);handler 共享 */
 const REGISTRATIONS: Array<{ type: string; label: string; description: string }> = [
     {
         type: 'bank-integrate-domestic',
