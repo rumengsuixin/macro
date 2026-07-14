@@ -42,22 +42,42 @@ try {
 const dest = path.resolve('build', 'ms-playwright');
 const versionMark = path.join(dest, '.pw-version');
 
+// 递归列目录树(诊断用,便于 CI 里看清 chromium-* 内部真实结构),最多 depth 层
+function listTree(dir, depth = 4, prefix = '') {
+    const out = [];
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+        return out;
+    }
+    for (const e of entries) {
+        out.push(prefix + e.name + (e.isDirectory() ? '/' : ''));
+        if (e.isDirectory() && depth > 1) {
+            out.push(...listTree(path.join(dir, e.name), depth - 1, prefix + '  '));
+        }
+    }
+    return out;
+}
+
 // 校验产物:在 chromium-* 目录里定位当前平台的 Chromium 主程序,返回其路径(找不到返回 null)。
-// mac 的平台子目录随芯片架构变化——Intel 是 chrome-mac、Apple 芯片(arm64)是 chrome-mac-arm64,
-// 故动态匹配 chrome-mac* 前缀(不硬编码单一名),同时覆盖 arm64/x64;win 固定 chrome-win64/chrome.exe。
+// win 固定 chrome-win64/chrome.exe;mac 的平台子目录随芯片架构变化(Intel=chrome-mac、
+// Apple 芯片=chrome-mac-arm64),其内 .app 名也可能不同(Chromium.app 或 Google Chrome for Testing.app),
+// 故不硬编码:在 chrome-mac* 下找任一 *.app,按 macOS bundle 约定取 Contents/MacOS/<去掉.app的同名>可执行文件。
 function findChromeBinary() {
     if (!fs.existsSync(dest)) return null;
-    const chromiumDirs = fs.readdirSync(dest).filter((d) => d.startsWith('chromium-'));
-    for (const d of chromiumDirs) {
+    for (const d of fs.readdirSync(dest).filter((x) => x.startsWith('chromium-'))) {
         const dir = path.join(dest, d);
         if (process.platform === 'win32') {
             const p = path.join(dir, 'chrome-win64', 'chrome.exe');
             if (fs.existsSync(p)) return p;
         } else {
-            // mac:chrome-mac(Intel)/ chrome-mac-arm64(Apple 芯片),动态探测其一
             for (const m of fs.readdirSync(dir).filter((s) => s.startsWith('chrome-mac'))) {
-                const p = path.join(dir, m, 'Chromium.app', 'Contents', 'MacOS', 'Chromium');
-                if (fs.existsSync(p)) return p;
+                const macDir = path.join(dir, m);
+                for (const app of fs.readdirSync(macDir).filter((s) => s.endsWith('.app'))) {
+                    const p = path.join(macDir, app, 'Contents', 'MacOS', app.slice(0, -4));
+                    if (fs.existsSync(p)) return p;
+                }
             }
         }
     }
@@ -148,7 +168,7 @@ const chromeBin = findChromeBinary();
 if (!chromeBin) {
     console.error('[打包浏览器] 错误:下载完成但未找到 Chromium 主程序,产物异常,终止。');
     try {
-        console.error(`[打包浏览器] 诊断:${dest} 下的目录 =`, fs.readdirSync(dest));
+        console.error(`[打包浏览器] 诊断:${dest} 目录树:\n` + listTree(dest, 4).join('\n'));
     } catch (e) {
         console.error('[打包浏览器] 诊断:读取 dest 目录失败 —', e.message);
     }
