@@ -41,6 +41,8 @@ interface PostProcessorManifest {
     type: string;
     label: string;
     description: string;
+    /** true=独立工具(渲染到独立工具板块、无复选框);缺省=随宏勾选的后处理器 */
+    standalone?: boolean;
 }
 
 interface RunResult {
@@ -1694,62 +1696,107 @@ stepsTitle.addEventListener('click', () => {
     stepsPanel.classList.toggle('collapsed');
 });
 
-// ===== 插件:可选插件列表(由后端注册表驱动,勾选启用、随主「运行」一起执行) =====
+// ===== 插件:可选插件列表(由后端注册表驱动) =====
+// 两类分板块渲染:
+//   · 后处理器(standalone 缺省 false)→ 附加处理板块「#plugin-list」:复选框(随主「运行」执行)+ 直接运行。
+//   · 独立工具(standalone=true,如银行整合/对账)→ 独立工具板块「#tool-list」:只有「运行」按钮,无复选框
+//     (输入是人工归集的文件、非宏回放产物,勾选随宏运行无意义)。
 const pluginPanel = byId<HTMLDivElement>('plugin-panel');
 const pluginTitle = byId<HTMLElement>('plugin-title');
 const pluginList = byId<HTMLDivElement>('plugin-list');
+const toolPanel = byId<HTMLDivElement>('tool-panel');
+const toolTitle = byId<HTMLElement>('tool-title');
+const toolList = byId<HTMLDivElement>('tool-list');
 
 pluginTitle.addEventListener('click', () => {
     pluginPanel.classList.toggle('collapsed');
 });
+toolTitle.addEventListener('click', () => {
+    toolPanel.classList.toggle('collapsed');
+});
 
-/** 从后端注册表拉取可用插件,渲成可勾选列表(空列表给出提示) */
+/**
+ * 渲染一行插件到指定容器(行 + 其后兄弟描述节点)。
+ * @param withCheckbox 为真=附加处理板块(复选框 + 直接运行);为假=独立工具板块(只有「运行」按钮)
+ */
+function renderPluginRow(
+    container: HTMLElement,
+    p: { type: string; label: string; description: string },
+    withCheckbox: boolean
+): void {
+    const row = document.createElement('div');
+    row.className = 'plugin-row';
+    if (withCheckbox) {
+        // 附加处理:左侧勾选(随「运行」执行)+ 名称,右侧「直接运行」按钮
+        const label = document.createElement('label');
+        label.className = 'plugin-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.pluginType = p.type;
+        const name = document.createElement('span');
+        name.textContent = p.label;
+        label.appendChild(cb);
+        label.appendChild(name);
+        row.appendChild(label);
+    } else {
+        // 独立工具:仅名称(无复选框),名称占满把按钮推到右侧
+        const name = document.createElement('span');
+        name.className = 'plugin-item';
+        name.textContent = p.label;
+        row.appendChild(name);
+    }
+    const runNow = document.createElement('button');
+    runNow.className = 'plugin-run-now';
+    runNow.textContent = withCheckbox ? '直接运行' : '运行';
+    runNow.title = withCheckbox
+        ? '不跑宏,直接选文件处理'
+        : '选文件直接运行,产出整合/对账结果(与录制的宏无关)';
+    runNow.addEventListener('click', () => void runPluginDirect(p.type, p.label));
+    row.appendChild(runNow);
+    const desc = document.createElement('div');
+    desc.className = 'plugin-desc';
+    desc.textContent = p.description;
+    container.appendChild(row);
+    container.appendChild(desc);
+}
+
+/** 从后端注册表拉取可用插件,按 standalone 分流渲染到「附加处理」与「独立工具」两个板块 */
 async function loadPlugins(): Promise<void> {
     try {
         const plugins = await window.electronAPI.listPlugins();
         pluginList.innerHTML = '';
-        if (plugins.length === 0) {
+        toolList.innerHTML = '';
+        const processors = plugins.filter((p) => !p.standalone);
+        const tools = plugins.filter((p) => p.standalone);
+        if (processors.length === 0) {
             const empty = document.createElement('span');
             empty.className = 'hint';
             empty.textContent = '暂无可用插件。';
             pluginList.appendChild(empty);
-            return;
+        } else {
+            for (const p of processors) {
+                renderPluginRow(pluginList, p, true);
+            }
         }
-        for (const p of plugins) {
-            // 一行:左侧勾选(随「运行」执行)+ 名称,右侧「直接运行」按钮(不跑宏、直接处理文件)
-            const row = document.createElement('div');
-            row.className = 'plugin-row';
-            const label = document.createElement('label');
-            label.className = 'plugin-item';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.dataset.pluginType = p.type;
-            const name = document.createElement('span');
-            name.textContent = p.label;
-            label.appendChild(cb);
-            label.appendChild(name);
-            const runNow = document.createElement('button');
-            runNow.className = 'plugin-run-now';
-            runNow.textContent = '直接运行';
-            runNow.title = '不跑宏,直接选 zip/csv/xls/xlsx 文件合并';
-            runNow.addEventListener('click', () => void runPluginDirect(p.type, p.label));
-            row.appendChild(label);
-            row.appendChild(runNow);
-            const desc = document.createElement('div');
-            desc.className = 'plugin-desc';
-            desc.textContent = p.description;
-            pluginList.appendChild(row);
-            pluginList.appendChild(desc);
+        if (tools.length === 0) {
+            const empty = document.createElement('span');
+            empty.className = 'hint';
+            empty.textContent = '暂无可用工具。';
+            toolList.appendChild(empty);
+        } else {
+            for (const p of tools) {
+                renderPluginRow(toolList, p, false);
+            }
         }
     } catch (e) {
         logLocal('加载插件列表失败:' + (e as Error).message, 'error');
     }
 }
 
-/** 直接运行某插件:弹文件夹选择(主进程),对其内文件直接处理,不跑宏 */
+/** 直接运行某插件/工具:弹文件选择(主进程),对所选文件直接处理,不跑宏 */
 async function runPluginDirect(type: string, label: string): Promise<void> {
     setBusy(true);
-    logLocal(`直接运行插件「${label}」:请选择要合并的文件(可多选 zip/csv/xls/xlsx)……`);
+    logLocal(`直接运行「${label}」:请选择要处理的文件(可多选 zip/csv/xls/xlsx/pdf)……`);
     try {
         const res = await window.electronAPI.runPlugin(type);
         if (res.canceled) {

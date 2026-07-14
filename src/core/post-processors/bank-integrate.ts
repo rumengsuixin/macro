@@ -151,5 +151,10 @@ const REGISTRATIONS: Array<{ type: string; label: string; description: string }>
 ];
 
 for (const r of REGISTRATIONS) {
-    registerPostProcessor({ type: r.type, label: r.label, description: r.description }, handler);
+    // standalone: true —— 银行整合/对账本质是「独立工具」(输入是人工归集的银行/对账文件,
+    // 非宏回放产物),前端渲染到独立工具板块、不带随宏勾选框,只走「直接运行(选文件)」通道。
+    registerPostProcessor(
+        { type: r.type, label: r.label, description: r.description, standalone: true },
+        handler
+    );
 }

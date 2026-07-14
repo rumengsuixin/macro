@@ -386,12 +386,14 @@ function registerIpc(): void {
         'run-plugin',
         async (_e, type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> => {
             ensureDirs();
+            // 「直接运行」通道服务两类:附加处理(合并)与独立工具(银行整合/对账,代号2 需 pdf),
+            // 故文案中性化、过滤器取并集(补 pdf),保留「所有文件」兜底。
             const pick = await dialog.showOpenDialog(mainWindow!, {
-                title: '选择要合并的文件(可多选 zip / csv / xls / xlsx)',
+                title: '选择要处理的文件(可多选 zip / csv / xls / xlsx / pdf)',
                 defaultPath: downloadsDir,
                 properties: ['openFile', 'multiSelections'],
                 filters: [
-                    { name: '压缩包 / 表格', extensions: ['zip', 'csv', 'xls', 'xlsx', 'xlsm'] },
+                    { name: '支持的文件', extensions: ['zip', 'csv', 'xls', 'xlsx', 'xlsm', 'pdf'] },
                     { name: '所有文件', extensions: ['*'] },
                 ],
             });

@@ -618,6 +618,34 @@
             background: var(--plugin-strong);
         }
 
+        /* ---------- 独立工具面板(基础视图常驻,珊瑚色与附加处理区分) ---------- */
+        .tool-panel {
+            background: linear-gradient(180deg, #fff1ec 0%, #ffffff 70%);
+            border-color: #ffd9cc;
+        }
+
+        .tool-panel > .panel-title {
+            border-left: 3px solid var(--accent);
+            background: linear-gradient(180deg, #ffe6dd, #fff1ec);
+        }
+
+        /* 独立工具行无复选框,名称直接靠左 → 取消描述的 24px 缩进、名称不显手型 */
+        .tool-panel .plugin-item {
+            cursor: default;
+        }
+
+        .tool-panel .plugin-desc {
+            margin-left: 0;
+        }
+
+        .tool-panel .plugin-run-now {
+            background: var(--accent);
+        }
+
+        .tool-panel .plugin-run-now:hover {
+            background: var(--accent-strong);
+        }
+
         /* ---------- 宏库面板(基础视图可见) ---------- */
         .macro-lib-panel {
             background: linear-gradient(180deg, #fff2ec 0%, #ffffff 70%);
@@ -1567,6 +1595,12 @@
                     <div class="panel-title" id="plugin-title">🧩 附加处理(勾选后随「运行」自动执行,如合并文件)</div>
                     <div class="plugin-body" id="plugin-list">
                         <span class="hint">正在加载插件…</span>
+                    </div>
+                </div>
+                <div class="panel collapsible tool-panel" id="tool-panel">
+                    <div class="panel-title" id="tool-title">🧰 独立工具(选文件直接运行,与录制的宏无关)</div>
+                    <div class="plugin-body" id="tool-list">
+                        <span class="hint">正在加载工具…</span>
                     </div>
                 </div>
                 <div class="panel collapsible collapsed" id="browser-panel">

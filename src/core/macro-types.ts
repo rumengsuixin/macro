@@ -257,6 +257,11 @@ export interface PostProcessorManifest {
     label: string;
     /** 一句话说明,展示为副文字 */
     description: string;
+    /**
+     * 为 true 表示「独立工具」:不随宏勾选、只能选文件直接运行(如银行整合/对账),
+     * 前端渲染到独立工具板块且不带复选框;缺省 false = 随宏勾选、回放后自动执行的后处理器。
+     */
+    standalone?: boolean;
 }
 
 /** 宏定义 */
