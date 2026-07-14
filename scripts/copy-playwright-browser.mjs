@@ -58,6 +58,49 @@ function findChromeBinary() {
         .find((p) => fs.existsSync(p));
 }
 
+// 递归统计目录字节数(仅用于删除日志展示释放体积,出错的单文件跳过不影响主流程)
+function dirSize(p) {
+    let total = 0;
+    for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+        const full = path.join(p, e.name);
+        try {
+            if (e.isDirectory()) total += dirSize(full);
+            else total += fs.statSync(full).size;
+        } catch {
+            // 单个条目读取失败忽略,不影响体积估算
+        }
+    }
+    return total;
+}
+
+// 安装包瘦身:删除无头 shell(chromium_headless_shell-*)。
+// 打包后的应用默认有头运行(见 src/core/macro-runner.ts 的 MACRO_HEADLESS,未设即 headless=false),
+// 只用完整版 chromium-*;无头 shell 打进安装包纯占体积(约 270MB / 压缩后约 85MB),故打包时删掉。
+// 开发自检走系统默认缓存(%LOCALAPPDATA%\ms-playwright),不受本目录删除影响。
+// 若需保留(如手工 PLAYWRIGHT_BROWSERS_PATH 指向本目录跑无头自检),设 PACK_KEEP_HEADLESS_SHELL=1。
+function pruneHeadlessShell() {
+    if (process.env.PACK_KEEP_HEADLESS_SHELL === '1') {
+        console.log('[打包浏览器] PACK_KEEP_HEADLESS_SHELL=1,保留无头 shell(不瘦身)。');
+        return;
+    }
+    if (!fs.existsSync(dest)) return;
+    const shells = fs.readdirSync(dest).filter((d) => d.startsWith('chromium_headless_shell-'));
+    if (shells.length === 0) {
+        console.log('[打包浏览器] 无无头 shell 可删(已是瘦身态)。');
+        return;
+    }
+    for (const s of shells) {
+        const p = path.join(dest, s);
+        try {
+            const mb = (dirSize(p) / 1024 / 1024).toFixed(0);
+            fs.rmSync(p, { recursive: true, force: true });
+            console.log(`[打包浏览器] 已删除无头 shell 瘦身安装包:${s}(释放约 ${mb} MB)。`);
+        } catch (err) {
+            console.warn(`[打包浏览器] 删除无头 shell 失败(忽略,不阻断打包):${s} — ${err.message}`);
+        }
+    }
+}
+
 // 3) 快路径:版本标记匹配且 Chromium 主程序在位 → 复用缓存,跳过下载
 if (fs.existsSync(versionMark)) {
     const cachedVersion = fs.readFileSync(versionMark, 'utf8').trim();
@@ -67,6 +110,7 @@ if (fs.existsSync(versionMark)) {
             `[打包浏览器] 已是当前版本 ${pwVersion} 且 Chromium 在位,复用缓存,跳过下载:\n` +
                 `            ${chromeBin}`
         );
+        pruneHeadlessShell();
         process.exit(0);
     }
     console.log(
@@ -103,3 +147,6 @@ if (!chromeBin) {
 // 7) 写入版本标记,供下次打包判断是否可复用
 fs.writeFileSync(versionMark, pwVersion, 'utf8');
 console.log(`[打包浏览器] 完成,已就位:${chromeBin}(已记录版本 ${pwVersion})`);
+
+// 8) 瘦身:删除刚下载回来的无头 shell(playwright install chromium 会连带装一份)
+pruneHeadlessShell();

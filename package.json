@@ -50,6 +50,15 @@
                 "to": "ms-playwright"
             }
         ],
+        "electronLanguages": [
+            "zh-CN",
+            "en-US"
+        ],
+        "files": [
+            "**/*",
+            "!**/*.map",
+            "!**/*.d.ts"
+        ],
         "asar": true,
         "win": {
             "target": "nsis",
