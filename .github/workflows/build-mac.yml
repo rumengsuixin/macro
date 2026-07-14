@@ -1,0 +1,53 @@
+# 在 macOS runner 上打包 macro 的 Mac 版(.dmg/.zip,自带 Chromium),产物上传为 artifact 供下载。
+# 本机是 Windows、PyInstaller/Playwright 均不能跨平台,故 Mac 产物统一走此 CI(与 xlsxIntgration 同法)。
+# 触发:手动 workflow_dispatch(可选架构)或推 v* tag。
+name: Build macOS App
+
+on:
+    workflow_dispatch:
+        inputs:
+            arch:
+                description: '目标架构(arm64=Apple 芯片 / x64=Intel)'
+                type: choice
+                options:
+                    - arm64
+                    - x64
+                default: arm64
+    push:
+        tags:
+            - 'v*'
+
+jobs:
+    build-mac:
+        # arm64 → macos-14(Apple 芯片);x64 → macos-13(Intel)。tag 触发默认走 arm64。
+        # 注:捆绑的 Chromium 按 runner 架构下载、单架构,electron 应用也随 runner 架构产出,二者天然对齐。
+        runs-on: ${{ (github.event.inputs.arch == 'x64') && 'macos-13' || 'macos-14' }}
+        env:
+            # 无 Apple 开发者账号:跳过自动签名,产出未签名包(Mac 首次打开需绕过 Gatekeeper)。
+            CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        steps:
+            - name: 检出代码
+              uses: actions/checkout@v4
+
+            - name: 安装 Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: '20'
+                  cache: 'npm'
+
+            - name: 安装依赖(跳过 postinstall 的浏览器下载,由 pack:browser 统一下载到 build/ms-playwright)
+              run: npm ci
+              env:
+                  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+            - name: 打包 macOS 应用(build → 下载 Mac Chromium → electron-builder --mac)
+              run: npm run dist:mac
+
+            - name: 上传产物(.dmg / .zip)
+              uses: actions/upload-artifact@v4
+              with:
+                  name: macro-mac-${{ github.event.inputs.arch || 'arm64' }}
+                  path: |
+                      release/*.dmg
+                      release/*.zip
+                  if-no-files-found: error

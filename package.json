@@ -10,6 +10,7 @@
         "dev": "npm run build && node scripts/start.mjs",
         "pack:browser": "node scripts/copy-playwright-browser.mjs",
         "dist": "npm run build && npm run pack:browser && electron-builder --win nsis",
+        "dist:mac": "npm run build && npm run pack:browser && electron-builder --mac",
         "postinstall": "playwright install chromium"
     },
     "keywords": [
@@ -53,6 +54,14 @@
         "win": {
             "target": "nsis",
             "icon": "assets/icon.ico"
+        },
+        "mac": {
+            "target": [
+                "dmg",
+                "zip"
+            ],
+            "icon": "assets/icon.icns",
+            "category": "public.app-category.productivity"
         },
         "nsis": {
             "oneClick": false,

@@ -16,11 +16,12 @@ import fs from 'node:fs';
 
 const require = createRequire(import.meta.url);
 
-// 1) 平台校验:本项目打 Windows NSIS 包,必须在 Windows 上打包
-if (process.platform !== 'win32') {
+// 1) 平台校验:playwright 只下载“当前系统”的浏览器,故必须在目标 OS 上打包。
+//    本项目支持 Windows(NSIS)与 macOS(dmg/zip);其它平台不支持。
+if (process.platform !== 'win32' && process.platform !== 'darwin') {
     console.error(
-        `[打包浏览器] 错误:当前系统是 ${process.platform},但本项目打的是 Windows 安装包。\n` +
-            '            playwright 只会下载当前系统的浏览器,请在 Windows 机器上运行打包。'
+        `[打包浏览器] 错误:当前系统是 ${process.platform},本项目仅支持在 Windows 或 macOS 上打包。\n` +
+            '            playwright 只会下载当前系统的浏览器,请在 Windows 或 macOS 机器上运行打包。'
     );
     process.exit(1);
 }
@@ -41,24 +42,30 @@ try {
 const dest = path.resolve('build', 'ms-playwright');
 const versionMark = path.join(dest, '.pw-version');
 
-// 校验产物:确认 Windows Chromium 主程序确实就位,返回 chrome.exe 路径(找不到返回 null)
-function findChromeExe() {
+// 当前平台 chromium-* 目录下的主程序相对路径(win 与 mac 布局不同)
+const CHROME_SUBPATH =
+    process.platform === 'win32'
+        ? ['chrome-win64', 'chrome.exe']
+        : ['chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'];
+
+// 校验产物:确认 Chromium 主程序确实就位,返回其路径(找不到返回 null)
+function findChromeBinary() {
     if (!fs.existsSync(dest)) return null;
     return fs
         .readdirSync(dest)
         .filter((d) => d.startsWith('chromium-'))
-        .map((d) => path.join(dest, d, 'chrome-win64', 'chrome.exe'))
+        .map((d) => path.join(dest, d, ...CHROME_SUBPATH))
         .find((p) => fs.existsSync(p));
 }
 
-// 3) 快路径:版本标记匹配且 chrome.exe 在位 → 复用缓存,跳过下载
+// 3) 快路径:版本标记匹配且 Chromium 主程序在位 → 复用缓存,跳过下载
 if (fs.existsSync(versionMark)) {
     const cachedVersion = fs.readFileSync(versionMark, 'utf8').trim();
-    const chromeExe = findChromeExe();
-    if (cachedVersion === pwVersion && chromeExe) {
+    const chromeBin = findChromeBinary();
+    if (cachedVersion === pwVersion && chromeBin) {
         console.log(
             `[打包浏览器] 已是当前版本 ${pwVersion} 且 Chromium 在位,复用缓存,跳过下载:\n` +
-                `            ${chromeExe}`
+                `            ${chromeBin}`
         );
         process.exit(0);
     }
@@ -86,13 +93,13 @@ try {
     process.exit(1);
 }
 
-// 6) 校验产物:确认 Windows Chromium 主程序确实就位
-const chromeExe = findChromeExe();
-if (!chromeExe) {
-    console.error('[打包浏览器] 错误:下载完成但未找到 chrome.exe,产物异常,终止。');
+// 6) 校验产物:确认 Chromium 主程序确实就位
+const chromeBin = findChromeBinary();
+if (!chromeBin) {
+    console.error('[打包浏览器] 错误:下载完成但未找到 Chromium 主程序,产物异常,终止。');
     process.exit(1);
 }
 
 // 7) 写入版本标记,供下次打包判断是否可复用
 fs.writeFileSync(versionMark, pwVersion, 'utf8');
-console.log(`[打包浏览器] 完成,已就位:${chromeExe}(已记录版本 ${pwVersion})`);
+console.log(`[打包浏览器] 完成,已就位:${chromeBin}(已记录版本 ${pwVersion})`);

@@ -1,6 +1,6 @@
 // 生成「二爪鱼」应用图标(与主页 🐟 品牌一致):海洋青底 + 白色小鱼 + 珊瑚色鱼鳍/鱼尾。
-// 纯 Node 内置能力(zlib 编码 PNG + 手工封装 ICO),无需任何图像依赖。
-// 产物:assets/icon.png(256)与 assets/icon.ico(多尺寸)。
+// 纯 Node 内置能力(zlib 编码 PNG + 手工封装 ICO/ICNS),无需任何图像依赖。
+// 产物:assets/icon.png(256)、assets/icon.ico(Windows 多尺寸)、assets/icon.icns(macOS 多尺寸)。
 // 用法:node scripts/make-icon.mjs
 import zlib from 'node:zlib';
 import fs from 'node:fs';
@@ -198,15 +198,59 @@ function encodeICO(entries) {
     return Buffer.concat([header, dir, ...entries.map((e) => e.png)]);
 }
 
+// ---------- ICNS 封装(macOS,PNG-based;每个 OSType 存一张对应尺寸的 PNG) ----------
+// OSType → 尺寸(仅用 PNG-based 现代类型,electron-builder/Finder 均接受;含 512/1024 满足打包要求)
+const ICNS_TYPES = [
+    ['ic11', 32], // 16pt@2x
+    ['ic12', 64], // 32pt@2x
+    ['ic07', 128], // 128×128
+    ['ic08', 256], // 256×256
+    ['ic09', 512], // 512×512
+    ['ic10', 1024], // 512pt@2x
+];
+function encodeICNS(pngBySize) {
+    const blocks = ICNS_TYPES.map(([osType, size]) => {
+        const png = pngBySize.get(size);
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(png.length + 8, 0); // 块长含 8 字节块头(4 类型 + 4 长度)
+        return Buffer.concat([Buffer.from(osType, 'ascii'), len, png]);
+    });
+    const body = Buffer.concat(blocks);
+    const header = Buffer.alloc(8);
+    header.write('icns', 0, 'ascii');
+    header.writeUInt32BE(body.length + 8, 4); // 总长含 8 字节文件头
+    return Buffer.concat([header, body]);
+}
+
 // ---------- 主流程 ----------
 function main() {
     if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
-    const sizes = [16, 32, 48, 64, 128, 256];
-    const entries = sizes.map((size) => ({ size, png: encodePNG(size, renderRGBA(size)) }));
-    const png256 = entries.find((e) => e.size === 256).png;
-    fs.writeFileSync(path.join(assetsDir, 'icon.png'), png256);
+
+    // 渲染并缓存各尺寸 PNG(ICO 与 ICNS 复用,避免重复渲染)
+    const pngCache = new Map();
+    const pngFor = (size) => {
+        if (!pngCache.has(size)) pngCache.set(size, encodePNG(size, renderRGBA(size)));
+        return pngCache.get(size);
+    };
+
+    // Windows ICO(原样:16/32/48/64/128/256)
+    const icoSizes = [16, 32, 48, 64, 128, 256];
+    const entries = icoSizes.map((size) => ({ size, png: pngFor(size) }));
+    fs.writeFileSync(path.join(assetsDir, 'icon.png'), pngFor(256));
     fs.writeFileSync(path.join(assetsDir, 'icon.ico'), encodeICO(entries));
-    console.log('已生成图标:assets/icon.png(256)与 assets/icon.ico(' + sizes.join('/') + ')');
+
+    // macOS ICNS(32/64/128/256/512/1024)
+    const icnsSizes = ICNS_TYPES.map(([, s]) => s);
+    const pngBySize = new Map(icnsSizes.map((s) => [s, pngFor(s)]));
+    fs.writeFileSync(path.join(assetsDir, 'icon.icns'), encodeICNS(pngBySize));
+
+    console.log(
+        '已生成图标:assets/icon.png(256)、assets/icon.ico(' +
+            icoSizes.join('/') +
+            ')、assets/icon.icns(' +
+            icnsSizes.join('/') +
+            ')'
+    );
 }
 
 main();

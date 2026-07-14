@@ -2,6 +2,7 @@
 // 仿 storage/request-rules-store:不存在写模板 + 坏 JSON 兜底。放 core 内(只用 node:fs/path,不依赖 Electron)。
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 /** 单条业务线(mode):当前平台可执行文件路径 */
 export interface BankIntegrateMode {
@@ -17,8 +18,23 @@ export interface BankIntegrateConfig {
     modes: Record<string, BankIntegrateMode>;
 }
 
-/** 本机 xlsxIntgration 项目根默认值(用户可在配置里改路径) */
-const DEFAULT_XLSX_ROOT = 'D:\\git_object\\xlsxIntgration';
+/**
+ * 本机 xlsxIntgration 产物根默认值(用户可在 bank-integrate.json 改路径),按平台分叉:
+ * - win32:xlsxIntgration 项目根(其下 dist/银行流水整合/<中文名>.exe)——保持原值不变。
+ * - darwin:约定放解压后的 Mac 产物(其下 bank-integration/<英文名>),默认取用户主目录,
+ *   即产物解压到 ~/bank-integration;用户也可在配置里改成任意绝对路径。
+ * - 其它平台:留空,完全靠用户配置。
+ */
+function defaultXlsxRoot(): string {
+    if (process.platform === 'win32') {
+        return 'D:\\git_object\\xlsxIntgration';
+    }
+    if (process.platform === 'darwin') {
+        return os.homedir();
+    }
+    return '';
+}
+const DEFAULT_XLSX_ROOT = defaultXlsxRoot();
 
 /**
  * 各 mode(插件 type)在 win32/darwin 下的可执行文件名(不含目录)。
@@ -40,7 +56,8 @@ const EXE_NAMES: Record<string, { win32: string; darwin: string }> = {
 /**
  * 按平台给出某 mode 的默认可执行文件路径(仅支持 win32/darwin,未知 type 或其它平台留空)。
  * - win32:PyInstaller onedir 产物 dist/银行流水整合/<中文名>.exe
- * - darwin:需在 Mac 上跑 build_mac.sh 打出 dist/bank-integration/<英文名>
+ * - darwin:Mac 产物(GitHub Actions artifact,从 bank-integration 目录起打包,无 dist 前缀),
+ *   即 <root>/bank-integration/<英文名>;root 默认取用户主目录(见 defaultXlsxRoot)。
  */
 function defaultExecutable(type: string, xlsxRoot: string): string {
     const names = EXE_NAMES[type];
@@ -51,7 +68,7 @@ function defaultExecutable(type: string, xlsxRoot: string): string {
         return path.join(xlsxRoot, 'dist', '银行流水整合', names.win32);
     }
     if (process.platform === 'darwin') {
-        return path.join(xlsxRoot, 'dist', 'bank-integration', names.darwin);
+        return path.join(xlsxRoot, 'bank-integration', names.darwin);
     }
     return '';
 }
