@@ -3341,6 +3341,164 @@ function setupLogDivider(): void {
     });
 }
 
+// ===== 单板块全占(专注)模式 =====
+// 点某板块标题的 ⛶ → 该板块占满侧栏,其余收成顶部一排缩小图标(figure-rail)。
+// 纯 CSS class 切换 + 注入装饰性 DOM(图标条 + 标题按钮),不碰 steps 数据 / 折叠 / 高级模式功能。
+const FOCUS_KEY = 'macro.focusPanel';
+
+interface FocusPanelDef {
+    id: string;
+    icon: string;
+    label: string;
+}
+
+// 中央映射(单一事实来源):顺序 = 图标条从左到右 = 侧栏 DOM 顺序。
+// panel id → title id 用 replace('-panel','-title') 派生(命名规律严格)。
+const FOCUS_PANELS: FocusPanelDef[] = [
+    { id: 'extract-panel', icon: '📋', label: '采集内容配置' },
+    { id: 'ai-panel', icon: '🤖', label: 'AI 配置' },
+    { id: 'plugin-panel', icon: '🧩', label: '附加处理' },
+    { id: 'tool-panel', icon: '🧰', label: '独立工具' },
+    { id: 'browser-panel', icon: '🔐', label: '登录状态复用' },
+    { id: 'macro-lib-panel', icon: '📚', label: '宏库' },
+    { id: 'steps-panel', icon: '🎬', label: '已录制的操作' },
+];
+
+// 与 CSS `.sidebar:not(.advanced) > #...` 名单一致:基础视图下隐藏的高级面板。
+// (若将来改动那条 CSS 名单,这里同步)
+const ADVANCED_ONLY = new Set(['extract-panel', 'ai-panel', 'plugin-panel', 'browser-panel']);
+
+let focusedPanelId: string | null = null;
+let focusRail: HTMLElement | null = null;
+
+/**
+ * 该板块当前是否可全占。基础视图下 4 个高级面板不可全占。
+ * 用 .advanced class 判定而非 getComputedStyle —— 因为 focus-mode 下所有板块都 display:none,
+ * getComputedStyle 会误判,切换目标时无法正确识别可见性。
+ */
+function isPanelAvailable(id: string): boolean {
+    const sidebar = document.querySelector('.sidebar');
+    const advanced = sidebar?.classList.contains('advanced') ?? false;
+    return advanced || !ADVANCED_ONLY.has(id);
+}
+
+/** 刷新图标条:按可见性显隐每个图标(基础模式隐藏高级图标),高亮当前全占板块 */
+function refreshRail(): void {
+    if (!focusRail) return;
+    focusRail.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((btn) => {
+        const id = btn.dataset.panel || '';
+        btn.style.display = isPanelAvailable(id) ? '' : 'none';
+        btn.classList.toggle('active', id === focusedPanelId);
+    });
+}
+
+/** 进入 / 切换 / 退出全占(id 为空或不可用 → 退出回正常堆叠视图) */
+function applyFocus(id: string | null): void {
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    if (!sidebar) return;
+
+    if (!id || !isPanelAvailable(id)) {
+        focusedPanelId = null;
+        sidebar.classList.remove('focus-mode');
+        FOCUS_PANELS.forEach((p) => byId(p.id).classList.remove('panel-focused'));
+        try {
+            localStorage.removeItem(FOCUS_KEY);
+        } catch {
+            /* 忽略存储失败 */
+        }
+        refreshRail();
+        return;
+    }
+
+    focusedPanelId = id;
+    sidebar.classList.add('focus-mode');
+    FOCUS_PANELS.forEach((p) => {
+        const panel = byId<HTMLElement>(p.id);
+        const on = p.id === id;
+        panel.classList.toggle('panel-focused', on);
+        if (on) panel.classList.remove('collapsed'); // 全占时强制展开被选面板(否则 body 被折叠规则隐藏)
+    });
+    try {
+        localStorage.setItem(FOCUS_KEY, id);
+    } catch {
+        /* 忽略存储失败 */
+    }
+    refreshRail();
+}
+
+/** 初始化专注模式:注入标题 ⛶ 按钮 + 顶部图标条 + 高级联动 + 持久化恢复 */
+function setupFocusMode(): void {
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    if (!sidebar) return;
+
+    // 1) 给每个 panel-title 注入 ⛶ 全占按钮(不改 HTML)
+    FOCUS_PANELS.forEach((p) => {
+        const title = document.getElementById(p.id.replace('-panel', '-title'));
+        if (!title) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'focus-btn';
+        btn.textContent = '⛶';
+        btn.title = `全占(专注):${p.label}`;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation(); // 不触发标题上既有的折叠 toggle
+            applyFocus(p.id === focusedPanelId ? null : p.id); // toggle:已全占则退出
+        });
+        title.appendChild(btn);
+    });
+
+    // 2) 构建顶部图标条,插为 .sidebar 第一个子元素(sticky 吸顶)
+    focusRail = document.createElement('div');
+    focusRail.className = 'focus-rail';
+    FOCUS_PANELS.forEach((p) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'rail-icon';
+        b.dataset.panel = p.id;
+        b.textContent = p.icon;
+        b.title = p.label;
+        b.addEventListener('click', () => applyFocus(p.id));
+        focusRail!.appendChild(b);
+    });
+    const exit = document.createElement('button');
+    exit.type = 'button';
+    exit.className = 'rail-exit';
+    exit.textContent = '✕';
+    exit.title = '退出专注模式';
+    exit.addEventListener('click', () => applyFocus(null));
+    focusRail.appendChild(exit);
+    sidebar.insertBefore(focusRail, sidebar.firstChild);
+
+    // 3) 与高级模式联动:切换后若全占面板变不可见则自动退出;否则刷新图标条
+    //    (本监听须晚于 setupAdvancedMode 注册,才能读到已更新的 .advanced class)
+    const advToggle = document.getElementById('advanced-mode');
+    advToggle?.addEventListener('change', () => {
+        if (focusedPanelId && !isPanelAvailable(focusedPanelId)) applyFocus(null);
+        else refreshRail();
+    });
+
+    // 4) 持久化恢复:此刻尚未加 focus-mode,getComputedStyle 反映真实可见性
+    let saved: string | null = null;
+    try {
+        saved = localStorage.getItem(FOCUS_KEY);
+    } catch {
+        /* localStorage 不可用 */
+    }
+    if (saved && FOCUS_PANELS.some((p) => p.id === saved)) {
+        const panel = document.getElementById(saved);
+        if (panel && getComputedStyle(panel).display !== 'none') {
+            applyFocus(saved);
+            return;
+        }
+        try {
+            localStorage.removeItem(FOCUS_KEY);
+        } catch {
+            /* 忽略 */
+        }
+    }
+    refreshRail();
+}
+
 // ===== 主页简化:高级模式开关 + 「更多」下拉 =====
 const ADV_MODE_KEY = 'macro.advancedMode';
 
@@ -3416,6 +3574,7 @@ async function init(): Promise<void> {
     setupLogDivider();
     setupAdvancedMode();
     setupMoreMenu();
+    setupFocusMode(); // 须在 setupAdvancedMode 之后:其高级联动监听要读到已更新的 .advanced class
     window.electronAPI.onLog((msg) => appendLog(msg.message, msg.level, msg.time));
     window.electronAPI.onMacroPaused((info) => showPauseModal(info));
     window.electronAPI.onMacroRunStarted(({ runId }) => {

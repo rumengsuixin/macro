@@ -329,6 +329,142 @@
             display: none;
         }
 
+        /* ============================================================
+           单板块全占(专注)模式
+           点板块标题的 ⛶ → 该板块占满侧栏,其余收成顶部缩小图标条
+           ============================================================ */
+
+        /* 顶部横向缩小图标条:默认不占位,仅专注模式显示并吸顶 */
+        .focus-rail {
+            display: none;
+        }
+
+        .sidebar.focus-mode > .focus-rail {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 0 0 auto;
+            padding: 6px;
+            position: sticky;
+            top: 0;
+            z-index: 6;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            box-shadow: var(--sh-sm);
+        }
+
+        /* 缩小的板块图标按钮(重置全局 button 的蓝底大 padding) */
+        .focus-rail .rail-icon {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            line-height: 1;
+            color: var(--text);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            box-shadow: none;
+            cursor: pointer;
+            transition: background .12s, border-color .12s, transform .12s;
+        }
+
+        .focus-rail .rail-icon:hover {
+            background: var(--surface-3);
+            border-color: var(--border-strong);
+            transform: translateY(-1px);
+            box-shadow: none;
+        }
+
+        .focus-rail .rail-icon.active {
+            border-color: var(--primary);
+            background: var(--primary-soft);
+            box-shadow: inset 0 0 0 1px var(--primary);
+        }
+
+        .focus-rail .rail-exit {
+            margin-left: auto;
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            line-height: 1;
+            color: var(--muted);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            box-shadow: none;
+            cursor: pointer;
+            transition: color .12s, border-color .12s, background .12s;
+        }
+
+        .focus-rail .rail-exit:hover {
+            color: #fff;
+            background: var(--accent);
+            border-color: var(--accent);
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* 标题里注入的 ⛶ 全占按钮:低调小图标,浮右与折叠箭头同侧 */
+        .panel-title .focus-btn {
+            float: right;
+            margin-left: 8px;
+            padding: 0 4px;
+            font-size: 13px;
+            line-height: 1.4;
+            color: var(--muted);
+            background: transparent;
+            border: none;
+            border-radius: var(--r-sm);
+            box-shadow: none;
+            cursor: pointer;
+            transition: color .12s, background .12s;
+        }
+
+        .panel-title .focus-btn:hover {
+            color: var(--primary-strong);
+            background: var(--primary-soft);
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* 专注:隐藏全部面板,只留被选中的那个占满剩余高度
+           (两条同特异性 (0,3,0),.panel-focused 写在后面靠源码顺序取胜) */
+        .sidebar.focus-mode > .panel {
+            display: none;
+        }
+
+        .sidebar.focus-mode > .panel-focused {
+            display: flex;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        /* 全占面板的 body 撑满并可滚动(.plugin-body 同时覆盖 plugin/tool 两板块) */
+        .sidebar.focus-mode > .panel-focused > .ai-body,
+        .sidebar.focus-mode > .panel-focused > .plugin-body,
+        .sidebar.focus-mode > .panel-focused > .browser-body,
+        .sidebar.focus-mode > .panel-focused > .macro-lib-body,
+        .sidebar.focus-mode > .panel-focused > #steps,
+        .sidebar.focus-mode > .panel-focused > #extract {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+        }
+
+        /* #extract 固定 160px 高在全占时改为自适应填充 */
+        .sidebar.focus-mode > .panel-focused > #extract {
+            height: auto;
+        }
+
         /* ============================ 主区 ============================ */
         .main {
             flex: 1;
