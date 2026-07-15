@@ -1198,6 +1198,83 @@
             opacity: 1;
         }
 
+        /* 📌 标记切换图标 + 色点 + 已标记行 */
+        .step-pin {
+            margin-left: 5px;
+            cursor: pointer;
+            opacity: .35;
+            font-size: 12px;
+            vertical-align: middle;
+            transition: opacity .12s;
+        }
+
+        .step-line.has-element:hover .step-pin,
+        .step-pin:hover,
+        .step-pin.on {
+            opacity: 1;
+        }
+
+        .mark-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-left: 6px;
+            border-radius: 50%;
+            vertical-align: middle;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, .7), 0 1px 2px rgba(14, 42, 51, .3);
+        }
+
+        .step-line.marked {
+            background: var(--surface-3);
+        }
+
+        /* 「已录制的操作」工具条:标记状态 + 清除全部 */
+        #steps-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        #mark-status {
+            flex: 1;
+            color: var(--text-soft);
+            line-height: 1.4;
+        }
+
+        #mark-status.empty {
+            color: var(--muted);
+        }
+
+        #mark-clear {
+            padding: 3px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            background: var(--accent);
+        }
+
+        #mark-clear:hover {
+            background: var(--accent-strong);
+        }
+
+        /* 分组头「本组标记 N」可点徽标 */
+        .url-group-marks {
+            margin-left: 6px;
+            padding: 1px 8px;
+            border-radius: var(--r-pill);
+            background: var(--accent);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .url-group-marks:hover {
+            background: var(--accent-strong);
+        }
+
         /* 翻页标记行 */
         .step-line.pagination-marked {
             background: #fff7ed;
@@ -1825,6 +1902,10 @@
                 </div>
                 <div class="panel steps-panel collapsible" id="steps-panel">
                     <div class="panel-title" id="steps-title">已录制的操作(共 <span id="step-count">0</span> 步)</div>
+                    <div id="steps-toolbar">
+                        <span id="mark-status" class="empty">点步骤行尾 📌 标记,多个标记会用不同颜色同时在页面高亮</span>
+                        <button id="mark-clear" title="清除全部标记" style="display:none">清除全部标记</button>
+                    </div>
                     <div id="steps"></div>
                 </div>
             </div>

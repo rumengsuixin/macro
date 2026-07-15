@@ -259,6 +259,29 @@ const expandedScrollGroups = new WeakSet<Step>();
 let stepUrls: string[] = [];
 const collapsedUrlGroups = new Set<string>();
 
+// ===== 批量标记步骤 → 页面持久多色高亮 =====
+// markedColors:被标记的步骤(对象引用)→ 分配的颜色 hex。纯 UI 态,不写进 steps / 宏 JSON /
+// 撤销快照 / 自动保存;拖拽排序保对象身份故稳,undo/redo 会 JSON.parse 重建对象致失配 → 那两处 clear()。
+const markedColors = new Map<Step, string>();
+// 8 色高区分度调色板(轮换分配)。列表行的色点与页面元素 outline 用同一色 → 靠颜色一一对应。
+const MARK_PALETTE = ['#ff5a5f', '#2f6df6', '#14b884', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+/** 选一个当前未被占用的调色板颜色;全占用则按数量取模轮换复用 */
+function pickMarkColor(): string {
+    const used = new Set(markedColors.values());
+    for (const c of MARK_PALETTE) {
+        if (!used.has(c)) return c;
+    }
+    return MARK_PALETTE[markedColors.size % MARK_PALETTE.length];
+}
+
+/** hex(#rrggbb)→ rgba 字符串,用于半透明底色 */
+function hexToRgba(hex: string, alpha: number): string {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return `rgba(255,122,89,${alpha})`;
+    return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
+}
+
 // ===== 步骤元素上下文(离线 AI 校正选择器)=====
 // 录制时抓的 {outerHTML,ancestors,contextHtml} 存这里,按步骤内存字段 `cid` 关联。
 // 用 cid+Map(而非 WeakSet/WeakMap 按对象身份):undo/redo 走 JSON.parse 会重建 step 对象,
@@ -333,6 +356,11 @@ function undoSteps(): void {
     lastStepsJson = prev;
     renderSteps();
     applyingHistory = false;
+    // 撤销 JSON.parse 重建了 step 对象,原标记(按对象引用)失配 → 清空并抹掉页面残留高亮
+    if (markedColors.size) {
+        markedColors.clear();
+        void applyBatchHighlights();
+    }
     logLocal('已撤销上一步步骤改动。');
 }
 
@@ -349,6 +377,11 @@ function redoSteps(): void {
     lastStepsJson = next;
     renderSteps();
     applyingHistory = false;
+    // 同 undo:对象重建致标记失配,清空并抹掉页面残留高亮
+    if (markedColors.size) {
+        markedColors.clear();
+        void applyBatchHighlights();
+    }
     logLocal('已重做步骤改动。');
 }
 
@@ -581,8 +614,27 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
         const locateSpan = document.createElement('span');
         locateSpan.className = 'step-locate';
         locateSpan.textContent = '🔦';
-        locateSpan.title = '点击可在页面上标记此元素';
+        locateSpan.title = '点击可跳到并高亮此元素(看一眼)';
         div.appendChild(locateSpan);
+        // 📌 标记切换:被标记的步骤在页面上「持久」高亮,多个标记用不同颜色区分
+        const pinSpan = document.createElement('span');
+        pinSpan.className = 'step-pin';
+        pinSpan.textContent = '📌';
+        pinSpan.title = '标记此步骤(在页面上持久高亮;多个标记用不同颜色)';
+        pinSpan.addEventListener('click', (e) => {
+            e.stopPropagation(); // 不冒泡触发整行的 peek
+            toggleMark(step);
+        });
+        div.appendChild(pinSpan);
+        const markColor = markedColors.get(step);
+        if (markColor) {
+            div.classList.add('marked');
+            pinSpan.classList.add('on');
+            const dot = document.createElement('span');
+            dot.className = 'mark-dot';
+            dot.style.background = markColor; // 色点=页面元素 outline 同色,靠颜色对应
+            div.appendChild(dot);
+        }
     }
     // 翻页标记:加高亮 class 与行尾徽标
     if (step.pagination === true) {
@@ -709,7 +761,7 @@ function friendlyUrl(u: string): string {
 }
 
 /** 创建一个 URL 分组标题行(折叠箭头 + 友好网址 + N步 计数);点击折叠/展开该组 */
-function createUrlGroupHead(url: string, count: number): HTMLDivElement {
+function createUrlGroupHead(url: string, count: number, markedCount = 0): HTMLDivElement {
     const head = document.createElement('div');
     head.className = 'url-group-head';
     const collapsed = collapsedUrlGroups.has(url);
@@ -729,6 +781,20 @@ function createUrlGroupHead(url: string, count: number): HTMLDivElement {
     head.appendChild(chevron);
     head.appendChild(label);
     head.appendChild(cnt);
+    // 本组已标记步骤数:点击跳到该页面(dom-ready 后自动亮出本组标记)
+    if (markedCount > 0) {
+        const marks = document.createElement('span');
+        marks.className = 'url-group-marks';
+        marks.textContent = `🔖 ${markedCount}`;
+        marks.title = '本组已标记步骤数;点击跳到该页面查看高亮';
+        marks.addEventListener('click', (e) => {
+            e.stopPropagation(); // 不触发折叠
+            if (url) {
+                navigateWebview(url);
+            }
+        });
+        head.appendChild(marks);
+    }
     head.addEventListener('click', () => {
         if (collapsedUrlGroups.has(url)) {
             collapsedUrlGroups.delete(url);
@@ -802,7 +868,11 @@ function renderSteps(): void {
         }
         const group = document.createElement('div');
         group.className = 'url-group';
-        group.appendChild(createUrlGroupHead(url, runEnd - i));
+        let groupMarked = 0;
+        for (let k = i; k < runEnd; k++) {
+            if (markedColors.has(steps[k])) groupMarked++;
+        }
+        group.appendChild(createUrlGroupHead(url, runEnd - i, groupMarked));
         if (collapsedUrlGroups.has(url)) {
             group.classList.add('collapsed');
         } else {
@@ -1795,6 +1865,7 @@ function applyLoadedMacro(loaded: { macro: Macro; captures: MacroCaptures | null
     nameInput.value = macro.name ?? '';
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
     collapsedUrlGroups.clear(); // 换宏重置 URL 分组折叠态(集合按 URL 字符串记忆,不随数组替换自动清)
+    markedColors.clear(); // 换宏清空标记(relinkCaptures 会重建 cid/对象引用,标记必清)
     // 回挂旁车上下文:按同序对齐 + type/selector 一致性校验,给命中的步骤分配 cid 并入 Map
     relinkCaptures(loaded.captures);
     // 记住来源文件路径:此后改动步骤 / 选择器可自动保存回此文件(宏 + 旁车)
@@ -2702,6 +2773,110 @@ async function locateStepOnPage(i: number): Promise<void> {
     navigateAndRetryHighlight(target, selector, fingerprint, i);
 }
 
+// ===== 批量持久多色高亮 =====
+const markStatusEl = byId<HTMLSpanElement>('mark-status');
+const markClearBtn = byId<HTMLButtonElement>('mark-clear');
+if (markClearBtn) {
+    markClearBtn.addEventListener('click', () => clearAllMarks());
+}
+
+/**
+ * 批量在录制 webview 内「持久」高亮多个元素,每个用自己的颜色。复用单步定位内核
+ * (q/vis/uniqVisible/指纹三路),但:①不自动消失(无 setTimeout);②一次多个;
+ * ③颜色作用于元素自身(CSS 变量 --bhl-c/--bhl-bg),故随滚动天然跟随、无需覆盖层。
+ * 每次调用先清掉上一轮全部批量高亮再重注入(幂等);items 为空即清空页面。
+ * 返回 {applied,total}:applied=实际命中并高亮数,total=传入本页项数。
+ */
+async function applyBatchHighlightInWebview(
+    items: { selector: string; fingerprint: unknown; color: string; bg: string }[]
+): Promise<{ applied: number; total: number }> {
+    const code =
+        '(function(){' +
+        'var items=' + JSON.stringify(items) + ';' +
+        'function q(sel){try{if(!sel)return null;if(sel.indexOf("xpath=")===0){var xr=document.evaluate(sel.slice(6),document,null,7,null);var a=[];for(var i=0;i<xr.snapshotLength;i++){a.push(xr.snapshotItem(i));}return a;}return Array.prototype.slice.call(document.querySelectorAll(sel));}catch(e){return null;}}' +
+        'function vis(el){if(!el||el.nodeType!==1)return false;var r=el.getBoundingClientRect();if(r.width<=0&&r.height<=0)return false;var s;try{s=window.getComputedStyle(el);}catch(e){return true;}if(!s)return true;if(s.display==="none"||s.visibility==="hidden"||s.opacity==="0")return false;return true;}' +
+        'function uniqVisible(list){if(!list)return null;var v=list.filter(vis);if(v.length===1)return v[0];if(v.length===0&&list.length===1)return list[0];return null;}' +
+        'function locate(sel,fp){var target=null;if(sel){var m=q(sel);if(m&&m.length===1){target=m[0];}}' +
+        'if(!target&&fp){var got=null;' +
+        'if(!got&&fp.ariaLabel){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[aria-label="+JSON.stringify(fp.ariaLabel)+"]")));}catch(e){}}' +
+        'if(!got&&fp.text){var tag=fp.tag||"*";var all;try{all=document.querySelectorAll(tag);}catch(e){all=document.querySelectorAll("*");}var bt=[];for(var i=0;i<all.length;i++){var el=all[i];var t=(el.textContent||"").replace(/\\s+/g," ").trim();if(t===fp.text)bt.push(el);}got=uniqVisible(bt);}' +
+        'if(!got&&fp.href){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[href="+JSON.stringify(fp.href)+"]")));}catch(e){}}' +
+        'if(got)target=got;}return target;}' +
+        'try{var SID="__macro_bhl_style__";if(!document.getElementById(SID)){var st=document.createElement("style");st.id=SID;st.textContent=".__macro_bhl__{outline:3px solid var(--bhl-c,#ff7a59) !important;outline-offset:-2px !important;background:var(--bhl-bg,transparent) !important;}";document.documentElement.appendChild(st);}' +
+        'var prev=document.querySelectorAll(".__macro_bhl__");for(var j=0;j<prev.length;j++){prev[j].classList.remove("__macro_bhl__");try{prev[j].style.removeProperty("--bhl-c");prev[j].style.removeProperty("--bhl-bg");}catch(e){}}' +
+        'var applied=0;for(var k=0;k<items.length;k++){var it=items[k];var t=locate(it.selector,it.fingerprint);if(!t)continue;t.classList.add("__macro_bhl__");try{t.style.setProperty("--bhl-c",it.color);t.style.setProperty("--bhl-bg",it.bg);}catch(e){}applied++;}' +
+        'return{applied:applied,total:items.length};}catch(e){return{applied:0,total:items.length};}})()';
+    try {
+        const raw = await webview.executeJavaScript(code);
+        return (raw && typeof raw === 'object' ? raw : { applied: 0, total: items.length }) as { applied: number; total: number };
+    } catch (e) {
+        logLocal('批量高亮失败:' + (e as Error).message, 'error');
+        return { applied: 0, total: items.length };
+    }
+}
+
+/** 重算当前页应显示的批量高亮并注入 webview,同时刷新状态栏(其它页/本页未命中计数) */
+async function applyBatchHighlights(): Promise<void> {
+    const urls = computeStepUrls();
+    const cur = safeGetUrl();
+    const items: { selector: string; fingerprint: unknown; color: string; bg: string }[] = [];
+    let offPage = 0;
+    steps.forEach((s, i) => {
+        const color = markedColors.get(s);
+        if (!color) return;
+        if (sameUrl(urls[i], cur)) {
+            const rec = s as Record<string, unknown>;
+            const selector = typeof rec.selector === 'string' ? rec.selector : '';
+            items.push({ selector, fingerprint: rec.fingerprint ?? null, color, bg: hexToRgba(color, 0.14) });
+        } else {
+            offPage++;
+        }
+    });
+    const res = await applyBatchHighlightInWebview(items);
+    updateMarkStatus(res.applied, offPage, items.length - res.applied);
+}
+
+/** 刷新「已录制的操作」工具条的标记状态文案 */
+function updateMarkStatus(onPage: number, offPage: number, missing: number): void {
+    const total = markedColors.size;
+    if (markStatusEl) {
+        if (total === 0) {
+            markStatusEl.textContent = '点步骤行尾 📌 标记,多个标记会用不同颜色同时在页面高亮';
+            markStatusEl.classList.add('empty');
+        } else {
+            let txt = `已标记 ${total} 个 · 本页亮 ${onPage}`;
+            if (missing > 0) txt += ` · 本页未找到 ${missing}`;
+            if (offPage > 0) txt += ` · 其它页 ${offPage}`;
+            markStatusEl.textContent = txt;
+            markStatusEl.classList.remove('empty');
+        }
+    }
+    if (markClearBtn) markClearBtn.style.display = total > 0 ? '' : 'none';
+}
+
+/** 切换某步骤的标记(持久高亮/取消);保留列表滚动位置,重绘并重注入高亮 */
+function toggleMark(step: Step): void {
+    if (markedColors.has(step)) {
+        markedColors.delete(step);
+    } else {
+        markedColors.set(step, pickMarkColor());
+    }
+    const keepScroll = stepsEl.scrollTop;
+    renderSteps(); // 重绘行 📌/色点 + 分组头徽标;标记不在 steps JSON,不触发撤销/自动保存
+    stepsEl.scrollTop = keepScroll;
+    void applyBatchHighlights();
+}
+
+/** 清除全部标记(列表 + 页面) */
+function clearAllMarks(): void {
+    if (markedColors.size === 0) return;
+    markedColors.clear();
+    const keepScroll = stepsEl.scrollTop;
+    renderSteps();
+    stepsEl.scrollTop = keepScroll;
+    void applyBatchHighlights();
+}
+
 /** 选择器是否用了「随交互/校验实时变化」的易变状态属性——这类选择器录制态≠回放态,会命中 0 个致超时 */
 function hasVolatileAttr(selector: string): boolean {
     return /\[\s*@?(?:aria-(?:invalid|expanded|selected|checked|pressed|busy|disabled|current)|value)\b/i.test(selector);
@@ -3163,6 +3338,10 @@ webview.addEventListener('dom-ready', () => {
     if (pendingPick) {
         pendingPick = null;
         logLocal('页面已跳转,元素拾取已取消。');
+    }
+    // 切页/导航后重新应用批量标记高亮(跨页粘住:亮出新页面上的那批标记)
+    if (markedColors.size) {
+        void applyBatchHighlights();
     }
 });
 
