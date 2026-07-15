@@ -637,6 +637,7 @@
         .collapsible.collapsed > .browser-body,
         .collapsible.collapsed > .ai-body,
         .collapsible.collapsed > .plugin-body,
+        .collapsible.collapsed > #steps-toolbar,
         .collapsible.collapsed > #steps {
             display: none;
         }
@@ -1228,17 +1229,16 @@
             background: var(--surface-3);
         }
 
-        /* 「已录制的操作」工具条:标记状态 + 清除全部(克制的一条浅色条,次要按钮走幽灵样式) */
+        /* 「已录制的操作」标记控制栏:紧贴标题下方的一条次级栏
+           (白底 + 底部分隔线,与 header 同语言,不做独立色块,故不与下方步骤行争视觉) */
         #steps-toolbar {
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 8px;
-            padding: 5px 6px 5px 10px;
-            border-radius: var(--r-sm);
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            font-size: 11.5px;
+            padding: 6px 12px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
         }
 
         #mark-status {
@@ -1258,6 +1258,7 @@
             color: var(--muted);
         }
 
+        /* 次要动作:幽灵胶囊(珊瑚描边+珊瑚字),hover 才填充,不抢步骤列表的视觉 */
         #mark-clear {
             flex: none;
             padding: 3px 11px;
