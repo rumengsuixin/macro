@@ -1015,6 +1015,38 @@
             border-bottom: 2px solid var(--ai);
         }
 
+        /* 步骤行:序号 / 类型图标 / 人话文案 / ⓘ 说明 / 原始选择器(高级模式灰字) */
+        .step-index {
+            color: var(--muted);
+            margin-right: 3px;
+        }
+
+        .step-icon {
+            margin-right: 5px;
+        }
+
+        .step-help {
+            margin-left: 5px;
+            cursor: help;
+            color: var(--muted);
+            font-size: 11px;
+            vertical-align: middle;
+        }
+
+        /* 原始选择器:默认对普通用户隐藏,仅在勾选「✨ 高级」后现出灰字(悬停步骤行始终可见其 title) */
+        .step-selector {
+            display: none;
+            margin-left: 6px;
+            color: var(--muted);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            word-break: break-all;
+        }
+
+        .sidebar.advanced .step-selector {
+            display: inline;
+        }
+
         /* 翻页标记行 */
         .step-line.pagination-marked {
             background: #fff7ed;

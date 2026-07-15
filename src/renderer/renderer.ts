@@ -366,32 +366,172 @@ function logLocal(message: string, level: 'info' | 'error' = 'info'): void {
     appendLog(message, level);
 }
 
-// ===== 步骤展示 =====
-function describeStep(step: Step): string {
-    const s = step as Record<string, unknown>;
+// ===== 步骤展示(面向普通用户的「人话」文案) =====
+// 步骤行不再直接暴露 CSS/xpath 选择器,而是用录制时已存进 step 的语义指纹
+// (fingerprint.text/ariaLabel/tag)+ 值/网址 生成中文短语;原始选择器降级到
+// 步骤行的 title 悬停 + 高级模式下的灰字 span(见 createStepLine)。
+
+/** 取步骤的语义指纹对象(松散 Step 上的可选字段),无则 undefined */
+function stepFingerprint(step: Step): Record<string, unknown> | undefined {
+    const fp = (step as Record<string, unknown>).fingerprint;
+    return fp && typeof fp === 'object' ? (fp as Record<string, unknown>) : undefined;
+}
+
+/** 元素类别中文(用于人话文案:点击「登录」按钮 / 点击一个链接) */
+function elementKind(tag?: string): string {
+    switch ((tag || '').toLowerCase()) {
+        case 'a':
+            return '链接';
+        case 'button':
+            return '按钮';
+        case 'input':
+        case 'textarea':
+        case 'select':
+            return '输入框';
+        default:
+            return '元素';
+    }
+}
+
+/**
+ * 从语义指纹拼出元素的人话标签:
+ * 有可见文字/aria-label → 「下一页」链接 / 「登录」按钮;都没有 → 一个链接 / 一个元素(旧宏兜底)
+ */
+function elementLabel(fp: Record<string, unknown> | undefined): string {
+    const tag = fp && typeof fp.tag === 'string' ? fp.tag : undefined;
+    const kind = elementKind(tag);
+    const text = fp && typeof fp.text === 'string' ? fp.text.trim() : '';
+    const aria = fp && typeof fp.ariaLabel === 'string' ? fp.ariaLabel.trim() : '';
+    const label = text || aria;
+    if (label) {
+        const short = label.length > 24 ? label.slice(0, 24) + '…' : label;
+        // 元素类别未知时不缀"元素"避免啰嗦
+        return kind === '元素' ? `「${short}」` : `「${short}」${kind}`;
+    }
+    return `一个${kind}`;
+}
+
+/** 常用按键中文化(其余原样) */
+function friendlyKey(key: string): string {
+    const map: Record<string, string> = {
+        Enter: '回车',
+        Escape: 'Esc',
+        Tab: 'Tab',
+        Backspace: '退格',
+        Delete: '删除',
+        ArrowUp: '↑',
+        ArrowDown: '↓',
+        ArrowLeft: '←',
+        ArrowRight: '→',
+        ' ': '空格',
+    };
+    return map[key] || key;
+}
+
+/** 步骤类型图标(便于一眼扫读区分步骤类别) */
+function stepIcon(step: Step): string {
     switch (step.type) {
         case 'goto':
-            return `goto ${s.url}`;
+            return '🌐';
         case 'click':
-            return `click ${s.selector}`;
+            return '🖱️';
         case 'fill':
-            return `fill ${s.selector} = "${s.value}"`;
         case 'press':
-            return `press ${s.key}${s.selector ? ' @ ' + s.selector : ''}`;
-        case 'scroll':
-            return `scroll (${s.x}, ${s.y})`;
+            return '⌨️';
+        case 'waitForSelector':
+        case 'waitForClickable':
+        case 'wait-for-load':
+            return '⏳';
+        case 'pause':
+            return '⏸️';
         case 'scroll-bottom':
-            return '滚动到底部';
+            return '⬇️';
+        case 'scroll':
+            return '↕️';
+        default:
+            return '•';
+    }
+}
+
+/** 步骤人话文案(不含原始选择器);用语义指纹 / 值 / 网址生成 */
+function describeStep(step: Step): string {
+    const s = step as Record<string, unknown>;
+    const fp = stepFingerprint(step);
+    switch (step.type) {
+        case 'goto':
+            return `打开网页 ${friendlyUrl(typeof s.url === 'string' ? s.url : '')}`;
+        case 'click':
+            return `点击${elementLabel(fp)}`;
+        case 'fill': {
+            const val = typeof s.value === 'string' ? s.value : '';
+            const aria = fp && typeof fp.ariaLabel === 'string' ? fp.ariaLabel.trim() : '';
+            return aria ? `在「${aria}」框输入「${val}」` : `输入「${val}」`;
+        }
+        case 'press':
+            return `按下 ${friendlyKey(typeof s.key === 'string' ? s.key : '')} 键`;
+        case 'scroll':
+            return '滚动页面';
+        case 'scroll-bottom':
+            return '滚动到页面底部';
         case 'wait-for-load':
             return '等待页面加载完成';
         case 'waitForSelector':
-            return `等待元素出现 ${s.selector}`;
+            return `等待${elementLabel(fp)}出现`;
         case 'waitForClickable':
-            return `等待元素可点击 ${s.selector}`;
+            return `等待${elementLabel(fp)}可以点击`;
         case 'pause':
-            return `人工介入暂停${s.reason ? ' — ' + s.reason : ''}${s.timeout ? '(超时 ' + s.timeout + 'ms)' : ''}`;
+            return `暂停,等待人工操作${typeof s.reason === 'string' && s.reason ? ':' + s.reason : ''}`;
         default:
             return step.type;
+    }
+}
+
+/** 步骤的原始定位串(选择器;goto 为完整网址)——仅用于高级模式灰字 span,无则空串 */
+function stepSelector(step: Step): string {
+    const s = step as Record<string, unknown>;
+    if (step.type === 'goto') {
+        return typeof s.url === 'string' ? s.url : '';
+    }
+    return typeof s.selector === 'string' ? s.selector : '';
+}
+
+/** 步骤原始技术详情(供步骤行 title 悬停排错);无 selector/url 的步骤返回空串 */
+function stepRawDetail(step: Step): string {
+    const s = step as Record<string, unknown>;
+    const sel = typeof s.selector === 'string' ? s.selector : '';
+    switch (step.type) {
+        case 'goto':
+            return typeof s.url === 'string' ? `goto ${s.url}` : '';
+        case 'click':
+            return sel ? `click ${sel}` : '';
+        case 'fill':
+            return sel ? `fill ${sel} = "${typeof s.value === 'string' ? s.value : ''}"` : '';
+        case 'press':
+            return sel ? `press ${typeof s.key === 'string' ? s.key : ''} @ ${sel}` : '';
+        case 'waitForSelector':
+            return sel ? `waitForSelector ${sel}` : '';
+        case 'waitForClickable':
+            return sel ? `waitForClickable ${sel}` : '';
+        default:
+            return '';
+    }
+}
+
+/** 难懂步骤类型的一句话解释(ⓘ 悬停说明);其余类型返回空串 */
+function stepHelp(step: Step): string {
+    switch (step.type) {
+        case 'waitForSelector':
+            return '回放到这一步会先等这个元素在页面上出现,再继续下一步——用于等页面数据/内容加载好。';
+        case 'waitForClickable':
+            return '回放到这一步会等这个元素真正可以点击(不再被遮挡或禁用)再继续,比「等待出现」更严格。';
+        case 'wait-for-load':
+            return '等整个网页(含图片等资源)全部加载完成后再继续下一步。';
+        case 'scroll-bottom':
+            return '自动把页面滚到最底部,触发「下拉加载更多」式的内容加载。';
+        case 'pause':
+            return '回放到这一步会停下来,把浏览器交给你手动操作(如登录/验证码),完成后点「继续」。';
+        default:
+            return '';
     }
 }
 
@@ -399,7 +539,39 @@ function describeStep(step: Step): string {
 function createStepLine(step: Step, i: number): HTMLDivElement {
     const div = document.createElement('div');
     div.className = 'step-line';
-    div.textContent = `${i + 1}. ${describeStep(step)}`;
+    // 序号 + 图标 + 人话文案 + (难懂类型)ⓘ 说明 + (有选择器时)灰字原始选择器。
+    // 拆成子元素而非单一 textContent,以便分别控制样式与显隐;原始选择器降级到 title 悬停 + 高级模式灰字。
+    const detail = stepRawDetail(step);
+    if (detail) {
+        div.title = detail; // 悬停显示原始选择器/网址,供排错
+    }
+    const indexSpan = document.createElement('span');
+    indexSpan.className = 'step-index';
+    indexSpan.textContent = `${i + 1}.`;
+    div.appendChild(indexSpan);
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'step-icon';
+    iconSpan.textContent = stepIcon(step);
+    div.appendChild(iconSpan);
+    const textSpan = document.createElement('span');
+    textSpan.className = 'step-text';
+    textSpan.textContent = describeStep(step);
+    div.appendChild(textSpan);
+    const help = stepHelp(step);
+    if (help) {
+        const helpSpan = document.createElement('span');
+        helpSpan.className = 'step-help';
+        helpSpan.textContent = 'ⓘ';
+        helpSpan.title = help; // 一句话解释这步在做什么
+        div.appendChild(helpSpan);
+    }
+    const sel = stepSelector(step);
+    if (sel) {
+        const selSpan = document.createElement('span');
+        selSpan.className = 'step-selector'; // 默认隐藏,勾选「✨ 高级」后 CSS 显出灰字
+        selSpan.textContent = sel;
+        div.appendChild(selSpan);
+    }
     // 翻页标记:加高亮 class 与行尾徽标
     if (step.pagination === true) {
         div.classList.add('pagination-marked');
