@@ -572,6 +572,18 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
         selSpan.textContent = sel;
         div.appendChild(selSpan);
     }
+    // 有对应页面元素的步骤(点击/填写/等待元素…):加 🔦 可点提示,左键点整行在页面上高亮该元素
+    const locSelector = typeof (step as Record<string, unknown>).selector === 'string'
+        ? ((step as Record<string, unknown>).selector as string) : '';
+    const hasElement = step.type !== 'goto' && (!!locSelector || !!(step as Record<string, unknown>).fingerprint);
+    if (hasElement) {
+        div.classList.add('has-element');
+        const locateSpan = document.createElement('span');
+        locateSpan.className = 'step-locate';
+        locateSpan.textContent = '🔦';
+        locateSpan.title = '点击可在页面上标记此元素';
+        div.appendChild(locateSpan);
+    }
     // 翻页标记:加高亮 class 与行尾徽标
     if (step.pagination === true) {
         div.classList.add('pagination-marked');
@@ -594,6 +606,13 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
         e.preventDefault();
         showStepContextMenu(e.clientX, e.clientY, i);
     });
+    // 左键点整行:在录制 webview 里高亮此步骤对应的元素(仅对有元素的步骤生效)
+    if (hasElement) {
+        div.addEventListener('click', () => {
+            if (dragFromIndex !== null) return; // 拖拽中不触发
+            void locateStepOnPage(i);
+        });
+    }
     // 拖拽排序:每一行可上下拖动调整顺序
     div.draggable = true;
     div.dataset.index = String(i);
@@ -2563,6 +2582,124 @@ async function clearFixMarker(): Promise<void> {
     } catch {
         // 非致命
     }
+}
+
+/**
+ * 在录制 webview 内定位步骤对应的元素并「闪一下高亮」(帮用户看清某步点/填/等待的是哪个元素)。
+ * 复用 locateAndSnapshot 的定位内核(selector 的 xpath=/CSS 分诊 + fingerprint aria/text/href 三路 + 可见性去重),
+ * 命中后注入珊瑚色 outline 高亮 + scrollIntoView + 2.5s 后移除;未命中/异常返回 {found:false}。
+ */
+async function highlightInWebview(selector: string, fingerprint: unknown): Promise<{ found: boolean; via?: string }> {
+    const params = { selector: selector || '', fingerprint: fingerprint ?? null };
+    const code =
+        '(function(){' +
+        'var p=' + JSON.stringify(params) + ';' +
+        'function q(sel){try{if(sel.indexOf("xpath=")===0){var xr=document.evaluate(sel.slice(6),document,null,7,null);var a=[];for(var i=0;i<xr.snapshotLength;i++){a.push(xr.snapshotItem(i));}return a;}return Array.prototype.slice.call(document.querySelectorAll(sel));}catch(e){return null;}}' +
+        'function vis(el){if(!el||el.nodeType!==1)return false;var r=el.getBoundingClientRect();if(r.width<=0&&r.height<=0)return false;var s;try{s=window.getComputedStyle(el);}catch(e){return true;}if(!s)return true;if(s.display==="none"||s.visibility==="hidden"||s.opacity==="0")return false;return true;}' +
+        'function uniqVisible(list){if(!list)return null;var v=list.filter(vis);if(v.length===1)return v[0];if(v.length===0&&list.length===1)return list[0];return null;}' +
+        'var target=null,via="";' +
+        'if(p.selector){var m=q(p.selector);if(m&&m.length===1){target=m[0];via="selector";}}' +
+        'if(!target&&p.fingerprint){var fp=p.fingerprint;var got=null;' +
+        'if(!got&&fp.ariaLabel){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[aria-label="+JSON.stringify(fp.ariaLabel)+"]")));}catch(e){}if(got)via="aria";}' +
+        'if(!got&&fp.text){var tag=fp.tag||"*";var all;try{all=document.querySelectorAll(tag);}catch(e){all=document.querySelectorAll("*");}var bt=[];for(var i=0;i<all.length;i++){var el=all[i];var t=(el.textContent||"").replace(/\\s+/g," ").trim();if(t===fp.text)bt.push(el);}got=uniqVisible(bt);if(got)via="text";}' +
+        'if(!got&&fp.href){try{got=uniqVisible(Array.prototype.slice.call(document.querySelectorAll("[href="+JSON.stringify(fp.href)+"]")));}catch(e){}if(got)via="href";}' +
+        'if(got)target=got;}' +
+        'if(!target)return{found:false};' +
+        'try{var HLID="__macro_hl_style__";if(!document.getElementById(HLID)){var st=document.createElement("style");st.id=HLID;st.textContent=".__macro_hl__{outline:3px solid #ff7a59 !important;outline-offset:-2px !important;background:rgba(255,122,89,.18) !important;}";document.documentElement.appendChild(st);}' +
+        'var prev=document.querySelectorAll(".__macro_hl__");for(var j=0;j<prev.length;j++)prev[j].classList.remove("__macro_hl__");' +
+        'target.classList.add("__macro_hl__");' +
+        'try{target.scrollIntoView({block:"center",inline:"center"});}catch(e){}' +
+        'setTimeout(function(){try{target.classList.remove("__macro_hl__");}catch(e){}},2500);}catch(e){}' +
+        'return{found:true,via:via};})()';
+    try {
+        const raw = await webview.executeJavaScript(code);
+        return (raw && typeof raw === 'object' ? raw : { found: false }) as { found: boolean; via?: string };
+    } catch (e) {
+        logLocal('高亮元素失败(按未找到处理):' + (e as Error).message, 'error');
+        return { found: false };
+    }
+}
+
+/** 让录制 webview 导航到某 URL(不追加 goto 步骤;供「点步骤→跳到来源页」用) */
+function navigateWebview(url: string): void {
+    addressInput.value = url;
+    webview.src = url;
+}
+
+/** 宽松比较两个 URL 是否指向同一页(忽略尾斜杠与 hash),用于判断是否已在目标页 */
+function sameUrl(a: string, b: string): boolean {
+    const norm = (u: string): string => {
+        try {
+            const x = new URL(u);
+            return x.origin + x.pathname.replace(/\/+$/, '') + x.search;
+        } catch {
+            return (u || '').replace(/#.*$/, '').replace(/\/+$/, '');
+        }
+    };
+    return !!a && !!b && norm(a) === norm(b);
+}
+
+/** 导航到 url,加载完成后重试一次高亮(dom-ready 触发 + 8s 超时兜底,只执行一次) */
+function navigateAndRetryHighlight(url: string, selector: string, fingerprint: unknown, i: number): void {
+    navigateWebview(url);
+    let done = false;
+    const onReady = (): void => {
+        void attempt();
+    };
+    const attempt = async (): Promise<void> => {
+        if (done) return;
+        done = true;
+        webview.removeEventListener('dom-ready', onReady);
+        const res = await highlightInWebview(selector, fingerprint);
+        if (res.found) {
+            logLocal(`已跳转到来源页面并标记第 ${i + 1} 步的元素。`);
+        } else {
+            logLocal(`已跳转到来源页面,但仍未找到第 ${i + 1} 步的元素(可能需要展开菜单/特定操作后它才会出现)。`, 'error');
+        }
+    };
+    webview.addEventListener('dom-ready', onReady);
+    setTimeout(() => {
+        void attempt();
+    }, 8000);
+}
+
+/**
+ * 点击某步骤时,在录制 webview 里高亮它对应的元素。当前页找不到 → 用步骤来源 URL 自动跳转后重试;
+ * 录制中仅提示不跳转(避免 dom-ready 重挂录制器等副作用)。
+ */
+async function locateStepOnPage(i: number): Promise<void> {
+    const step = steps[i] as Record<string, unknown> | undefined;
+    if (!step) return;
+    const selector = typeof step.selector === 'string' ? step.selector : '';
+    const fingerprint = step.fingerprint ?? null;
+    if (!selector && !fingerprint) {
+        logLocal(`第 ${i + 1} 步没有可定位的页面元素。`);
+        return;
+    }
+    const res = await highlightInWebview(selector, fingerprint);
+    if (res.found) {
+        logLocal(`已在页面上标记第 ${i + 1} 步的元素。`);
+        return;
+    }
+    // 当前页未找到:尝试跳到该步来源页面(继承组 URL / 录制来源 / goto 自身 url)
+    const target =
+        stepUrls[i] ||
+        (typeof step.recordedUrl === 'string' ? step.recordedUrl : '') ||
+        (step.type === 'goto' && typeof step.url === 'string' ? step.url : '');
+    if (!target) {
+        logLocal(`第 ${i + 1} 步:当前页找不到该元素(此步无记录来源页面,请手动打开对应页面再试)。`, 'error');
+        return;
+    }
+    if (recording) {
+        logLocal(`第 ${i + 1} 步:当前页找不到该元素;录制中不自动跳转。该元素录制于 ${friendlyUrl(target)}。`, 'error');
+        return;
+    }
+    if (sameUrl(safeGetUrl(), target)) {
+        logLocal(`第 ${i + 1} 步:已在来源页面但找不到该元素(可能需要展开菜单/滚动等特定操作后它才会出现)。`, 'error');
+        return;
+    }
+    logLocal(`第 ${i + 1} 步:元素不在当前页,正在跳转到来源页面 ${friendlyUrl(target)} 后重试标记…`);
+    navigateAndRetryHighlight(target, selector, fingerprint, i);
 }
 
 /** 选择器是否用了「随交互/校验实时变化」的易变状态属性——这类选择器录制态≠回放态,会命中 0 个致超时 */

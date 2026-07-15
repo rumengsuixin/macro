@@ -1047,6 +1047,21 @@
             display: inline;
         }
 
+        /* 🔦 定位图标:左键点步骤行可在页面上高亮对应元素的可点提示(悬停整行时提亮) */
+        .step-locate {
+            margin-left: 6px;
+            cursor: pointer;
+            opacity: .4;
+            font-size: 12px;
+            vertical-align: middle;
+            transition: opacity .12s;
+        }
+
+        .step-line.has-element:hover .step-locate,
+        .step-locate:hover {
+            opacity: 1;
+        }
+
         /* 翻页标记行 */
         .step-line.pagination-marked {
             background: #fff7ed;
