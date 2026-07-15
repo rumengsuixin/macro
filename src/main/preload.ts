@@ -44,6 +44,9 @@ const api = {
     readMacro: (filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null> =>
         ipcRenderer.invoke('read-macro', filePath),
 
+    /** 用系统文件管理器打开默认加载宏的目录(宏库面板「打开文件夹」) */
+    openMacrosDir: (): Promise<string> => ipcRenderer.invoke('open-macros-dir'),
+
     /** 运行宏,返回结构化结果 */
     runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),
 

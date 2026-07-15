@@ -124,6 +124,7 @@ interface ElectronAPI {
     persistMacro(macro: Macro, captures: MacroCaptures | null, filePath: string): Promise<string | null>;
     listMacros(): Promise<MacroSummary[]>;
     readMacro(filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
+    openMacrosDir(): Promise<string>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
@@ -1846,6 +1847,7 @@ const macroLibTitle = byId<HTMLElement>('macro-lib-title');
 const macroLibList = byId<HTMLDivElement>('macro-lib-list');
 const macroLibRefreshBtn = byId<HTMLButtonElement>('macro-lib-refresh');
 const macroLibRunSelectedBtn = byId<HTMLButtonElement>('macro-lib-run-selected');
+const macroLibOpenDirBtn = byId<HTMLButtonElement>('macro-lib-open-dir');
 
 macroLibTitle.addEventListener('click', () => {
     macroLibPanel.classList.toggle('collapsed');
@@ -2035,6 +2037,9 @@ async function runSelectedMacros(): Promise<void> {
 
 macroLibRefreshBtn.addEventListener('click', () => void renderMacroLibrary());
 macroLibRunSelectedBtn.addEventListener('click', () => void runSelectedMacros());
+macroLibOpenDirBtn.addEventListener('click', () => {
+    void window.electronAPI.openMacrosDir();
+});
 
 // ===== 浏览器登录态(回放复用)=====
 const browserPanel = byId<HTMLDivElement>('browser-panel');

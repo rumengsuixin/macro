@@ -228,6 +228,12 @@ function registerIpc(): void {
         return listMacros(macrosDir);
     });
 
+    // 用系统文件管理器打开默认加载宏的目录(宏库面板「打开文件夹」)
+    ipcMain.handle('open-macros-dir', async () => {
+        ensureDirs();
+        return shell.openPath(macrosDir);
+    });
+
     // 按路径读取宏(无对话框):语义同 load-macro 但不弹框,供宏库面板「打开」/「后台运行」取宏对象
     ipcMain.handle(
         'read-macro',
