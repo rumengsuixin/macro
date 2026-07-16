@@ -553,13 +553,20 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     const rewriteActive = requestRules.enabled && requestRules.rules.length > 0;
     const recordActive = requestRules.record?.enabled === true;
     const resendActive = requestRules.enabled && (requestRules.resends?.length ?? 0) > 0;
-    if (rewriteActive || recordActive || resendActive) {
+    const responseRuleActive =
+        requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
+    if (rewriteActive || recordActive || resendActive || responseRuleActive) {
         options.requestRules = requestRules;
         if (rewriteActive) {
             logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
         }
         if (resendActive) {
             logInfo(`回放将按 ${requestRules.resends!.length} 条重发规则在命中后延时重发请求。`);
+        }
+        if (responseRuleActive) {
+            logInfo(
+                `回放将按 ${requestRules.responseRules!.length} 条响应头规则在满足条件时改写响应头。`
+            );
         }
         if (recordActive) {
             logInfo(

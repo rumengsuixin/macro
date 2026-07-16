@@ -19,6 +19,11 @@
         "resends[].repeat": "可选,一次触发重发几次;缺省 1,上限 100。intervalMs 为相邻两次间隔(毫秒)",
         "resends[].dedupeMs": "可选去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则同规则 N 毫秒内只发一次(防高频触发放大)",
         "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。两端都在页面上下文里跑 fetch(带页面 cookie/登录态,DevTools Network 可见):录制端在录制 webview、回放端在当前活动页。跨域受 CSP/CORS 限制、需当前有活动页",
+        "responseRules[]": "「响应头条件改写」支路(受 enabled 总开关管,与 rules/resends 物理分开):命中 urlPattern 的响应,当其响应头满足 when 条件时,改写响应头。**条件读的是响应头、动作改的也是响应头**。录制端走 CDP Fetch 响应阶段、回放端走 Playwright route.fetch()+route.fulfill()",
+        "responseRules[].urlPattern": "CDP glob 匹配响应对应的请求 URL(同 rules;与 method 无关,GET 也能改)",
+        "responseRules[].when": "条件对象:这些响应头需全部相等才改(AND,头名大小写不敏感)。如 {\"xx\":\"1\"} 表示响应头 xx=1 时才改。缺省/不写=无条件总是改",
+        "responseRules[].setHeaders": "设置/覆盖的响应头(如 {\"cc\":\"1\"});同名头大小写不敏感覆盖,不产生重复键",
+        "responseRules[].removeHeaders": "删除的响应头名数组(大小写不敏感)",
         "record": "「只记录不修改」支路,独立开关(与 enabled 无关):record.enabled=true 即拦截所有请求(不限 method)+ 响应,写入 timelines/timeline-*.jsonl(每行一条 JSON,含 url/method/headers/请求body/状态码/耗时),供事后分析。不改写任何请求。录制端(CDP Network)与回放端(Playwright)共用本段。urlPattern 缺省/* 记录所有;includeBody=false 则不记请求 body",
         "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
     },
@@ -63,6 +68,20 @@
             "repeat": 3,
             "intervalMs": 2000,
             "dedupeMs": 5000
+        }
+    ],
+    "responseRules": [
+        {
+            "_注": "响应头 xx=1 时,把 cc 设为 1 并删掉 x-drop 头;不满足 xx=1 则原样放行",
+            "urlPattern": "*/api/data*",
+            "when": { "xx": "1" },
+            "setHeaders": { "cc": "1" },
+            "removeHeaders": ["x-drop"]
+        },
+        {
+            "_注": "无条件(不写 when):命中该 URL 的响应一律加上一个 CORS 头",
+            "urlPattern": "*/api/open*",
+            "setHeaders": { "access-control-allow-origin": "*" }
         }
     ]
 }

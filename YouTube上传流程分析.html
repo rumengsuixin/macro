@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube Studio 视频上传完整流程分析</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --ok: #1a9d5a;
+        --warn: #d98a00;
+        --danger: #d64545;
+        --ai: #7c5cff;
+        --bg: #f4f8f9;
+        --card: #ffffff;
+        --line: #d9e4e7;
+        --text: #16323a;
+        --muted: #5c7681;
+        --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        --body: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 0 0 80px; background: var(--bg); color: var(--text);
+        font-family: var(--body); line-height: 1.7; font-size: 15px;
+    }
+    header {
+        background: linear-gradient(135deg, var(--deep), #123f4b);
+        color: #fff; padding: 40px 6% 32px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 28px; }
+    header .sub { color: #a9d4d8; font-size: 14px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 6%; }
+    section { margin-top: 40px; }
+    h2 {
+        font-size: 21px; color: var(--deep); border-left: 5px solid var(--primary);
+        padding-left: 12px; margin: 0 0 16px;
+    }
+    h3 { font-size: 17px; color: var(--deep); margin: 24px 0 10px; }
+    .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 20px 24px; box-shadow: 0 2px 10px rgba(14,42,51,.05); margin-bottom: 18px;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef6f7; color: var(--deep); font-weight: 600; }
+    tr:nth-child(even) td { background: #fafcfc; }
+    code { font-family: var(--mono); background: #eef3f4; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; word-break: break-all; }
+    pre {
+        background: var(--deep); color: #d6ecef; font-family: var(--mono); font-size: 12.5px;
+        padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.55;
+    }
+    pre .k { color: #7fd4dc; } pre .s { color: #ffb38a; } pre .c { color: #6f8b93; }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 20px; color: #fff; font-weight: 600; }
+    .t-req { background: var(--primary); } .t-res { background: var(--ai); }
+    .t-cli { background: var(--muted); } .t-srv { background: var(--accent); }
+    .badge { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #eef3f4; color: var(--deep); }
+    .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .step-num {
+        width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex: 0 0 auto;
+    }
+    .callout { border-radius: 10px; padding: 14px 18px; margin: 14px 0; border-left: 4px solid; }
+    .c-key { background: #fff6f2; border-color: var(--accent); }
+    .c-ok { background: #eefaf2; border-color: var(--ok); }
+    .c-warn { background: #fff8e8; border-color: var(--warn); }
+    .c-info { background: #eef6fb; border-color: #2f8fd6; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 16px; font-size: 13.5px; }
+    .kv .lbl { color: var(--muted); }
+    .timeline { position: relative; margin: 10px 0 0 6px; padding-left: 22px; border-left: 2px dashed var(--line); }
+    .tl-item { position: relative; padding: 4px 0 14px; }
+    .tl-item::before {
+        content: ''; position: absolute; left: -29px; top: 8px; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--card); border: 3px solid var(--primary);
+    }
+    .tl-item.hi::before { border-color: var(--accent); }
+    .tl-item.aux::before { border-color: var(--line); width: 8px; height: 8px; left: -27px; }
+    .tl-t { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .arrow { text-align: center; color: var(--primary); font-size: 20px; margin: -6px 0; }
+    ul.tight { margin: 6px 0; padding-left: 22px; }
+    ul.tight li { margin: 3px 0; }
+    .foot { margin-top: 50px; text-align: center; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+    <div class="wrap" style="padding:0;">
+        <h1>🎬 YouTube Studio 视频上传完整流程分析</h1>
+        <div class="sub">基于真实抓包时间线逆向 · 供后续「复用资源 / 跳过重传」方案分析使用</div>
+    </div>
+</header>
+
+<div class="wrap">
+
+<!-- ========== 文档信息 ========== -->
+<section>
+    <h2>一、文档信息</h2>
+    <div class="card">
+        <div class="kv">
+            <div class="lbl">数据来源</div><div><code>timelines/timeline-replay-20260716-115136713.jsonl</code>（117 条记录）</div>
+            <div class="lbl">抓取方式</div><div>macro 回放端「只记录不修改」支路（<code>request-rules.json</code> 的 <code>record</code> 段），被动观测、不改写任何请求</div>
+            <div class="lbl">抓取时间</div><div>2026-07-16 03:52:57 ~ 03:54:03 UTC（总跨度约 <b>66 秒</b>）</div>
+            <div class="lbl">上传样本</div><div>文件名 <code>B.mp4</code>，大小 <b>28,056,038</b> 字节（≈ 26.75 MB）</div>
+            <div class="lbl">目标频道</div><div><code>UCkbDU_zD8CNUmrHrlQNqEbw</code>（角色 OWNER）</div>
+            <div class="lbl">客户端版本</div><div>YouTube Studio innertube <code>clientName=62</code>，<code>clientVersion=1.20260714.02.00</code></div>
+        </div>
+        <p class="muted">说明：时间线仅记录「请求行 + 响应行（状态/耗时/头/mime）」，<b>不记录响应体</b>；下文所有字段值均从真实记录逐字提取，长令牌按长度截断展示。</p>
+    </div>
+</section>
+
+<!-- ========== 结论速览 ========== -->
+<section>
+    <h2>二、核心结论速览（TL;DR）</h2>
+    <div class="callout c-key">
+        <b>上传分三个网络阶段：</b>
+        <ol class="tight">
+            <li><b>① 会话初始化（start）</b> → <code>POST upload.youtube.com/upload/studio</code>：前端报文件大小 + <code>frontendUploadId</code>，服务端<b>在响应头里返回 <code>scottyResourceId</code></b> 与上传 URL。</li>
+            <li><b>② 字节上传（upload+finalize）</b> → <code>POST upload.youtube.com/?upload_id=…</code>：把 28MB 视频字节灌入 scotty，<b>耗时 32 秒</b>（真正的时间开销）。</li>
+            <li><b>③ 创建视频（createvideo）</b> → <code>POST /youtubei/v1/upload/createvideo</code>：提交 <code>(frontendUploadId, scottyResourceId)</code> + 元数据，正式生成视频草稿。</li>
+        </ol>
+    </div>
+    <div class="callout c-ok">
+        <b>两个关键标识的产生与绑定（已逐字比对证实）：</b>
+        <ul class="tight">
+            <li><code>frontendUploadId</code> 由<b>前端</b>在 ① 生成；<code>scottyResourceId</code> 由<b>服务端</b>在同一个 ① 的响应里返回 —— <b>二者在同一次 start 里配对绑定</b>，并绑定了本次文件大小。</li>
+            <li><code>scottyResourceId</code> <b>早于字节上传</b>就已分配（它是「资源槽位」句柄，② 只是往槽位灌内容）。</li>
+            <li>createvideo 校验这一对是否<b>同源</b>：只改其中一个必然 <code>INVALID_ARGUMENT</code>，成对复用才有效。</li>
+        </ul>
+    </div>
+</section>
+
+<!-- ========== 时序总表 ========== -->
+<section>
+    <h2>三、完整请求时序</h2>
+    <div class="card">
+        <h3>3.1 主链路（关键三步）</h3>
+        <div class="timeline">
+            <div class="tl-item aux"><span class="tl-t">18.33s</span> · <span class="tag t-cli">前端</span> <code>GET blob:…/f810bfba-…</code> 读取本地选中的视频文件</div>
+            <div class="tl-item hi"><span class="tl-t">20.36s</span> · <span class="tag t-req">① start</span> <code>POST upload.youtube.com/upload/studio</code> <span class="muted">→ 853ms, 200</span></div>
+            <div class="tl-item hi"><span class="tl-t">21.21s</span> · <span class="tag t-req">② 字节上传</span> <code>POST upload.youtube.com/?upload_id=AKhXX7Lw…</code> <span class="muted">→ 32228ms, 200</span></div>
+            <div class="tl-item hi"><span class="tl-t">21.21s</span> · <span class="tag t-req">③ createvideo</span> <code>POST /youtubei/v1/upload/createvideo</code> <span class="muted">→ 2136ms, 200</span></div>
+        </div>
+        <p class="muted">注：② 与 ③ 几乎同时（t+21.21s）发起，但按同 id 配对的响应行核实：<b>③ createvideo 于 t+23.35s（2.1s）就成功返回 200，远早于 ② 字节上传 t+53.44s 的 finalize —— 早 30 秒</b>。二者<b>异步解耦</b>，createvideo 不等字节传完（详见 §4 阶段③ 的「关键时序」说明）。</p>
+
+        <h3>3.2 辅助请求（按端点归类，共 ~114 条）</h3>
+        <table>
+            <tr><th>次数</th><th>端点</th><th>作用</th></tr>
+            <tr><td>28</td><td><code>/youtubei/v1/upload/feedback</code></td><td>上传/转码<b>进度轮询</b>（continuation token 内编码了 frontendUploadId，见 §5.3）</td></tr>
+            <tr><td>5</td><td><code>/youtubei/v1/creator/get_creator_videos</code></td><td>刷新视频列表</td></tr>
+            <tr><td>4</td><td><code>play.google.com/log</code></td><td>打点日志</td></tr>
+            <tr><td>2</td><td><code>/get_creator_social_suggestions</code></td><td>社交建议</td></tr>
+            <tr><td>2</td><td><code>/feature_eligibility/check_feature_rate_limit</code></td><td>功能限流检查</td></tr>
+            <tr><td>1 各</td><td><code>log_event</code> / <code>list_creator_info_cards</code> / <code>get_creator_endscreens</code> / <code>get_video_translations</code> / <code>list_creator_playlists</code></td><td>页面加载/编辑器初始化的常规拉取</td></tr>
+            <tr><td>7</td><td>缩略图 <code>i9.ytimg.com/vi/…</code>、favicon 等</td><td>静态资源</td></tr>
+        </table>
+    </div>
+</section>
+
+<!-- ========== 三阶段详解 ========== -->
+<section>
+    <h2>四、上传主链路三阶段详解</h2>
+
+    <!-- 阶段① -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">1</div><h3 style="margin:0;">会话初始化 —— <code>POST /upload/studio</code>（start）</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">完整 URL</div><div><code>https://upload.youtube.com/upload/studio?authuser=0</code></div>
+            <div class="lbl">响应</div><div><span class="badge">200</span> <span class="badge">853 ms</span> <span class="badge">text/plain</span></div>
+        </div>
+        <p><span class="tag t-req">请求头</span>（声明「要上传一个多大的什么文件」）</p>
+<pre><span class="k">x-goog-upload-protocol</span>: resumable
+<span class="k">x-goog-upload-command</span>: start
+<span class="k">x-goog-upload-file-name</span>: B.mp4
+<span class="k">x-goog-upload-header-content-length</span>: 28056038   <span class="c"># 文件字节数,此刻即绑定</span>
+<span class="k">content-type</span>: application/x-www-form-urlencoded;charset=UTF-8</pre>
+        <p><span class="tag t-req">请求体</span>（仅一个前端生成的标识）</p>
+<pre>{ <span class="k">"frontendUploadId"</span>: <span class="s">"innertube_studio:5E492A31-D8A5-4916-A0AE-08EF7D78BA06:0"</span> }</pre>
+        <p><span class="tag t-res">响应头</span>（服务端在此回发资源句柄与上传地址）</p>
+<pre><span class="k">x-goog-upload-status</span>: active
+<span class="k">x-goog-upload-header-scotty-resource-id</span>: ACKujmzGcj0T+LCcOee5Kg8RNsIPoSUrtacLk+Jm32QWLsEPKU6YfPHjc5g…   <span class="c"># ★ scottyResourceId(共376字符),在这里产生</span>
+<span class="k">x-goog-upload-url</span>: https://upload.youtube.com/?authuser=0&amp;upload_id=AKhXX7LwJmfQSo3G…   <span class="c"># ② 的字节上传地址</span>
+<span class="k">x-goog-upload-control-url</span>: https://upload.youtube.com/upload/studio?authuser=0&amp;upload_id=AKhXX7Lw…
+<span class="k">x-goog-upload-chunk-granularity</span>: 262144   <span class="c"># 分片粒度 256KB</span></pre>
+        <div class="callout c-key" style="margin-bottom:0;">
+            <b>本阶段是整条链路的「配对源头」：</b> 请求带进 <code>frontendUploadId</code>（前端）+ 文件大小；响应带出 <code>scottyResourceId</code>（服务端）+ <code>upload_id</code>。这一收一发把两个标识绑成一对，并锚定了文件大小。
+        </div>
+    </div>
+
+    <!-- 阶段② -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">2</div><h3 style="margin:0;">字节上传 —— <code>POST upload.youtube.com/?upload_id=…</code>（upload + finalize）</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">URL</div><div><code>https://upload.youtube.com/?authuser=0&upload_id=AKhXX7Lw…&upload_protocol=resumable&origin=…</code></div>
+            <div class="lbl">响应</div><div><span class="badge">200</span> <span class="badge" style="background:#ffe1d6;color:#a33;">32,228 ms ← 真正的耗时</span> <span class="badge">text/html</span></div>
+        </div>
+        <p><span class="tag t-req">请求头</span></p>
+<pre><span class="k">x-goog-upload-command</span>: upload, finalize   <span class="c"># 一次性上传并收尾(小文件模式)</span>
+<span class="k">x-goog-upload-offset</span>: 0
+<span class="k">x-goog-upload-file-name</span>: B.mp4</pre>
+        <p><span class="tag t-res">响应头</span>：<code>x-goog-upload-status: final</code>（内容已完整落库到 scotty）</p>
+        <div class="callout c-warn" style="margin-bottom:0;">
+            请求头 <code>Content-Length: 28,056,038</code> 已声明完整 28MB；时间线 <code>reqBody</code> 为空是<b>回放记录器按设计不抓二进制体</b>（Playwright <code>request.postData()</code> 对二进制返回 null），<b>非未上传</b> —— 耗时 32s、响应头 <code>x-goog-upload-status: final</code> 均证明字节确实完整落库。<b>这 32 秒就是「复用资源、跳过重传」想省掉的部分。</b>本次抓包 start 请求头<b>不含内容 hash</b>，② 是完整上传（无秒传迹象）。
+        </div>
+    </div>
+
+    <!-- 阶段③ -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">3</div><h3 style="margin:0;">创建视频 —— <code>POST /youtubei/v1/upload/createvideo</code></h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">URL</div><div><code>https://studio.youtube.com/youtubei/v1/upload/createvideo?alt=json</code></div>
+            <div class="lbl">响应</div><div><span class="badge">200</span> <span class="badge">2,136 ms</span> <span class="badge">application/json</span></div>
+            <div class="lbl">请求体大小</div><div>6,017 字节（纯 JSON）</div>
+        </div>
+        <p><span class="tag t-req">请求体结构</span>（长令牌按长度截断）</p>
+<pre>{
+  <span class="k">"channelId"</span>: <span class="s">"UCkbDU_zD8CNUmrHrlQNqEbw"</span>,
+  <span class="k">"resourceId"</span>: { <span class="k">"scottyResourceId"</span>: { <span class="k">"id"</span>: <span class="s">"ACKujmzGcj0T+LCcOee5…"</span> } },   <span class="c"># ← 来自 ① 响应头</span>
+  <span class="k">"frontendUploadId"</span>: <span class="s">"innertube_studio:5E492A31-…:0"</span>,                 <span class="c"># ← 来自 ① 请求体</span>
+  <span class="k">"initialMetadata"</span>: {
+    <span class="k">"title"</span>: { <span class="k">"newTitle"</span>: <span class="s">"B"</span> },
+    <span class="k">"privacy"</span>: { <span class="k">"newPrivacy"</span>: <span class="s">"PRIVATE"</span> },
+    <span class="k">"draftState"</span>: { <span class="k">"isDraft"</span>: true }
+  },
+  <span class="k">"contentLevelProtection"</span>: { <span class="k">"enableRequiresContentLevelProtection"</span>: false },
+  <span class="k">"context"</span>: {
+    <span class="k">"client"</span>: { <span class="k">"clientName"</span>: 62, <span class="k">"clientVersion"</span>: <span class="s">"1.20260714.02.00"</span>, <span class="k">"hl"</span>: <span class="s">"zh-CN"</span>, <span class="k">"gl"</span>: <span class="s">"SG"</span>, … },
+    <span class="k">"request"</span>: {
+      <span class="k">"eats"</span>: <span class="s">"Ac5phpDDkGnI…(128)"</span>,
+      <span class="k">"attestationResponseData"</span>: { <span class="k">"challenge"</span>: <span class="s">"a=6&a2=10&…(130)"</span>, <span class="k">"webResponse"</span>: <span class="s">"$AZ45nvpR…(3917)"</span> },  <span class="c"># BotGuard 反滥用证明</span>
+      <span class="k">"sessionInfo"</span>: { <span class="k">"token"</span>: <span class="s">"Ac9D6cF6…(164)"</span> },
+      <span class="k">"consistencyTokenJars"</span>: [ { <span class="k">"encryptedTokenJarContents"</span>: <span class="s">"AFeheW0x…(99)"</span>, <span class="k">"expirationSeconds"</span>: <span class="s">"600"</span> } ]
+    },
+    <span class="k">"user"</span>: { <span class="k">"delegationContext"</span>: { <span class="k">"externalChannelId"</span>: <span class="s">"UCkbDU_zD8CNUmrHrlQNqEbw"</span>, … } },
+    <span class="k">"clickTracking"</span>: { <span class="k">"visualElement"</span>: { <span class="k">"veType"</span>: 31402 } },
+    <span class="k">"clientScreenNonce"</span>: <span class="s">"zshUMCb5Q_Qxro42"</span>
+  },
+  <span class="k">"presumedShort"</span>: false
+}</pre>
+        <div class="callout c-key">
+            <b>关键时序：createvideo 不等字节传完。</b> 按同 id 配对核实：③ 于 <b>t+23.35s（2.1s）</b>成功返回 200，远早于 ② 字节上传 <b>t+53.44s</b> 的 finalize —— <b>早 30 秒</b>。说明 createvideo <b>当场不校验字节是否就位</b>，只凭 <code>scottyResourceId</code> 句柄 + 配对 + 会话令牌即登记视频草稿（Studio 立即出现「处理中」条目）；字节由 scotty 异步收、后端异步转码（28 次 feedback 轮询即在追踪此进度）。<br>
+            <b>⟹ createvideo 返回 200 ≠ 视频最终成功。</b> 复用旧资源对时，若后端去取的 blob 已过期/被清理，会「草稿建成、但转码失败、视频变错误态」。验证复用是否<b>真成</b>，要看视频<b>最终转码/可播放状态</b>，不能只看 createvideo 的 200。
+        </div>
+        <div class="callout c-info" style="margin-bottom:0;">
+            <b><code>context.request</code> 里是一组会话级安全/风控令牌</b>：<code>attestationResponseData</code>（BotGuard，<code>webResponse</code> 长 3917）、<code>sessionInfo.token</code>、<code>consistencyTokenJars</code>（TTL 600s）、<code>eats</code>。这些每次会话新算、有时效。<b>实测：成对改 (frontendUploadId, scottyResourceId) 请求仍有效 → 说明这些令牌<u>未对 body 做整体签名锁定</u></b>，改写这条路可行。
+        </div>
+    </div>
+</section>
+
+<!-- ========== 两个核心标识 ========== -->
+<section>
+    <h2>五、两个核心标识:产生、归属、绑定</h2>
+    <div class="card">
+        <table>
+            <tr><th style="width:150px;">标识</th><th><code>frontendUploadId</code></th><th><code>scottyResourceId</code></th></tr>
+            <tr><td>示例值</td><td><code>innertube_studio:5E492A31-D8A5-4916-A0AE-08EF7D78BA06:0</code>（55 字符）</td><td><code>ACKujmzGcj0T+LCcOee5…</code>（376 字符）</td></tr>
+            <tr><td>谁生成</td><td><span class="tag t-cli">前端</span> 客户端 UUID（格式 <code>innertube_studio:&lt;UUID&gt;:0</code>）</td><td><span class="tag t-srv">服务端 scotty</span> 资源槽位句柄</td></tr>
+            <tr><td>产生时刻</td><td>① start <b>请求发出</b>时（t=20.36s）</td><td>① start <b>响应返回</b>时（t=20.36s + 853ms）</td></tr>
+            <tr><td>出现位置</td><td>① 请求体 → ③ createvideo 请求体</td><td>① 响应头 <code>x-goog-upload-header-scotty-resource-id</code> → ③ createvideo 请求体</td></tr>
+            <tr><td>角色</td><td>①上传会话标识 ②<b>幂等键</b>（防重复提交）③scotty 资源的<b>配对键</b></td><td>指向「已上传字节」的资源句柄，绑定文件大小</td></tr>
+        </table>
+
+        <h3>5.1 绑定关系（逐字比对证据）</h3>
+        <div class="callout c-ok">
+            对 ① 与 ③ 逐字比对：<br>
+            · <code>frontendUploadId</code>：① 请求体值 <b>===</b> ③ 请求体值 → <b>true</b><br>
+            · <code>scottyResourceId</code>：① 响应头值（376）<b>===</b> ③ 请求体 <code>resourceId.scottyResourceId.id</code>（376）→ <b>true</b><br>
+            结论：<b>一次 start 产生一对</b>，原封不动带入 createvideo；createvideo 校验二者是否同源。
+        </div>
+
+        <h3>5.2 <code>frontendUploadId</code> 的「双重身份」（关键约束）</h3>
+        <div class="callout c-warn">
+            它<b>既是配对键</b>（必须与 scottyResourceId 同源）<b>又是幂等键</b>（两次 createvideo 用相同值会被判「同一次上传的重试」而去重成一个视频）。<br>
+            ⟹ 想创建<b>多个</b>视频就需要<b>多个不同</b>的 frontendUploadId，而每个又必须绑一个同源 scottyResourceId ⟹ <b>需要「多对」不同的 (fuid, scotty)，而非一对复用多次</b>。
+        </div>
+
+        <h3>5.3 feedback 轮询与标识的关系</h3>
+        <p class="muted">28 次 <code>upload/feedback</code> 的请求体带 <code>continuations: ["mpTPtAK…"]</code>，其 base64 解出含 <code>innertube_studio</code> 字样 —— 即 continuation token 内编码了本次 <code>frontendUploadId</code>，前端据此轮询「这一次上传」的处理/转码进度。</p>
+    </div>
+</section>
+
+<!-- ========== 协议头速查 ========== -->
+<section>
+    <h2>六、Resumable Upload 协议头速查（<code>X-Goog-Upload-*</code>）</h2>
+    <div class="card">
+        <table>
+            <tr><th>头字段</th><th>方向</th><th>含义</th></tr>
+            <tr><td><code>x-goog-upload-protocol: resumable</code></td><td>请求</td><td>使用可续传协议</td></tr>
+            <tr><td><code>x-goog-upload-command: start</code></td><td>请求</td><td>① 发起会话、协商上传地址</td></tr>
+            <tr><td><code>x-goog-upload-command: upload, finalize</code></td><td>请求</td><td>② 上传字节并收尾（一次性）</td></tr>
+            <tr><td><code>x-goog-upload-header-content-length</code></td><td>请求</td><td>声明文件字节数（start 时即绑定）</td></tr>
+            <tr><td><code>x-goog-upload-offset</code></td><td>请求</td><td>本次字节的起始偏移（续传用）</td></tr>
+            <tr><td><code>x-goog-upload-header-scotty-resource-id</code></td><td><b>响应</b></td><td><b>服务端分配的资源句柄（= scottyResourceId）</b></td></tr>
+            <tr><td><code>x-goog-upload-url</code></td><td>响应</td><td>② 字节上传的目标地址（含 upload_id）</td></tr>
+            <tr><td><code>x-goog-upload-status: active / final</code></td><td>响应</td><td>会话状态：active=待上传 / final=已落库</td></tr>
+            <tr><td><code>x-goog-upload-chunk-granularity</code></td><td>响应</td><td>分片粒度（本次 262144 = 256KB）</td></tr>
+        </table>
+    </div>
+</section>
+
+<!-- ========== 复用分析 ========== -->
+<section>
+    <h2>七、对「复用资源 / 跳过重传」的分析结论</h2>
+    <div class="card">
+        <h3>7.1 已证实（可依赖）</h3>
+        <ul class="tight">
+            <li>✅ <b>body 可改</b>：成对改 (fuid, scotty) 请求仍有效 → createvideo 的安全令牌未对 body 整体签名。</li>
+            <li>✅ <b>资源对可跨会话被 createvideo 接受</b>：旧的 (fuid, scotty) 在新会话 createvideo 里返回 200。<b>但注意：createvideo 200 只代表"草稿登记成功"，不代表字节/转码成功</b>（见 §4 阶段③「关键时序」）——最终成败取决于后端异步取 blob 时它是否还在。</li>
+            <li>✅ <b>硬约束</b>：<code>frontendUploadId</code> 与 <code>scottyResourceId</code> 必须来自<b>同一次 start</b>（同源配对），只改其一必 <code>400 INVALID_ARGUMENT</code>。</li>
+        </ul>
+        <h3>7.2 待验证（决定能否「批量创建多个」）</h3>
+        <ul class="tight">
+            <li>❓ <b>同一对能否创建多个</b>：用同一对 (fuid, scotty) 连续 createvideo 两次 —— 出 1 个（被幂等去重）还是 2 个？决定「一对复用多次」是否可行。</li>
+            <li>❓ <b>一份内容能否拿多对</b>：多次 start 同一内容能否触发 scotty「秒传」（返回 final 而不重传字节）？本次抓包无 hash、② 完整传了 32s，倾向「不能秒传」，需专门实验。</li>
+            <li>❓ <b>blob 时效（TTL）</b>：resumable 上传的 blob/upload_id 存活多久？超时后旧对失效。</li>
+        </ul>
+        <h3>7.3 三种可能的工作流</h3>
+        <table>
+            <tr><th>模式</th><th>描述</th><th>可行性 / 需要</th></tr>
+            <tr><td><b>A</b> 反复发同一视频</td><td>多个视频条目、内容相同</td><td>取决于 7.2 的「同一对多用」与「秒传」结论</td></tr>
+            <tr><td><b>B</b> 批量消费资源对</td><td>手上攒了多对 (fuid,scotty)，各建一个视频</td><td>需给 <code>request-rules</code> 加「<b>成对轮换</b>」能力（每次取下一对成对 set）—— 需改代码</td></tr>
+            <tr><td><b>C</b> 单个复用</td><td>每次上传占位/触发后，换成某固定旧资源对</td><td>现有<b>静态 set 即可</b>（把 frontendUploadId + resourceId 两个字段都写进 set），无需改代码</td></tr>
+        </table>
+        <div class="callout c-info" style="margin-bottom:0;">
+            <b>下一步建议：</b>先做 7.2 的「同一对连建两次」实验，确认幂等去重行为；再据目标工作流（A/B/C）确定是否需要「成对轮换」的引擎改造。
+        </div>
+    </div>
+</section>
+
+<div class="foot">
+    本文档由抓包时间线逆向整理，所有字段值均取自真实记录 · 长令牌为一次性/时效令牌，仅示前缀 · 生成于 2026-07-16
+</div>
+
+</div>
+</body>
+</html>

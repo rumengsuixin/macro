@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import type {
     RequestRule,
     ResendRule,
+    ResponseHeaderRule,
     RequestRulesConfig,
     TimelineRecordConfig,
 } from '../core/macro-types';
@@ -41,6 +42,17 @@ function templateConfig(): RequestRulesConfig {
                 bodyType: 'json',
                 set: { retry: true },
                 repeat: 1,
+            },
+        ],
+        // responseRules:「响应头条件改写」支路(受 enabled 总开关管)。命中 urlPattern 的响应,
+        // 当其响应头满足 when 条件(所有键相等、大小写不敏感;缺省则无条件)时,按 setHeaders 设置/
+        // 覆盖、removeHeaders 删除响应头。示例=响应头 xx=1 时把 cc 设为 1 并删掉 x-drop。enabled=false 不触发。
+        responseRules: [
+            {
+                urlPattern: '*/api/example*',
+                when: { xx: '1' },
+                setHeaders: { cc: '1' },
+                removeHeaders: [],
             },
         ],
         // record:「只记录不修改」支路(独立于 enabled)。改成 enabled:true 即拦截并记录所有请求
@@ -120,6 +132,44 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
     return rule;
 }
 
+/** 把原始对象归一化成 string→string 映射(仅保留值为 string 的键);空/非对象返回 undefined */
+function normalizeStringMap(raw: unknown): Record<string, string> | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return undefined;
+    }
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v === 'string') {
+            out[k] = v;
+        }
+    }
+    return Object.keys(out).length ? out : undefined;
+}
+
+/** 校验并归一化单条响应头改写规则;非法返回 null(过滤掉) */
+function normalizeResponseHeaderRule(raw: unknown): ResponseHeaderRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    const rule: ResponseHeaderRule = { urlPattern: r.urlPattern };
+    const when = normalizeStringMap(r.when);
+    if (when) {
+        rule.when = when;
+    }
+    const setHeaders = normalizeStringMap(r.setHeaders);
+    if (setHeaders) {
+        rule.setHeaders = setHeaders;
+    }
+    if (Array.isArray(r.removeHeaders)) {
+        rule.removeHeaders = r.removeHeaders.filter((x): x is string => typeof x === 'string');
+    }
+    return rule;
+}
+
 /** 校验并归一化 record 段(config 级,非 per-rule);非对象/缺省返回 undefined */
 function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     if (!raw || typeof raw !== 'object') {
@@ -163,10 +213,16 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
         const resends = Array.isArray(raw.resends)
             ? raw.resends.map(normalizeResendRule).filter((x): x is ResendRule => x !== null)
             : [];
+        const responseRules = Array.isArray(raw.responseRules)
+            ? raw.responseRules
+                  .map(normalizeResponseHeaderRule)
+                  .filter((x): x is ResponseHeaderRule => x !== null)
+            : [];
         return {
             enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
             rules,
             ...(resends.length ? { resends } : {}),
+            ...(responseRules.length ? { responseRules } : {}),
             ...(record ? { record } : {}),
         };
     } catch {

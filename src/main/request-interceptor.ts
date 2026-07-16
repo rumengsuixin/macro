@@ -16,6 +16,7 @@ import {
     matchRule,
     decideBodyType,
     rewritePostBody,
+    rewriteResponseHeaderEntries,
     headerValue,
     isResendOrigin,
     resolveResendTarget,
@@ -81,6 +82,10 @@ export class RequestInterceptor {
     /** 在途请求(按 CDP requestId 关联请求行与响应行) */
     private readonly pending = new Map<string, PendingRecord>();
 
+    // --- 「响应头条件改写」支路(受 enabled 总开关管,走 CDP Fetch 响应阶段暂停) ---
+    /** 是否启用响应头改写(enabled 且有响应头规则) */
+    private responseRewriteActive = false;
+
     // --- 「重发型」支路(受 enabled 总开关管,与改写共用同一 Fetch 暂停便车观察) ---
     /** 是否启用重发(enabled 且有重发规则) */
     private resendActive = false;
@@ -119,6 +124,7 @@ export class RequestInterceptor {
         wc.debugger.on('detach', (_event, reason) => {
             this.intercepting = false;
             this.recording = false;
+            this.responseRewriteActive = false;
             this.resendActive = false;
             this.clearResendTimers();
             logError(`请求改写器:调试器已分离(${reason});如需继续改写请关闭开发者工具并重开页面。`);
@@ -156,6 +162,7 @@ export class RequestInterceptor {
         const wc = this.wc;
         this.wc = null;
         this.intercepting = false;
+        this.responseRewriteActive = false;
         // 重发支路收尾:关标志、清未触发的定时器
         this.resendActive = false;
         this.clearResendTimers();
@@ -193,12 +200,15 @@ export class RequestInterceptor {
         }
         const rewriteActive = this.config.enabled && this.config.rules.length > 0;
         const resendActive = this.config.enabled && (this.config.resends?.length ?? 0) > 0;
+        const responseRewriteActive =
+            this.config.enabled && (this.config.responseRules?.length ?? 0) > 0;
         // 重发由开转关:清掉未触发的定时器(热关即时停)
         if (this.resendActive && !resendActive) {
             this.clearResendTimers();
         }
         this.resendActive = resendActive;
-        const active = rewriteActive || resendActive;
+        this.responseRewriteActive = responseRewriteActive;
+        const active = rewriteActive || resendActive || responseRewriteActive;
         if (!active) {
             if (this.intercepting) {
                 await wc.debugger.sendCommand('Fetch.disable').catch(() => undefined);
@@ -208,15 +218,28 @@ export class RequestInterceptor {
             this.enabledKey = '';
             return;
         }
-        // 改写规则 URL ∪ 重发规则 URL:都要暂停(重发的暂停只为观察+读 body,随后原样放行)
+        // 请求阶段暂停(改写 body / 观察重发)URL ∪ 响应阶段暂停(改响应头)URL。
+        // 改写/重发在 Request 阶段暂停(读/改 body 后放行);响应头改写在 Response 阶段暂停(改头后放行)。
         const resends = this.config.resends ?? [];
+        const responseRules = this.config.responseRules ?? [];
         const patterns = [
-            ...(rewriteActive ? this.config.rules : []),
-            ...(resendActive ? resends : []),
-        ].map((r) => ({ urlPattern: r.urlPattern, requestStage: 'Request' as const }));
-        const key = JSON.stringify(patterns.map((p) => p.urlPattern).sort());
+            ...(rewriteActive ? this.config.rules : []).map((r) => ({
+                urlPattern: r.urlPattern,
+                requestStage: 'Request' as const,
+            })),
+            ...(resendActive ? resends : []).map((r) => ({
+                urlPattern: r.urlPattern,
+                requestStage: 'Request' as const,
+            })),
+            ...(responseRewriteActive ? responseRules : []).map((r) => ({
+                urlPattern: r.urlPattern,
+                requestStage: 'Response' as const,
+            })),
+        ];
+        // 签名纳入 requestStage:同一 URL 可能既要 Request 又要 Response 暂停,只按 urlPattern 去重会误判
+        const key = JSON.stringify(patterns.map((p) => `${p.urlPattern}@${p.requestStage}`).sort());
         if (this.intercepting && key === this.enabledKey) {
-            return; // URL 集合未变,无需重新下发
+            return; // pattern 集合未变,无需重新下发
         }
         try {
             await wc.debugger.sendCommand('Fetch.enable', { patterns });
@@ -224,8 +247,9 @@ export class RequestInterceptor {
             this.enabledKey = key;
             logInfo(
                 `请求拦截器:已启用,改写 ${rewriteActive ? this.config.rules.length : 0} 条 / ` +
-                    `重发 ${resendActive ? resends.length : 0} 条,匹配 URL:` +
-                    patterns.map((p) => p.urlPattern).join(' | ')
+                    `重发 ${resendActive ? resends.length : 0} 条 / ` +
+                    `响应头改写 ${responseRewriteActive ? responseRules.length : 0} 条,匹配 URL:` +
+                    patterns.map((p) => `${p.urlPattern}(${p.requestStage})`).join(' | ')
             );
         } catch (err) {
             logError(`请求拦截器:启用 Fetch 失败:${(err as Error).message}`);
@@ -370,10 +394,18 @@ export class RequestInterceptor {
         });
     }
 
-    /** 处理一个被暂停的请求:命中规则的 POST 改写其 body,其余原样放行 */
+    /**
+     * 处理一个被暂停的请求:
+     * - 响应阶段(带 responseStatusCode/responseHeaders):命中响应头规则则改响应头,continueResponse 放行;
+     * - 请求阶段:命中规则的 POST 改写其 body,命中重发规则则调度重发,其余原样放行(continueRequest)。
+     */
     private async onRequestPaused(params: {
         requestId: string;
         request: PausedRequest;
+        /** 响应阶段暂停(requestStage:'Response')时携带,据此判定阶段并改响应头 */
+        responseStatusCode?: number;
+        responseErrorReason?: string;
+        responseHeaders?: Array<{ name: string; value: string }>;
     }): Promise<void> {
         const wc = this.wc;
         if (!wc || !wc.debugger.isAttached()) {
@@ -381,6 +413,12 @@ export class RequestInterceptor {
         }
         const { requestId, request } = params;
         try {
+            // 响应阶段暂停:CDP 带 responseStatusCode/responseHeaders。改响应头必须走 continueResponse,
+            // 绝不能用 continueRequest(响应阶段用 continueRequest 会 CDP 报错、请求卡死)。
+            if (params.responseStatusCode !== undefined || params.responseHeaders !== undefined) {
+                await this.handleResponseStage(requestId, request, params);
+                return;
+            }
             const isPost = request.method.toUpperCase() === 'POST';
             // 防递归:我们自己发的重发请求原样放行,不改写、不再触发重发
             if (isPost && isResendOrigin(request.headers)) {
@@ -415,6 +453,55 @@ export class RequestInterceptor {
             logError(`请求改写器:处理请求出错:${(err as Error).message}`);
             try {
                 await wc.debugger.sendCommand('Fetch.continueRequest', { requestId });
+            } catch {
+                /* 请求可能已失效,忽略 */
+            }
+        }
+    }
+
+    /**
+     * 处理响应阶段被暂停的请求:命中响应头规则且满足 when 条件则改响应头,
+     * 用 Fetch.continueResponse 放行(回传**完整** responseHeaders 即替换整份响应头;body 仍从网络流式加载);
+     * 未命中 / 条件不满足 / 无动作则原样 continueResponse。响应阶段绝不能用 continueRequest。
+     */
+    private async handleResponseStage(
+        requestId: string,
+        request: PausedRequest,
+        params: {
+            responseStatusCode?: number;
+            responseHeaders?: Array<{ name: string; value: string }>;
+        }
+    ): Promise<void> {
+        const wc = this.wc;
+        if (!wc || !wc.debugger.isAttached()) {
+            return;
+        }
+        try {
+            const rule = matchRule(this.config.responseRules ?? [], request.url);
+            if (rule) {
+                const entries = params.responseHeaders ?? [];
+                const newEntries = rewriteResponseHeaderEntries(entries, rule);
+                if (newEntries !== null) {
+                    await wc.debugger.sendCommand('Fetch.continueResponse', {
+                        requestId,
+                        ...(params.responseStatusCode !== undefined
+                            ? { responseCode: params.responseStatusCode }
+                            : {}),
+                        responseHeaders: newEntries,
+                    });
+                    logInfo(
+                        `请求改写器:已改写响应头 [${request.url}];` +
+                            `set=${Object.keys(rule.setHeaders ?? {}).join(',') || '无'};` +
+                            `remove=${(rule.removeHeaders ?? []).join(',') || '无'}`
+                    );
+                    return;
+                }
+            }
+            await wc.debugger.sendCommand('Fetch.continueResponse', { requestId });
+        } catch (err) {
+            logError(`请求改写器:处理响应头出错:${(err as Error).message}`);
+            try {
+                await wc.debugger.sendCommand('Fetch.continueResponse', { requestId });
             } catch {
                 /* 请求可能已失效,忽略 */
             }

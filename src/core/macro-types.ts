@@ -367,6 +367,25 @@ export interface ResendRule {
 }
 
 /**
+ * 「响应头条件改写」规则:命中 urlPattern 的响应,当其响应头满足 when 条件时,
+ * 按 setHeaders / removeHeaders 改写响应头。与改写 rules[]、重发 resends[] 物理分开存
+ * responseRules[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
+ * 总开关统管(enabled=true 且有 responseRules 才生效)。
+ * 与请求侧改写机制不同:必须在**响应返回后**介入——录制端走 CDP Fetch 响应阶段(continueResponse)、
+ * 回放端走 Playwright route.fetch()+route.fulfill()。
+ */
+export interface ResponseHeaderRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 条件:这些响应头需**全部相等**才改(AND,头名大小写不敏感);缺省=无条件总是改 */
+    when?: Record<string, string>;
+    /** 设置/覆盖的响应头(如 cc=1);同名头大小写不敏感覆盖,不产生重复键 */
+    setHeaders?: Record<string, string>;
+    /** 删除的响应头名(大小写不敏感) */
+    removeHeaders?: string[];
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -388,6 +407,8 @@ export interface RequestRulesConfig {
     rules: RequestRule[];
     /** 重发规则列表(命中后延时改参重发一个新请求;受 enabled 总开关管);缺省视为无重发 */
     resends?: ResendRule[];
+    /** 响应头条件改写规则列表(命中且满足 when 条件则改响应头;受 enabled 总开关管);缺省视为无 */
+    responseRules?: ResponseHeaderRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
 }

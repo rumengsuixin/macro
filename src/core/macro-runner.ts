@@ -24,6 +24,7 @@ import type {
     ElementFingerprint,
     RequestRule,
     ResendRule,
+    ResponseHeaderRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -32,6 +33,7 @@ import {
     matchRule,
     decideBodyType,
     rewritePostBody,
+    rewriteResponseHeaderRecord,
     headerValue,
     isResendOrigin,
     resolveResendTarget,
@@ -63,7 +65,9 @@ export class MacroRunner {
     private rewriteHandler: ((route: Route, request: Request) => Promise<void>) | null = null;
     /** 当前生效的改写规则(handler 实时读,支持规则热更新) */
     private rewriteRules: RequestRule[] = [];
-    /** 改写 route 是否已注册(仅 enabled 且有规则时注册 → 未启用零 route 开销) */
+    /** 当前生效的响应头改写规则(handler 实时读;命中则 route.fetch()+route.fulfill() 改响应头) */
+    private responseHeaderRules: ResponseHeaderRule[] = [];
+    /** 改写 route 是否已注册(仅 enabled 且有改写/响应头规则时注册 → 未启用零 route 开销) */
     private rewriteInstalled = false;
     /** 记录器;record.enabled 时创建(非 null 即正在记录),关闭时置 null。监听常挂,靠它决定是否写 */
     private recorder: TimelineRecorder | null = null;
@@ -449,6 +453,13 @@ export class MacroRunner {
                     await route.continue();
                     return;
                 }
+                // 响应头改写规则(与 method 无关,GET 也可能要改):命中则改走 fetch()+fulfill()
+                const respRule = matchRule(this.responseHeaderRules, request.url());
+                if (respRule) {
+                    await this.handleResponseHeaderRoute(route, request, respRule);
+                    return;
+                }
+                // 以下为请求体改写(仅 POST):route.continue({postData}) 放行,不触碰响应
                 if (request.method().toUpperCase() !== 'POST') {
                     await route.continue();
                     return;
@@ -620,14 +631,20 @@ export class MacroRunner {
             return;
         }
         this.rewriteRules = cfg.rules ?? [];
-        const want = cfg.enabled && this.rewriteRules.length > 0;
+        this.responseHeaderRules = cfg.responseRules ?? [];
+        // 改写 body 规则或响应头规则任一非空即需注册 route(只配响应头规则时也要拦)
+        const want =
+            cfg.enabled && (this.rewriteRules.length > 0 || this.responseHeaderRules.length > 0);
         try {
             if (want && !this.rewriteInstalled) {
                 await ctx.route('**/*', this.rewriteHandler);
                 this.rewriteInstalled = true;
                 logInfo(
-                    `回放请求改写器:已启用,共 ${this.rewriteRules.length} 条规则,` +
-                        `匹配 URL:${this.rewriteRules.map((r) => r.urlPattern).join(' | ')}`
+                    `回放请求改写器:已启用,改写 ${this.rewriteRules.length} 条 / ` +
+                        `响应头改写 ${this.responseHeaderRules.length} 条,匹配 URL:` +
+                        [...this.rewriteRules, ...this.responseHeaderRules]
+                            .map((r) => r.urlPattern)
+                            .join(' | ')
                 );
             } else if (!want && this.rewriteInstalled) {
                 await ctx.unroute('**/*', this.rewriteHandler);
@@ -636,6 +653,61 @@ export class MacroRunner {
             }
         } catch (err) {
             logError(`回放请求改写器:切换 route 失败:${(err as Error).message}`);
+        }
+    }
+
+    /**
+     * 回放端响应头改写:实际发出请求(route.fetch;若同一 POST 也命中 body 改写规则则带上改后的 body),
+     * 拿到真实响应后按规则改响应头,route.fulfill 回填。一旦 fetch 就已消费该请求,故后续统一 fulfill;
+     * 仅 fetch 前出错才回退 route.continue(保持「每条必放行」铁律)。
+     */
+    private async handleResponseHeaderRoute(
+        route: Route,
+        request: Request,
+        respRule: ResponseHeaderRule
+    ): Promise<void> {
+        try {
+            // 若同一请求也命中 body 改写规则(POST),先算改后的 body 一并发出(两种改写可组合)
+            const fetchOptions: { postData?: string } = {};
+            if (request.method().toUpperCase() === 'POST') {
+                const bodyRule = matchRule(this.rewriteRules, request.url());
+                const original = request.postData();
+                if (bodyRule && original) {
+                    try {
+                        const contentType = headerValue(request.headers(), 'content-type');
+                        const bodyType = decideBodyType(bodyRule, contentType, original);
+                        const newBody = rewritePostBody(original, bodyType, bodyRule);
+                        if (newBody !== null) {
+                            fetchOptions.postData = newBody;
+                        }
+                    } catch (err) {
+                        logError(
+                            `回放响应头改写器:附带的 body 改写失败(用原 body 发出):${(err as Error).message}`
+                        );
+                    }
+                }
+            }
+            const response = await route.fetch(fetchOptions);
+            const headers = response.headers();
+            const newHeaders = rewriteResponseHeaderRecord(headers, respRule);
+            if (newHeaders !== null) {
+                logInfo(
+                    `回放响应头改写器:已改写响应头 [${request.url()}];` +
+                        `set=${Object.keys(respRule.setHeaders ?? {}).join(',') || '无'};` +
+                        `remove=${(respRule.removeHeaders ?? []).join(',') || '无'}`
+                );
+                await route.fulfill({ response, headers: newHeaders });
+            } else {
+                // 条件不满足 / 无动作:用原响应回填(请求已被 fetch 消费,必须 fulfill 而非 continue)
+                await route.fulfill({ response });
+            }
+        } catch (err) {
+            logError(`回放响应头改写器:处理响应头出错(原样放行):${(err as Error).message}`);
+            try {
+                await route.continue();
+            } catch {
+                /* 请求可能已失效或已被 fetch 消费,忽略 */
+            }
         }
     }
 

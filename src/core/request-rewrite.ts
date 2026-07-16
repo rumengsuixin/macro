@@ -3,7 +3,7 @@
 // 从原录制端 request-interceptor.ts 抽出——两端用同一套 glob 匹配与 body 改写函数,
 // 保证「录的什么、放的什么」逐字一致(尤其 CDP glob 方言:回放端也用 globToRegExp 判断,
 // 不走 Playwright 自带的 route glob,避免命中集漂移)。
-import type { RequestRule } from './macro-types';
+import type { RequestRule, ResponseHeaderRule } from './macro-types';
 
 /** 把 CDP glob(`*` 任意串、`?` 单字符、`\` 转义)编译为整串匹配的正则 */
 export function globToRegExp(glob: string): RegExp {
@@ -154,6 +154,92 @@ export function headerValue(headers: Record<string, string>, name: string): stri
         }
     }
     return '';
+}
+
+// ── 「响应头条件改写」支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
+
+/**
+ * 判断响应头是否满足规则的 when 条件:when 里所有头需**全部相等**(AND,头名大小写不敏感);
+ * when 缺省 → 恒真(无条件)。条件读的是**响应头**,复用 headerValue 大小写不敏感取值。
+ */
+export function responseConditionMet(
+    headers: Record<string, string>,
+    rule: ResponseHeaderRule
+): boolean {
+    if (!rule.when) {
+        return true;
+    }
+    for (const [name, expected] of Object.entries(rule.when)) {
+        if (headerValue(headers, name) !== expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * 回放端(Playwright)用:按规则改写响应头 Record,返回新 Record;
+ * 无 setHeaders/removeHeaders 动作、或 when 条件不满足 → 返回 null(表示不改)。
+ * 大小写不敏感:setHeaders/removeHeaders 命中的键先从原 headers 里删掉(不论大小写),
+ * 再写入 setHeaders 的新值,保证不出现大小写不同的重复键。
+ */
+export function rewriteResponseHeaderRecord(
+    headers: Record<string, string>,
+    rule: ResponseHeaderRule
+): Record<string, string> | null {
+    const setEntries = rule.setHeaders ? Object.entries(rule.setHeaders) : [];
+    const removeNames = rule.removeHeaders ?? [];
+    if (setEntries.length === 0 && removeNames.length === 0) {
+        return null; // 规则没定义任何动作
+    }
+    if (!responseConditionMet(headers, rule)) {
+        return null; // 条件不满足,不改
+    }
+    const dropLower = new Set(
+        [...removeNames, ...setEntries.map(([k]) => k)].map((n) => n.toLowerCase())
+    );
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers || {})) {
+        if (!dropLower.has(k.toLowerCase())) {
+            out[k] = v;
+        }
+    }
+    for (const [k, v] of setEntries) {
+        out[k] = String(v);
+    }
+    return out;
+}
+
+/**
+ * 录制端(CDP)用:入参是 CDP 的 HeaderEntry[](name/value,允许重复名如多个 set-cookie)。
+ * 逻辑同 rewriteResponseHeaderRecord,但保留**数组形态**——仅删除/覆盖 remove/set 名单内的头,
+ * 名单外的头(含合法重复头)原样保留。返回新数组;无动作/条件不满足 → 返回 null。
+ */
+export function rewriteResponseHeaderEntries(
+    entries: Array<{ name: string; value: string }>,
+    rule: ResponseHeaderRule
+): Array<{ name: string; value: string }> | null {
+    const setEntries = rule.setHeaders ? Object.entries(rule.setHeaders) : [];
+    const removeNames = rule.removeHeaders ?? [];
+    if (setEntries.length === 0 && removeNames.length === 0) {
+        return null;
+    }
+    // 由 entries 拼一个 Record 判条件(重复名时后者覆盖,判条件足够)
+    const asRecord: Record<string, string> = {};
+    for (const e of entries || []) {
+        asRecord[e.name] = e.value;
+    }
+    if (!responseConditionMet(asRecord, rule)) {
+        return null;
+    }
+    const dropLower = new Set(
+        [...removeNames, ...setEntries.map(([k]) => k)].map((n) => n.toLowerCase())
+    );
+    const out = (entries || []).filter((e) => !dropLower.has(e.name.toLowerCase()));
+    for (const [k, v] of setEntries) {
+        out.push({ name: k, value: String(v) });
+    }
+    return out;
 }
 
 // ── 「重发型」拦截支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
