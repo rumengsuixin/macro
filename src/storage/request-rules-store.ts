@@ -6,6 +6,7 @@ import type {
     ResendRule,
     ResponseHeaderRule,
     BlockRule,
+    DumpRule,
     RequestRulesConfig,
     TimelineRecordConfig,
 } from '../core/macro-types';
@@ -60,6 +61,11 @@ function templateConfig(): RequestRulesConfig {
         // 不发出**(回放端 route.abort(),页面 fetch/XHR 收到网络错误)。method 可选,只拦指定方法;缺省拦所有。
         // 与 rules/resends/responseRules 物理分开写在 blocks 数组。enabled=false 时不生效。
         blocks: [{ urlPattern: '*/api/track*' }],
+        // dumps:「请求体落盘」支路(受 enabled 总开关管,仅回放端)。命中 urlPattern 的请求,把其
+        // **完整二进制请求体**(从第一字节到最后一字节)写成一个文件到 dumps/(缺省 .mp4)。用于抓取
+        // 上传型接口的字节体(如把视频上传请求体存成 mp4)。method 可选只落指定方法;缺省落所有方法。
+        // 每命中一个请求落一个文件。与 rules/resends/responseRules/blocks 物理分开。enabled=false 时不生效。
+        dumps: [{ urlPattern: '*upload.youtube.com*', extension: 'mp4' }],
         // record:「只记录不修改」支路(独立于 enabled)。改成 enabled:true 即拦截并记录所有请求
         // (不限 method)+ 响应到 timelines/timeline-*.jsonl,供事后分析;不改写任何请求。
         record: { enabled: false, urlPattern: '*', includeBody: true },
@@ -191,6 +197,25 @@ function normalizeBlockRule(raw: unknown): BlockRule | null {
     return rule;
 }
 
+/** 校验并归一化单条请求体落盘规则;非法返回 null(过滤掉) */
+function normalizeDumpRule(raw: unknown): DumpRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    const rule: DumpRule = { urlPattern: r.urlPattern };
+    if (typeof r.method === 'string' && r.method.trim()) {
+        rule.method = r.method;
+    }
+    if (typeof r.extension === 'string' && r.extension.trim()) {
+        rule.extension = r.extension;
+    }
+    return rule;
+}
+
 /** 校验并归一化 record 段(config 级,非 per-rule);非对象/缺省返回 undefined */
 function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     if (!raw || typeof raw !== 'object') {
@@ -242,12 +267,16 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
         const blocks = Array.isArray(raw.blocks)
             ? raw.blocks.map(normalizeBlockRule).filter((x): x is BlockRule => x !== null)
             : [];
+        const dumps = Array.isArray(raw.dumps)
+            ? raw.dumps.map(normalizeDumpRule).filter((x): x is DumpRule => x !== null)
+            : [];
         return {
             enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
             rules,
             ...(resends.length ? { resends } : {}),
             ...(responseRules.length ? { responseRules } : {}),
             ...(blocks.length ? { blocks } : {}),
+            ...(dumps.length ? { dumps } : {}),
             ...(record ? { record } : {}),
         };
     } catch {

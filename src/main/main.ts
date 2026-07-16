@@ -41,6 +41,7 @@ const exportsDir = path.join(dataRoot, 'exports');
 const errorsDir = path.join(dataRoot, 'errors');
 const downloadsDir = path.join(dataRoot, 'downloads');
 const timelinesDir = path.join(dataRoot, 'timelines'); // 「只记录不修改」支路的请求时间线 JSONL 输出
+const dumpsDir = path.join(dataRoot, 'dumps'); // 「请求体落盘」支路的二进制请求体输出(如上传视频落成 mp4)
 const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在程序目录内
 
 // 浏览器登录态复用配置:文件路径与默认 profile 目录
@@ -64,7 +65,7 @@ let runSeq = 0;
 
 /** 确保运行时目录存在 */
 function ensureDirs(): void {
-    for (const dir of [macrosDir, exportsDir, errorsDir, downloadsDir, timelinesDir]) {
+    for (const dir of [macrosDir, exportsDir, errorsDir, downloadsDir, timelinesDir, dumpsDir]) {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -293,7 +294,8 @@ function registerIpc(): void {
             onPause,
             sessionOptions,
             downloadsDir,
-            timelinesDir
+            timelinesDir,
+            dumpsDir
         );
 
         // 「停止回放」信号:匹配 runId 时调用 runner.cancel() 主动中止(与 resume 同一 runId 隔离机制)
@@ -555,7 +557,15 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     const responseRuleActive =
         requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
     const blockActive = requestRules.enabled && (requestRules.blocks?.length ?? 0) > 0;
-    if (rewriteActive || recordActive || resendActive || responseRuleActive || blockActive) {
+    const dumpActive = requestRules.enabled && (requestRules.dumps?.length ?? 0) > 0;
+    if (
+        rewriteActive ||
+        recordActive ||
+        resendActive ||
+        responseRuleActive ||
+        blockActive ||
+        dumpActive
+    ) {
         options.requestRules = requestRules;
         if (rewriteActive) {
             logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
@@ -570,6 +580,11 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         }
         if (blockActive) {
             logInfo(`回放将按 ${requestRules.blocks!.length} 条真拦截规则硬阻断命中的请求。`);
+        }
+        if (dumpActive) {
+            logInfo(
+                `回放将按 ${requestRules.dumps!.length} 条落盘规则把命中请求的完整二进制请求体写成文件(dumps/)。`
+            );
         }
         if (recordActive) {
             logInfo(

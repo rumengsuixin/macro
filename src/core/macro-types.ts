@@ -399,6 +399,22 @@ export interface BlockRule {
 }
 
 /**
+ * 「请求体落盘(dump)」规则:命中 urlPattern(可选限定 method)的请求,把其**完整**请求体
+ * (从第一字节到最后一字节)按原始二进制(postDataBuffer)写成一个文件(缺省 .mp4)。用于抓取
+ * 上传型接口的字节体(如把视频上传请求体落盘成 mp4)。与 rules/resends/responseRules/blocks 物理
+ * 分开存 dumps[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
+ * 总开关统管(enabled=true 且有 dumps 才生效);被动观察、不改写请求。**仅回放端生效**。
+ */
+export interface DumpRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 可选,仅落盘指定 HTTP 方法(大小写不敏感,如 PUT/POST);缺省=落盘所有方法(上传常是 PUT/POST) */
+    method?: string;
+    /** 输出文件后缀(可含或不含前导点,如 'mp4' 或 '.bin');缺省 'mp4' */
+    extension?: string;
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -424,6 +440,8 @@ export interface RequestRulesConfig {
     responseRules?: ResponseHeaderRule[];
     /** 真拦截(硬阻断)规则列表(命中即 route.abort 阻断、不发出;受 enabled 总开关管);缺省视为无 */
     blocks?: BlockRule[];
+    /** 请求体落盘规则列表(命中即把完整二进制请求体写成文件;受 enabled 总开关管;仅回放端);缺省视为无 */
+    dumps?: DumpRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
 }

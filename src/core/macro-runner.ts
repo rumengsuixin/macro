@@ -26,6 +26,7 @@ import type {
     ResendRule,
     ResponseHeaderRule,
     BlockRule,
+    DumpRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -87,6 +88,17 @@ export class MacroRunner {
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
     private readonly resendLastFireAt = new Map<string, number>();
+    // --- 「请求体落盘(dump)」支路运行期状态(受 enabled 总开关管,与改写共用 fs.watchFile 热更新) ---
+    /** 请求体落盘输出目录;缺省回退到 errorDir 同级的 dumps */
+    private dumpsDir: string;
+    /** 当前生效的落盘规则(命中即把完整二进制请求体写成一个文件;不改原请求) */
+    private dumpRules: DumpRule[] = [];
+    /** 是否启用落盘(enabled 且有落盘规则) */
+    private dumpWant = false;
+    /** 落盘文件序号:与毫秒戳组合保证同毫秒内也不撞名 */
+    private dumpSeq = 0;
+    /** 落盘目录懒建标志(仿 TimelineRecorder.ready) */
+    private dumpsReady = false;
 
     constructor(
         errorDir: string,
@@ -94,7 +106,8 @@ export class MacroRunner {
         onPause?: OnPause,
         session?: SessionOptions,
         downloadDir?: string,
-        timelinesDir?: string
+        timelinesDir?: string,
+        dumpsDir?: string
     ) {
         this.errorDir = errorDir;
         // 回放默认超时:默认 60 秒;可用环境变量 MACRO_TIMEOUT(毫秒)覆盖
@@ -104,6 +117,7 @@ export class MacroRunner {
         this.session = session ?? {};
         this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
         this.timelinesDir = timelinesDir ?? path.join(errorDir, '..', 'timelines');
+        this.dumpsDir = dumpsDir ?? path.join(errorDir, '..', 'dumps');
     }
 
     /**
@@ -615,11 +629,40 @@ export class MacroRunner {
             }
         });
 
+        // ⑤ 请求体落盘观察监听:常挂、被动(不改原请求),靠 dumpWant 标志决定是否处理。
+        //    命中 dumps 规则(可选限 method)则取**完整二进制** body(postDataBuffer,非 postData string)
+        //    写成一个文件(缺省 .mp4)——用于抓取上传型接口的字节体(见 writeDumpFile)。
+        context.on('request', (req: Request) => {
+            try {
+                if (!this.dumpWant) {
+                    return;
+                }
+                if (isResendOrigin(req.headers())) {
+                    return; // 跳过工具自己发的重发请求(防抓到重发体)
+                }
+                const rule = matchRule(this.dumpRules, req.url());
+                if (!rule) {
+                    return;
+                }
+                if (rule.method && rule.method.toUpperCase() !== req.method().toUpperCase()) {
+                    return; // 配了 method 但不匹配
+                }
+                const buf = req.postDataBuffer(); // 原始字节 Buffer(保真二进制,不做 UTF-8 解码)
+                if (!buf || buf.length === 0) {
+                    return; // 无请求体(如 GET)自然跳过
+                }
+                this.writeDumpFile(rule, buf, req.url());
+            } catch {
+                /* 落盘支路不得影响主流程 */
+            }
+        });
+
         // ③ 应用初始配置(初始改写注册须 await,保证 route 早于第一个 goto 就位)
         const initial = this.session.requestRules ?? { enabled: false, rules: [] };
         await this.applyReplayRewrite(initial);
         this.applyReplayRecord(initial);
         this.applyReplayResend(initial);
+        this.applyReplayDump(initial);
     }
 
     /**
@@ -633,6 +676,7 @@ export class MacroRunner {
         void this.applyReplayRewrite(cfg).catch(() => undefined);
         this.applyReplayRecord(cfg);
         this.applyReplayResend(cfg);
+        this.applyReplayDump(cfg);
     }
 
     /**
@@ -776,6 +820,45 @@ export class MacroRunner {
             );
         }
         this.resendWant = want;
+    }
+
+    /**
+     * 按配置启用/停用请求体落盘支路(仿 applyReplayResend):观察监听已常挂,这里只切标志。
+     * enabled 且有落盘规则才处理;关→开/开→关各记一条日志。
+     */
+    private applyReplayDump(cfg: RequestRulesConfig): void {
+        this.dumpRules = cfg.dumps ?? [];
+        const want = cfg.enabled && this.dumpRules.length > 0;
+        if (this.dumpWant && !want) {
+            logInfo('回放请求体落盘:已停用。');
+        } else if (!this.dumpWant && want) {
+            logInfo(
+                `回放请求体落盘:已启用,共 ${this.dumpRules.length} 条落盘规则,` +
+                    `匹配 URL:${this.dumpRules.map((r) => r.urlPattern).join(' | ')};` +
+                    `输出目录:${this.dumpsDir}`
+            );
+        }
+        this.dumpWant = want;
+    }
+
+    /**
+     * 把一条命中请求的完整二进制请求体写成一个文件(缺省 .mp4)。文件名用毫秒戳 + 自增序号防撞名;
+     * 目录懒建。写失败只记日志不抛(落盘支路不得影响回放)。**完整字节、禁止截断**。
+     */
+    private writeDumpFile(rule: DumpRule, buf: Buffer, url: string): void {
+        try {
+            if (!this.dumpsReady) {
+                fs.mkdirSync(this.dumpsDir, { recursive: true });
+                this.dumpsReady = true;
+            }
+            this.dumpSeq += 1;
+            const ext = (rule.extension || 'mp4').replace(/^\./, ''); // 容忍带或不带前导点
+            const file = path.join(this.dumpsDir, `dump-${Date.now()}-${this.dumpSeq}.${ext}`);
+            fs.writeFileSync(file, buf); // 一次性写完整二进制,不做任何大小上限/截断
+            logInfo(`回放请求体落盘:已保存 ${buf.length} 字节 [${url}] → ${file}`);
+        } catch (err) {
+            logError(`回放请求体落盘:写文件失败(不影响回放):${(err as Error).message}`);
+        }
     }
 
     /**
