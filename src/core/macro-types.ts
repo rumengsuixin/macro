@@ -386,6 +386,19 @@ export interface ResponseHeaderRule {
 }
 
 /**
+ * 「真拦截(硬阻断)」规则:命中 urlPattern(可选限定 method)的请求**直接阻断、不让其发出**——
+ * 回放端 Playwright route.abort()(页面的 fetch/XHR 收到网络错误)。与 rules[]/resends[]/responseRules[]
+ * 物理分开存 blocks[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
+ * 总开关统管(enabled=true 且有 blocks 才生效)。这是本模块唯一「不放行」的分支。
+ */
+export interface BlockRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 可选,仅拦截指定 HTTP 方法(大小写不敏感,如 POST/GET);缺省=拦截所有方法 */
+    method?: string;
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -409,6 +422,8 @@ export interface RequestRulesConfig {
     resends?: ResendRule[];
     /** 响应头条件改写规则列表(命中且满足 when 条件则改响应头;受 enabled 总开关管);缺省视为无 */
     responseRules?: ResponseHeaderRule[];
+    /** 真拦截(硬阻断)规则列表(命中即 route.abort 阻断、不发出;受 enabled 总开关管);缺省视为无 */
+    blocks?: BlockRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
 }

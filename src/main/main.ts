@@ -11,7 +11,8 @@ import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { loadRequestRules } from '../storage/request-rules-store';
-import { RequestInterceptor } from './request-interceptor';
+// 注:RequestInterceptor(录制端 CDP 拦截器)已不再由主进程接线——拦截模块仅在回放阶段生效(见 did-attach-webview)。
+// 类文件仍保留(供自检脚本 verify-request-intercept / verify-timeline-record 直接实例化)。
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import type {
@@ -105,12 +106,10 @@ function createWindow(): void {
     mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
         // 持有 guest 引用供回放前读取 localStorage;webview 销毁时置回 null 防失效引用
         recordingWebContents = guestContents;
-        // 录制端请求改写器:按 request-rules.json 拦截并改写命中的 POST 请求体(CDP Fetch 域);
-        // 同时承载「只记录不修改」支路(CDP Network 域,记录所有请求到 timelines/)
-        const interceptor = new RequestInterceptor(requestRulesPath, timelinesDir);
-        interceptor.attach(guestContents);
+        // 注:请求拦截模块(改写/重发/响应头/真拦截)现仅在**回放阶段**生效——录制端不再挂 CDP 拦截器,
+        // 保证录制时抓到真实、未改动的流量,也不与用户手开的 DevTools 抢占 debugger。
+        // 拦截规则(request-rules.json)只在回放时经 buildSessionOptions 下发给 MacroRunner。
         guestContents.once('destroyed', () => {
-            interceptor.detach();
             if (recordingWebContents === guestContents) {
                 recordingWebContents = null;
             }
@@ -555,7 +554,8 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     const resendActive = requestRules.enabled && (requestRules.resends?.length ?? 0) > 0;
     const responseRuleActive =
         requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
-    if (rewriteActive || recordActive || resendActive || responseRuleActive) {
+    const blockActive = requestRules.enabled && (requestRules.blocks?.length ?? 0) > 0;
+    if (rewriteActive || recordActive || resendActive || responseRuleActive || blockActive) {
         options.requestRules = requestRules;
         if (rewriteActive) {
             logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
@@ -567,6 +567,9 @@ async function buildSessionOptions(): Promise<SessionOptions> {
             logInfo(
                 `回放将按 ${requestRules.responseRules!.length} 条响应头规则在满足条件时改写响应头。`
             );
+        }
+        if (blockActive) {
+            logInfo(`回放将按 ${requestRules.blocks!.length} 条真拦截规则硬阻断命中的请求。`);
         }
         if (recordActive) {
             logInfo(

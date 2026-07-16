@@ -24,6 +24,10 @@
         "responseRules[].when": "条件对象:这些响应头需全部相等才改(AND,头名大小写不敏感)。如 {\"xx\":\"1\"} 表示响应头 xx=1 时才改。缺省/不写=无条件总是改",
         "responseRules[].setHeaders": "设置/覆盖的响应头(如 {\"cc\":\"1\"});同名头大小写不敏感覆盖,不产生重复键",
         "responseRules[].removeHeaders": "删除的响应头名数组(大小写不敏感)",
+        "blocks[]": "「真拦截(硬阻断)」支路(受 enabled 总开关管,与 rules/resends/responseRules 物理分开):命中 urlPattern 的请求**直接阻断、不发出**(回放端 route.abort(),页面的 fetch/XHR 收到网络错误)。这是本模块唯一「不放行」的分支",
+        "blocks[].urlPattern": "CDP glob 匹配请求 URL(同 rules;与 method 无关,默认拦所有方法)",
+        "blocks[].method": "可选,只拦指定 HTTP 方法(大小写不敏感,如 POST / GET);缺省=拦该 URL 的所有方法",
+        "_生效阶段": "请求拦截模块(改写 rules / 重发 resends / 响应头 responseRules / 真拦截 blocks)现**仅在回放阶段生效**——录制时不拦截、不改写,抓到真实未改动的流量。record 只记录支路两端仍可用",
         "record": "「只记录不修改」支路,独立开关(与 enabled 无关):record.enabled=true 即拦截所有请求(不限 method)+ 响应,写入 timelines/timeline-*.jsonl(每行一条 JSON,含 url/method/headers/请求body/状态码/耗时),供事后分析。不改写任何请求。录制端(CDP Network)与回放端(Playwright)共用本段。urlPattern 缺省/* 记录所有;includeBody=false 则不记请求 body",
         "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
     },
@@ -82,6 +86,17 @@
             "_注": "无条件(不写 when):命中该 URL 的响应一律加上一个 CORS 头",
             "urlPattern": "*/api/open*",
             "setHeaders": { "access-control-allow-origin": "*" }
+        }
+    ],
+    "blocks": [
+        {
+            "_注": "命中即硬阻断、不发出:回放时页面对该 URL 的 fetch/XHR 会收到网络错误",
+            "urlPattern": "*/api/track*"
+        },
+        {
+            "_注": "只拦该 URL 的 POST(GET 等其它方法照常放行)",
+            "urlPattern": "*/api/report*",
+            "method": "POST"
         }
     ]
 }

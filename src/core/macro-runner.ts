@@ -25,6 +25,7 @@ import type {
     RequestRule,
     ResendRule,
     ResponseHeaderRule,
+    BlockRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -67,7 +68,9 @@ export class MacroRunner {
     private rewriteRules: RequestRule[] = [];
     /** 当前生效的响应头改写规则(handler 实时读;命中则 route.fetch()+route.fulfill() 改响应头) */
     private responseHeaderRules: ResponseHeaderRule[] = [];
-    /** 改写 route 是否已注册(仅 enabled 且有改写/响应头规则时注册 → 未启用零 route 开销) */
+    /** 当前生效的真拦截规则(handler 实时读;命中即 route.abort() 硬阻断,不发出) */
+    private blockRules: BlockRule[] = [];
+    /** 改写 route 是否已注册(仅 enabled 且有改写/响应头/真拦截规则时注册 → 未启用零 route 开销) */
     private rewriteInstalled = false;
     /** 记录器;record.enabled 时创建(非 null 即正在记录),关闭时置 null。监听常挂,靠它决定是否写 */
     private recorder: TimelineRecorder | null = null;
@@ -448,9 +451,21 @@ export class MacroRunner {
         // globToRegExp 匹配(不把 urlPattern 交给 Playwright,避免 glob 方言漂移)。每条必 continue。
         this.rewriteHandler = async (route: Route, request: Request): Promise<void> => {
             try {
-                // 重发请求(页面内 fetch,带标记头)直接放行:它已是最终请求,不再被改写(也防自触发)
+                // 重发请求(页面内 fetch,带标记头)直接放行:它已是最终请求,不再被改写(也防自触发/自阻断)
                 if (isResendOrigin(request.headers())) {
                     await route.continue();
+                    return;
+                }
+                // 真拦截(硬阻断):命中 block 规则(可选限定 method)直接 abort,不放行——本模块唯一不放行分支。
+                // 放在 isResendOrigin 之后 → 工具自己发的重发请求不会被自己阻断;放在改写之前 → 命中即拦最干净。
+                const blockRule = matchRule(this.blockRules, request.url());
+                if (
+                    blockRule &&
+                    (!blockRule.method ||
+                        blockRule.method.toUpperCase() === request.method().toUpperCase())
+                ) {
+                    logInfo(`回放请求拦截器:已阻断 [${request.method()} ${request.url()}]`);
+                    await route.abort();
                     return;
                 }
                 // 响应头改写规则(与 method 无关,GET 也可能要改):命中则改走 fetch()+fulfill()
@@ -632,17 +647,22 @@ export class MacroRunner {
         }
         this.rewriteRules = cfg.rules ?? [];
         this.responseHeaderRules = cfg.responseRules ?? [];
-        // 改写 body 规则或响应头规则任一非空即需注册 route(只配响应头规则时也要拦)
+        this.blockRules = cfg.blocks ?? [];
+        // 改写 body 规则 / 响应头规则 / 真拦截规则 任一非空即需注册 route(只配其中一类也要拦)
         const want =
-            cfg.enabled && (this.rewriteRules.length > 0 || this.responseHeaderRules.length > 0);
+            cfg.enabled &&
+            (this.rewriteRules.length > 0 ||
+                this.responseHeaderRules.length > 0 ||
+                this.blockRules.length > 0);
         try {
             if (want && !this.rewriteInstalled) {
                 await ctx.route('**/*', this.rewriteHandler);
                 this.rewriteInstalled = true;
                 logInfo(
                     `回放请求改写器:已启用,改写 ${this.rewriteRules.length} 条 / ` +
-                        `响应头改写 ${this.responseHeaderRules.length} 条,匹配 URL:` +
-                        [...this.rewriteRules, ...this.responseHeaderRules]
+                        `响应头改写 ${this.responseHeaderRules.length} 条 / ` +
+                        `真拦截 ${this.blockRules.length} 条,匹配 URL:` +
+                        [...this.rewriteRules, ...this.responseHeaderRules, ...this.blockRules]
                             .map((r) => r.urlPattern)
                             .join(' | ')
                 );
