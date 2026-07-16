@@ -55,6 +55,8 @@ export class MacroRunner {
     private cancelled = false;
     /** 当前 context 引用:停止时主动关闭以打断正在进行的 Playwright 操作(慢步骤/提取阶段) */
     private activeContext: BrowserContext | null = null;
+    /** 当前活动页(跟随弹窗切换):回放端「页面内 fetch」重发用它在页面上下文执行 */
+    private activePage: Page | null = null;
 
     // --- 请求改写/记录的运行期热更新状态(main 侧 fs.watchFile 改动即经 updateRequestRules 推入) ---
     /** 改写 route handler:只建一次,注册/注销都用同一引用 */
@@ -286,8 +288,10 @@ export class MacroRunner {
             // 回放时同样的点击会在 Playwright 中开新页(popup),这里自动切换为活动页继续回放。
             // 初始页已创建完毕(挂监听前),故此后每次 page 事件都是弹窗。
             activePage = page;
+            this.activePage = page;
             context.on('page', (popup) => {
                 activePage = popup;
+                this.activePage = popup;
                 popup.setDefaultTimeout(this.timeoutMs);
                 popup.setDefaultNavigationTimeout(this.timeoutMs);
                 logInfo('检测到新标签页弹窗,已切换为活动页继续回放。');
@@ -403,6 +407,7 @@ export class MacroRunner {
         } finally {
             // 先清未触发的重发定时器,避免它们在 context 关闭后 fire 抛 "Target closed"
             this.clearResendTimers();
+            this.activePage = null; // 清活动页引用(重发用它);run 结束后页面即将关闭
             // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser。
             // 停止(cancel)时 context 可能已被关过,故各自 try/catch,避免二次 close 抛错覆盖返回值。
             if (context) {
@@ -439,6 +444,11 @@ export class MacroRunner {
         // globToRegExp 匹配(不把 urlPattern 交给 Playwright,避免 glob 方言漂移)。每条必 continue。
         this.rewriteHandler = async (route: Route, request: Request): Promise<void> => {
             try {
+                // 重发请求(页面内 fetch,带标记头)直接放行:它已是最终请求,不再被改写(也防自触发)
+                if (isResendOrigin(request.headers())) {
+                    await route.continue();
+                    return;
+                }
                 if (request.method().toUpperCase() !== 'POST') {
                     await route.continue();
                     return;
@@ -727,24 +737,35 @@ export class MacroRunner {
         }
     }
 
-    /** 用 APIRequestContext 主动发一个重发请求(共享 context 的 cookie jar,带登录态) */
+    /**
+     * 在当前活动页里跑 fetch 主动发一个重发请求(页面上下文:DevTools Network 可见、带页面完整登录态)。
+     * 代价:受该页面 CSP/CORS 约束(跨域目标可能被浏览器拦);无可用活动页(页面已关/导航中)则跳过。
+     * evaluate 用序列化参数传值(Playwright 自动序列化,不做字符串拼接,免注入)。
+     */
     private async fireReplayResend(
         target: string,
         method: 'POST' | 'GET',
         headers: Record<string, string>,
         body: string
     ): Promise<void> {
-        const ctx = this.activeContext;
-        if (!ctx) {
-            return; // run 已结束
+        const page = this.activePage;
+        if (!page || page.isClosed()) {
+            logError(`回放请求重发器:无可用活动页,跳过重发 ${method} ${target}`);
+            return;
         }
         try {
-            await ctx.request.fetch(target, {
-                method,
-                headers,
-                ...(method === 'GET' ? {} : { data: body }),
-            });
-            logInfo(`回放请求重发器:已重发 ${method} ${target}`);
+            await page.evaluate(
+                ({ url, m, h, b }) => {
+                    void fetch(url, {
+                        method: m,
+                        headers: h,
+                        ...(m === 'GET' ? {} : { body: b }),
+                        credentials: 'include',
+                    }).catch(() => {});
+                },
+                { url: target, m: method, h: headers, b: body }
+            );
+            logInfo(`回放请求重发器:已重发(页面内)${method} ${target}`);
         } catch (err) {
             logError(`回放请求重发器:重发失败 [${target}]:${(err as Error).message}`);
         }
