@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { WebContents } from 'electron';
-import type { RequestRule, RequestRulesConfig } from '../core/macro-types';
+import type { RequestRule, ResendRule, RequestRulesConfig } from '../core/macro-types';
 import { loadRequestRules } from '../storage/request-rules-store';
 import { logInfo, logError } from '../core/logger';
 import {
@@ -17,6 +17,9 @@ import {
     decideBodyType,
     rewritePostBody,
     headerValue,
+    isResendOrigin,
+    resolveResendTarget,
+    buildResendHeaders,
 } from '../core/request-rewrite';
 import { TimelineRecorder } from '../core/timeline-recorder';
 
@@ -78,6 +81,14 @@ export class RequestInterceptor {
     /** 在途请求(按 CDP requestId 关联请求行与响应行) */
     private readonly pending = new Map<string, PendingRecord>();
 
+    // --- 「重发型」支路(受 enabled 总开关管,与改写共用同一 Fetch 暂停便车观察) ---
+    /** 是否启用重发(enabled 且有重发规则) */
+    private resendActive = false;
+    /** 未触发的重发定时器集合:detach/热关闭时统一清理,防泄漏 */
+    private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
+    /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
+    private readonly resendLastFireAt = new Map<string, number>();
+
     constructor(configPath: string, timelinesDir?: string) {
         this.configPath = configPath;
         this.timelinesDir = timelinesDir ?? path.join(path.dirname(configPath), 'timelines');
@@ -108,6 +119,8 @@ export class RequestInterceptor {
         wc.debugger.on('detach', (_event, reason) => {
             this.intercepting = false;
             this.recording = false;
+            this.resendActive = false;
+            this.clearResendTimers();
             logError(`请求改写器:调试器已分离(${reason});如需继续改写请关闭开发者工具并重开页面。`);
         });
 
@@ -143,6 +156,9 @@ export class RequestInterceptor {
         const wc = this.wc;
         this.wc = null;
         this.intercepting = false;
+        // 重发支路收尾:关标志、清未触发的定时器
+        this.resendActive = false;
+        this.clearResendTimers();
         // 记录支路收尾:关 Network 观测、清记录器与在途请求(debugger.detach 本会全拆,这里显式防泄漏)
         const wasRecording = this.recording;
         this.recording = false;
@@ -165,40 +181,54 @@ export class RequestInterceptor {
         }
     }
 
-    /** 依据当前配置启用/更新/关闭 Fetch 拦截(仅对命中规则 urlPattern 的请求暂停) */
+    /**
+     * 依据当前配置启用/更新/关闭 Fetch 拦截(仅对命中改写/重发规则 urlPattern 的请求暂停)。
+     * 改写与重发共用同一 Fetch 暂停便车:命中的请求在 onRequestPaused 里既可能被改写、也可能被观察
+     * 调度重发(重发不改原请求,取完 body 后照常放行)。
+     */
     private async applyPatterns(): Promise<void> {
         const wc = this.wc;
         if (!wc || !wc.debugger.isAttached()) {
             return;
         }
-        const active = this.config.enabled && this.config.rules.length > 0;
+        const rewriteActive = this.config.enabled && this.config.rules.length > 0;
+        const resendActive = this.config.enabled && (this.config.resends?.length ?? 0) > 0;
+        // 重发由开转关:清掉未触发的定时器(热关即时停)
+        if (this.resendActive && !resendActive) {
+            this.clearResendTimers();
+        }
+        this.resendActive = resendActive;
+        const active = rewriteActive || resendActive;
         if (!active) {
             if (this.intercepting) {
                 await wc.debugger.sendCommand('Fetch.disable').catch(() => undefined);
                 this.intercepting = false;
-                logInfo('请求改写器:已停用(enabled=false 或无规则)。');
+                logInfo('请求拦截器:已停用(enabled=false 或无规则)。');
             }
             this.enabledKey = '';
             return;
         }
-        const patterns = this.config.rules.map((r) => ({
-            urlPattern: r.urlPattern,
-            requestStage: 'Request' as const,
-        }));
+        // 改写规则 URL ∪ 重发规则 URL:都要暂停(重发的暂停只为观察+读 body,随后原样放行)
+        const resends = this.config.resends ?? [];
+        const patterns = [
+            ...(rewriteActive ? this.config.rules : []),
+            ...(resendActive ? resends : []),
+        ].map((r) => ({ urlPattern: r.urlPattern, requestStage: 'Request' as const }));
         const key = JSON.stringify(patterns.map((p) => p.urlPattern).sort());
         if (this.intercepting && key === this.enabledKey) {
-            return; // 规则 URL 集合未变,无需重新下发
+            return; // URL 集合未变,无需重新下发
         }
         try {
             await wc.debugger.sendCommand('Fetch.enable', { patterns });
             this.intercepting = true;
             this.enabledKey = key;
             logInfo(
-                `请求改写器:已启用,共 ${this.config.rules.length} 条规则,` +
-                    `匹配 URL:${this.config.rules.map((r) => r.urlPattern).join(' | ')}`
+                `请求拦截器:已启用,改写 ${rewriteActive ? this.config.rules.length : 0} 条 / ` +
+                    `重发 ${resendActive ? resends.length : 0} 条,匹配 URL:` +
+                    patterns.map((p) => p.urlPattern).join(' | ')
             );
         } catch (err) {
-            logError(`请求改写器:启用 Fetch 失败:${(err as Error).message}`);
+            logError(`请求拦截器:启用 Fetch 失败:${(err as Error).message}`);
         }
     }
 
@@ -351,10 +381,22 @@ export class RequestInterceptor {
         }
         const { requestId, request } = params;
         try {
-            const rule =
-                request.method.toUpperCase() === 'POST'
-                    ? matchRule(this.config.rules, request.url)
-                    : null;
+            const isPost = request.method.toUpperCase() === 'POST';
+            // 防递归:我们自己发的重发请求原样放行,不改写、不再触发重发
+            if (isPost && isResendOrigin(request.headers)) {
+                await wc.debugger.sendCommand('Fetch.continueRequest', { requestId });
+                return;
+            }
+            // 重发观察(独立于改写,不改原请求):命中 resends 规则则取 body 调度延时重发
+            if (this.resendActive && isPost) {
+                const rr = matchRule(this.config.resends ?? [], request.url);
+                if (rr) {
+                    const original = await this.getPostData(requestId, request);
+                    this.scheduleResend(rr, request, original);
+                }
+            }
+            // 改写(现状不变):命中改写规则则改 body 放行
+            const rule = isPost ? matchRule(this.config.rules, request.url) : null;
             if (rule) {
                 const newBody = await this.rewriteBody(requestId, request, rule);
                 if (newBody !== null) {
@@ -428,5 +470,105 @@ export class RequestInterceptor {
             logError(`请求改写器:解析/改写 body 失败(按原样放行):${(err as Error).message}`);
             return null;
         }
+    }
+
+    /** 取暂停请求的完整原始 body(Fetch.getRequestPostData,遵守禁止截断);无则空串 */
+    private async getPostData(requestId: string, request: PausedRequest): Promise<string> {
+        const wc = this.wc;
+        if (!wc || (!request.hasPostData && !request.postData)) {
+            return request.postData ?? '';
+        }
+        try {
+            const res = (await wc.debugger.sendCommand('Fetch.getRequestPostData', {
+                requestId,
+            })) as { postData?: string };
+            return typeof res.postData === 'string' ? res.postData : request.postData ?? '';
+        } catch {
+            return request.postData ?? '';
+        }
+    }
+
+    /**
+     * 命中重发规则后调度:去抖 → 算目标/类型/改参/头 → repeat 次 setTimeout 延时发射。
+     * 不改原请求(原请求已在 onRequestPaused 里照常放行),这里只额外发新请求。
+     */
+    private scheduleResend(rr: ResendRule, request: PausedRequest, originalBody: string): void {
+        // 去抖:同规则 dedupeMs 内只发一次(默认 0=每次命中都发)
+        if (rr.dedupeMs && rr.dedupeMs > 0) {
+            const now = Date.now();
+            const last = this.resendLastFireAt.get(rr.urlPattern) ?? 0;
+            if (now - last < rr.dedupeMs) {
+                return;
+            }
+            this.resendLastFireAt.set(rr.urlPattern, now);
+        }
+        const target = resolveResendTarget(rr.targetUrl, request.url);
+        const method = rr.method ?? 'POST';
+        const contentType = headerValue(request.headers, 'content-type');
+        const bodyType = decideBodyType(rr, contentType, originalBody || '');
+        // 改参:rr 的 set/append/remove 复用 rewritePostBody;无动作则原样重发
+        let payload = originalBody || '';
+        try {
+            const out = rewritePostBody(payload, bodyType, rr);
+            if (out !== null) {
+                payload = out;
+            }
+        } catch (err) {
+            logError(`请求重发器:改参失败(按原 body 重发):${(err as Error).message}`);
+        }
+        const defaultCt =
+            bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
+        const headers = buildResendHeaders(request.headers, contentType || defaultCt);
+        const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
+        const delay = Math.max(0, rr.delayMs ?? 0);
+        const interval = Math.max(0, rr.intervalMs ?? 0);
+        for (let i = 0; i < repeat; i += 1) {
+            const timer = setTimeout(
+                () => {
+                    this.resendTimers.delete(timer);
+                    void this.fireResend(target, method, headers, payload);
+                },
+                delay + i * interval
+            );
+            this.resendTimers.add(timer);
+        }
+    }
+
+    /** 在录制页面上下文跑 fetch 主动发一个重发请求(天然带页面 cookie/登录态/origin) */
+    private async fireResend(
+        target: string,
+        method: 'POST' | 'GET',
+        headers: Record<string, string>,
+        body: string
+    ): Promise<void> {
+        const wc = this.wc;
+        if (!wc || wc.isDestroyed()) {
+            return;
+        }
+        // 所有值用 JSON.stringify 内插,防注入/引号破裂
+        const code = `(() => { try {
+            fetch(${JSON.stringify(target)}, {
+                method: ${JSON.stringify(method)},
+                headers: ${JSON.stringify(headers)},
+                ${method === 'GET' ? '' : `body: ${JSON.stringify(body)},`}
+                credentials: 'include'
+            }).catch(function () {});
+            return true;
+        } catch (e) { return false; } })()`;
+        try {
+            await wc.executeJavaScript(code);
+            logInfo(`请求重发器:已重发 ${method} ${target}`);
+        } catch (err) {
+            logError(`请求重发器:重发失败 [${target}]:${(err as Error).message}`);
+        }
+    }
+
+    /** 清空所有未触发的重发定时器(detach / debugger 分离 / 热关闭时调用) */
+    private clearResendTimers(): void {
+        for (const t of this.resendTimers) {
+            clearTimeout(t);
+        }
+        this.resendTimers.clear();
+        this.resendLastFireAt.clear();
     }
 }

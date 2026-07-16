@@ -338,6 +338,35 @@ export interface RequestRule {
 }
 
 /**
+ * 「重发型」拦截规则:命中 urlPattern 的 POST 请求作为**触发器**,延时后取原 body 改参、
+ * 主动重新发起一个新请求(**不改原请求**,原请求照常放行)。与改写规则 rules[] 物理分开存
+ * resends[],避免 matchRule「首个命中即返回」让改写/重发互抢首命中。受 RequestRulesConfig.enabled
+ * 总开关统管(enabled=true 且有 resends 才生效)。重发请求带标记头 x-macro-resend 防递归自触发。
+ */
+export interface ResendRule {
+    /** 触发观察的 URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 命中后首次重发延时(毫秒),"间隔 n 秒"= n*1000;缺省 0=立即 */
+    delayMs?: number;
+    /** 重发目标 URL;缺省=触发请求同 URL(相对 URL 相对触发请求绝对化) */
+    targetUrl?: string;
+    /** 重发使用的 method;缺省 'POST' */
+    method?: 'POST' | 'GET';
+    /** body 类型;省略则按触发请求 Content-Type 嗅探(语义同 RequestRule) */
+    bodyType?: 'json' | 'form';
+    /** 对重发副本改哪些参数(以下三者复用 rewritePostBody;都不填=原样重发) */
+    set?: Record<string, unknown>;
+    append?: Record<string, unknown>;
+    remove?: string[];
+    /** 一次触发重发几次;缺省 1,归一化时 clamp 到 [1,100] */
+    repeat?: number;
+    /** repeat>1 时相邻两次重发的间隔(毫秒);缺省 0 */
+    intervalMs?: number;
+    /** 同规则去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则 N 毫秒内同规则只发一次 */
+    dedupeMs?: number;
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -357,6 +386,8 @@ export interface RequestRulesConfig {
     enabled: boolean;
     /** 规则列表(按序尝试匹配,命中即改写) */
     rules: RequestRule[];
+    /** 重发规则列表(命中后延时改参重发一个新请求;受 enabled 总开关管);缺省视为无重发 */
+    resends?: ResendRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
 }

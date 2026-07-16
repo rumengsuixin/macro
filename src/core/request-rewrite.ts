@@ -24,8 +24,11 @@ export function globToRegExp(glob: string): RegExp {
     return new RegExp(`^${out}$`);
 }
 
-/** 找到首个匹配该 URL 的规则;无则返回 null。非法 pattern 跳过。 */
-export function matchRule(rules: RequestRule[], url: string): RequestRule | null {
+/**
+ * 找到首个匹配该 URL 的规则;无则返回 null。非法 pattern 跳过。
+ * 泛型:只依赖 urlPattern,故改写规则(RequestRule)与重发规则(ResendRule)都可用,返回原类型。
+ */
+export function matchRule<T extends { urlPattern: string }>(rules: T[], url: string): T | null {
     for (const rule of rules) {
         try {
             if (globToRegExp(rule.urlPattern).test(url)) {
@@ -151,4 +154,63 @@ export function headerValue(headers: Record<string, string>, name: string): stri
         }
     }
     return '';
+}
+
+// ── 「重发型」拦截支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
+
+/** 重发请求的标记头名:带此头即为本工具主动发出的重发请求,观察路径识别到应整体跳过(防递归自触发) */
+export const RESEND_MARK_HEADER = 'x-macro-resend';
+
+/** 判断一个请求是否是我们自己发出的重发请求(大小写不敏感判标记头) */
+export function isResendOrigin(headers: Record<string, string>): boolean {
+    return headerValue(headers, RESEND_MARK_HEADER) !== '';
+}
+
+/**
+ * 计算重发目标 URL:
+ * - targetUrl 空 → 用触发请求 URL 本身;
+ * - targetUrl 相对 → 相对触发请求 URL 绝对化;
+ * - 解析失败 → 原样返回 targetUrl(交由发送端处理)。
+ */
+export function resolveResendTarget(targetUrl: string | undefined, triggerUrl: string): string {
+    if (!targetUrl || !targetUrl.trim()) {
+        return triggerUrl;
+    }
+    try {
+        return new URL(targetUrl, triggerUrl).toString();
+    } catch {
+        return targetUrl;
+    }
+}
+
+/**
+ * 组装重发请求头:拷贝触发请求头(保留 Authorization / X-CSRF-Token 等业务头),
+ * 排除浏览器会自置或禁止手动设置的头(host/content-length/connection/cookie/origin/referer/
+ * content-type——cookie 由发送端凭据自动带,content-type 统一用参数值避免大小写重复键),
+ * 最后补 Content-Type 与重发标记头。
+ */
+export function buildResendHeaders(
+    triggerHeaders: Record<string, string>,
+    contentType: string
+): Record<string, string> {
+    const forbidden = new Set([
+        'host',
+        'content-length',
+        'connection',
+        'cookie',
+        'origin',
+        'referer',
+        'content-type',
+    ]);
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(triggerHeaders || {})) {
+        if (!forbidden.has(k.toLowerCase())) {
+            out[k] = v;
+        }
+    }
+    if (contentType) {
+        out['Content-Type'] = contentType;
+    }
+    out[RESEND_MARK_HEADER] = '1';
+    return out;
 }

@@ -23,11 +23,20 @@ import type {
     SessionOptions,
     ElementFingerprint,
     RequestRule,
+    ResendRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
-import { matchRule, decideBodyType, rewritePostBody, headerValue } from './request-rewrite';
+import {
+    matchRule,
+    decideBodyType,
+    rewritePostBody,
+    headerValue,
+    isResendOrigin,
+    resolveResendTarget,
+    buildResendHeaders,
+} from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
 
@@ -60,6 +69,15 @@ export class MacroRunner {
     private recordWantBody = true;
     /** 当前 record 段签名:去重 + 判 urlPattern/includeBody 是否变化 */
     private recordCfgKey = '';
+    // --- 「重发型」支路运行期状态(受 enabled 总开关管,与改写共用 fs.watchFile 热更新) ---
+    /** 当前生效的重发规则(命中后延时改参重发一个新请求;不改原请求) */
+    private resendRules: ResendRule[] = [];
+    /** 是否启用重发(enabled 且有重发规则) */
+    private resendWant = false;
+    /** 未触发的重发定时器集合:cancel/run 结束/热关闭时统一清理,防泄漏与 "Target closed" */
+    private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
+    /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
+    private readonly resendLastFireAt = new Map<string, number>();
 
     constructor(
         errorDir: string,
@@ -86,6 +104,7 @@ export class MacroRunner {
      */
     cancel(): void {
         this.cancelled = true;
+        this.clearResendTimers(); // 停止:清掉未触发的重发定时器
         if (this.activeContext) {
             // 关闭失败(如已关)静默忽略;正在进行的操作会抛 "Target closed" 由 run() 的 catch 兜住
             this.activeContext.close().catch(() => undefined);
@@ -382,6 +401,8 @@ export class MacroRunner {
             // 部分执行也回传已记录的来源 URL,供旧宏回填(失败前跑到的步骤仍可精确分组)
             return { ok: false, error: runError, stepUrls };
         } finally {
+            // 先清未触发的重发定时器,避免它们在 context 关闭后 fire 抛 "Target closed"
+            this.clearResendTimers();
             // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser。
             // 停止(cancel)时 context 可能已被关过,故各自 try/catch,避免二次 close 抛错覆盖返回值。
             if (context) {
@@ -538,10 +559,31 @@ export class MacroRunner {
             }
         });
 
+        // ④ 重发观察监听:常挂、被动(不改原请求),靠 resendWant 标志决定是否处理。
+        //    命中 resends 规则 → 延时改参、主动发新请求(见 scheduleReplayResend)。
+        context.on('request', (req: Request) => {
+            try {
+                if (!this.resendWant || req.method().toUpperCase() !== 'POST') {
+                    return;
+                }
+                if (isResendOrigin(req.headers())) {
+                    return; // 我们自己发的重发请求,跳过(防递归自触发)
+                }
+                const rr = matchRule(this.resendRules, req.url());
+                if (!rr) {
+                    return;
+                }
+                this.scheduleReplayResend(rr, req.url(), req.headers(), req.postData() ?? '');
+            } catch {
+                /* 重发支路不得影响主流程 */
+            }
+        });
+
         // ③ 应用初始配置(初始改写注册须 await,保证 route 早于第一个 goto 就位)
         const initial = this.session.requestRules ?? { enabled: false, rules: [] };
         await this.applyReplayRewrite(initial);
         this.applyReplayRecord(initial);
+        this.applyReplayResend(initial);
     }
 
     /**
@@ -554,6 +596,7 @@ export class MacroRunner {
         }
         void this.applyReplayRewrite(cfg).catch(() => undefined);
         this.applyReplayRecord(cfg);
+        this.applyReplayResend(cfg);
     }
 
     /**
@@ -612,6 +655,108 @@ export class MacroRunner {
             this.recordCfgKey = '';
             logInfo('回放请求记录:已停用。');
         }
+    }
+
+    /**
+     * 按配置启用/停用重发支路(仿 applyReplayRewrite/Record):观察监听已常挂,这里只切标志。
+     * enabled 且有重发规则才处理;关→开记日志、开→关清掉未触发的定时器(热关即时停)。
+     */
+    private applyReplayResend(cfg: RequestRulesConfig): void {
+        this.resendRules = cfg.resends ?? [];
+        const want = cfg.enabled && this.resendRules.length > 0;
+        if (this.resendWant && !want) {
+            this.clearResendTimers(); // 关闭即清 pending
+            logInfo('回放请求重发器:已停用。');
+        } else if (!this.resendWant && want) {
+            logInfo(
+                `回放请求重发器:已启用,共 ${this.resendRules.length} 条重发规则,` +
+                    `触发 URL:${this.resendRules.map((r) => r.urlPattern).join(' | ')}`
+            );
+        }
+        this.resendWant = want;
+    }
+
+    /**
+     * 命中重发规则后调度:去抖 → 算目标/类型/改参/头 → repeat 次 setTimeout 延时发射。
+     * 不改原请求(原请求已由页面正常发出),这里只额外发新请求。
+     */
+    private scheduleReplayResend(
+        rr: ResendRule,
+        triggerUrl: string,
+        triggerHeaders: Record<string, string>,
+        originalBody: string
+    ): void {
+        // 去抖:同规则 dedupeMs 内只发一次(默认 0=每次命中都发)
+        if (rr.dedupeMs && rr.dedupeMs > 0) {
+            const now = Date.now();
+            const last = this.resendLastFireAt.get(rr.urlPattern) ?? 0;
+            if (now - last < rr.dedupeMs) {
+                return;
+            }
+            this.resendLastFireAt.set(rr.urlPattern, now);
+        }
+        const target = resolveResendTarget(rr.targetUrl, triggerUrl);
+        const method = rr.method ?? 'POST';
+        const contentType = headerValue(triggerHeaders, 'content-type');
+        const bodyType = decideBodyType(rr, contentType, originalBody || '');
+        // 改参:rr 的 set/append/remove 复用 rewritePostBody;无动作则原样重发
+        let payload = originalBody || '';
+        try {
+            const out = rewritePostBody(payload, bodyType, rr);
+            if (out !== null) {
+                payload = out;
+            }
+        } catch (err) {
+            logError(`回放请求重发器:改参失败(按原 body 重发):${(err as Error).message}`);
+        }
+        const defaultCt =
+            bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
+        const headers = buildResendHeaders(triggerHeaders, contentType || defaultCt);
+        const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
+        const delay = Math.max(0, rr.delayMs ?? 0);
+        const interval = Math.max(0, rr.intervalMs ?? 0);
+        for (let i = 0; i < repeat; i += 1) {
+            const timer = setTimeout(
+                () => {
+                    this.resendTimers.delete(timer);
+                    void this.fireReplayResend(target, method, headers, payload);
+                },
+                delay + i * interval
+            );
+            this.resendTimers.add(timer);
+        }
+    }
+
+    /** 用 APIRequestContext 主动发一个重发请求(共享 context 的 cookie jar,带登录态) */
+    private async fireReplayResend(
+        target: string,
+        method: 'POST' | 'GET',
+        headers: Record<string, string>,
+        body: string
+    ): Promise<void> {
+        const ctx = this.activeContext;
+        if (!ctx) {
+            return; // run 已结束
+        }
+        try {
+            await ctx.request.fetch(target, {
+                method,
+                headers,
+                ...(method === 'GET' ? {} : { data: body }),
+            });
+            logInfo(`回放请求重发器:已重发 ${method} ${target}`);
+        } catch (err) {
+            logError(`回放请求重发器:重发失败 [${target}]:${(err as Error).message}`);
+        }
+    }
+
+    /** 清空所有未触发的重发定时器(cancel / run 结束 / 热关闭时调用) */
+    private clearResendTimers(): void {
+        for (const t of this.resendTimers) {
+            clearTimeout(t);
+        }
+        this.resendTimers.clear();
+        this.resendLastFireAt.clear();
     }
 
     /**

@@ -9,6 +9,16 @@
         "rules[].append": "往 body 顶层数组字段追加元素(字段不存在则新建数组、原为单值则包成数组,追加时去重)。json 值写要追加的元素数组;form 追加为重复参数",
         "rules[].remove": "删除的 body 顶层字段名数组",
         "_执行顺序": "同一条规则内按 set → append → remove 依次执行",
+        "resends[]": "「重发型」支路(受 enabled 总开关管,与 rules 改写独立):命中 urlPattern 的 POST 作触发器,延时后取原 body 改参、主动重发一个新请求(不改原请求)。与 rules 物理分开写在 resends 数组",
+        "resends[].urlPattern": "触发观察的 CDP glob(同 rules)",
+        "resends[].delayMs": "命中后首次重发延时(毫秒),间隔 n 秒 = n*1000;缺省 0 立即",
+        "resends[].set/append/remove": "对重发副本改哪些参数(语义同 rules,复用同一改写逻辑;都不填=原样重发)",
+        "resends[].bodyType": "可选 json | form(同 rules)",
+        "resends[].targetUrl": "可选,重发目标 URL;缺省=触发请求同 URL(相对 URL 相对触发请求绝对化)",
+        "resends[].method": "可选 POST | GET;缺省 POST",
+        "resends[].repeat": "可选,一次触发重发几次;缺省 1,上限 100。intervalMs 为相邻两次间隔(毫秒)",
+        "resends[].dedupeMs": "可选去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则同规则 N 毫秒内只发一次(防高频触发放大)",
+        "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。录制端在页面上下文跑 fetch(带页面 cookie/登录态);回放端用 Playwright APIRequestContext(带 context cookie)。跨域受 CSP/CORS 限制",
         "record": "「只记录不修改」支路,独立开关(与 enabled 无关):record.enabled=true 即拦截所有请求(不限 method)+ 响应,写入 timelines/timeline-*.jsonl(每行一条 JSON,含 url/method/headers/请求body/状态码/耗时),供事后分析。不改写任何请求。录制端(CDP Network)与回放端(Playwright)共用本段。urlPattern 缺省/* 记录所有;includeBody=false 则不记请求 body",
         "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
     },
@@ -34,6 +44,25 @@
             "bodyType": "form",
             "set": { "page": 1 },
             "append": { "tags": ["a", "b"] }
+        }
+    ],
+    "resends": [
+        {
+            "_注": "命中 /api/refresh 的 POST 后,延时 3 秒把 page 改成 2 重发一次(不改原请求)",
+            "urlPattern": "*/api/refresh*",
+            "bodyType": "json",
+            "delayMs": 3000,
+            "set": { "page": 2 },
+            "repeat": 1
+        },
+        {
+            "_注": "命中 /api/poll 后,延时 1 秒起每隔 2 秒重发 3 次;dedupeMs 防同一触发在 5 秒内被多次命中放大",
+            "urlPattern": "*/api/poll*",
+            "bodyType": "json",
+            "delayMs": 1000,
+            "repeat": 3,
+            "intervalMs": 2000,
+            "dedupeMs": 5000
         }
     ]
 }

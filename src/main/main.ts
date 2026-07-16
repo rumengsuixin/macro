@@ -552,10 +552,14 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     const requestRules = loadRequestRules(requestRulesPath);
     const rewriteActive = requestRules.enabled && requestRules.rules.length > 0;
     const recordActive = requestRules.record?.enabled === true;
-    if (rewriteActive || recordActive) {
+    const resendActive = requestRules.enabled && (requestRules.resends?.length ?? 0) > 0;
+    if (rewriteActive || recordActive || resendActive) {
         options.requestRules = requestRules;
         if (rewriteActive) {
             logInfo(`回放将按 ${requestRules.rules.length} 条规则改写命中的 POST 请求体。`);
+        }
+        if (resendActive) {
+            logInfo(`回放将按 ${requestRules.resends!.length} 条重发规则在命中后延时重发请求。`);
         }
         if (recordActive) {
             logInfo(
