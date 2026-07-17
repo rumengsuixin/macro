@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import type {
     RequestRule,
     ResendRule,
+    ResendResponseTrigger,
     ResponseHeaderRule,
     BlockRule,
     DumpRule,
@@ -39,12 +40,27 @@ function templateConfig(): RequestRulesConfig {
         // 取原 body 改参(set/append/remove),主动重发一个新请求;repeat 次、间隔 intervalMs。
         // 重发请求带 x-macro-resend 标记头防递归。默认示例仅占位说明,enabled=false 时不触发。
         // 某条 resends 项还可配 replaceWithFile=本地文件绝对路径,整体用文件字节作重发体(忽略 set/append/remove)。
+        // 某条 resends 项还可配 responseTrigger(仅回放端):改由**响应**触发——命中 urlPattern 的响应,
+        // 当 status/headers/bodyJson(点路径→值,如 data.state=done)条件全部满足(AND)时才重发(见第 2 条示例)。
         resends: [
             {
                 urlPattern: '*/api/trigger*',
                 delayMs: 5000,
                 bodyType: 'json',
                 set: { retry: true },
+                repeat: 1,
+            },
+            {
+                // 响应触发示例:当 */api/status* 的响应头 x-ready=1 且响应体 JSON 的 data.state=done 时,
+                // 延时 800ms 往 /api/next 发一个新请求(以产生该响应的请求为蓝本继承登录态头)。
+                urlPattern: '*/api/status*',
+                responseTrigger: {
+                    status: 200,
+                    headers: { 'x-ready': '1' },
+                    bodyJson: { 'data.state': 'done' },
+                },
+                targetUrl: '/api/next',
+                delayMs: 800,
                 repeat: 1,
             },
         ],
@@ -160,7 +176,37 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
     if (Array.isArray(r.removeHeaders)) {
         rule.removeHeaders = r.removeHeaders.filter((x): x is string => typeof x === 'string');
     }
+    // 可选:响应条件触发器(设了则改由响应观察器触发,见 macro-runner.handleResponseTrigger)
+    const trigger = normalizeResponseTrigger(r.responseTrigger);
+    if (trigger) {
+        rule.responseTrigger = trigger;
+    }
     return rule;
+}
+
+/**
+ * 校验并归一化重发规则的 responseTrigger:非对象 → undefined(即保持请求侧触发)。
+ * 只要传入是对象就返回对象(即便无 status/headers/bodyJson 子条件,表示「该 URL 任意响应都触发」)。
+ * status 取有限 number;headers/bodyJson 复用 normalizeStringMap(路径→字符串)。
+ */
+function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return undefined;
+    }
+    const t = raw as Record<string, unknown>;
+    const out: ResendResponseTrigger = {};
+    if (typeof t.status === 'number' && Number.isFinite(t.status)) {
+        out.status = t.status;
+    }
+    const headers = normalizeStringMap(t.headers);
+    if (headers) {
+        out.headers = headers;
+    }
+    const bodyJson = normalizeStringMap(t.bodyJson);
+    if (bodyJson) {
+        out.bodyJson = bodyJson;
+    }
+    return out;
 }
 
 /** 把原始对象归一化成 string→string 映射(仅保留值为 string 的键);空/非对象返回 undefined */

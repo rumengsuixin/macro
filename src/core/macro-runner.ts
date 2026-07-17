@@ -9,6 +9,7 @@ import {
     type Locator,
     type Route,
     type Request,
+    type Response,
     type CDPSession,
 } from 'playwright';
 import path from 'node:path';
@@ -42,6 +43,8 @@ import {
     isResendOrigin,
     resolveResendTarget,
     buildResendHeaders,
+    responseTriggerMet,
+    triggerNeedsBody,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
@@ -102,10 +105,14 @@ export class MacroRunner {
     /** 当前 record 段签名:去重 + 判 urlPattern/includeBody 是否变化 */
     private recordCfgKey = '';
     // --- 「重发型」支路运行期状态(受 enabled 总开关管,与改写共用 fs.watchFile 热更新) ---
-    /** 当前生效的重发规则(命中后延时改参重发一个新请求;不改原请求) */
+    /** 当前生效的**请求触发**重发规则(无 responseTrigger;命中请求 URL 后延时改参重发) */
     private resendRules: ResendRule[] = [];
-    /** 是否启用重发(enabled 且有重发规则) */
+    /** 是否启用请求触发重发(enabled 且有请求触发规则) */
     private resendWant = false;
+    /** 当前生效的**响应触发**重发规则(有 responseTrigger;命中响应并满足条件后重发) */
+    private responseResendRules: ResendRule[] = [];
+    /** 是否启用响应触发重发(enabled 且有响应触发规则) */
+    private resendResponseWant = false;
     /** 未触发的重发定时器集合:cancel/run 结束/热关闭时统一清理,防泄漏与 "Target closed" */
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
@@ -669,6 +676,12 @@ export class MacroRunner {
             }
         });
 
+        // ⑥ 响应条件触发重发观察监听:常挂、被动(不改响应),靠 resendResponseWant 标志决定是否处理。
+        //    命中 responseTrigger 规则且 status/headers/bodyJson 条件满足 → 以「产生该响应的请求」为蓝本重发。
+        context.on('response', (resp: Response) => {
+            void this.handleResponseTrigger(resp).catch(() => undefined);
+        });
+
         // ⑤ 请求体落盘:不走被动 context.on('request')(其 postDataBuffer 对 File/Blob 上传体返回 null),
         //    改为 per-page CDP Fetch 域拦截,从 Fetch.requestPaused 的 postDataEntries 取完整二进制。
         //    CDP session 按页挂载(见 attachDumpCdp),在 run() 的 page 生命周期处接线,此处仅应用初始标志。
@@ -823,21 +836,81 @@ export class MacroRunner {
 
     /**
      * 按配置启用/停用重发支路(仿 applyReplayRewrite/Record):观察监听已常挂,这里只切标志。
-     * enabled 且有重发规则才处理;关→开记日志、开→关清掉未触发的定时器(热关即时停)。
+     * 把 resends 按有无 responseTrigger 拆两组:请求触发(原行为)+ 响应触发(新)。
+     * 关→开记日志;两组均关闭时清掉未触发的定时器(定时器共享,热关即时停)。
      */
     private applyReplayResend(cfg: RequestRulesConfig): void {
-        this.resendRules = cfg.resends ?? [];
+        const all = cfg.resends ?? [];
+        this.resendRules = all.filter((r) => !r.responseTrigger);
+        this.responseResendRules = all.filter((r) => !!r.responseTrigger);
         const want = cfg.enabled && this.resendRules.length > 0;
-        if (this.resendWant && !want) {
-            this.clearResendTimers(); // 关闭即清 pending
-            logInfo('回放请求重发器:已停用。');
-        } else if (!this.resendWant && want) {
+        const respWant = cfg.enabled && this.responseResendRules.length > 0;
+        const prevAny = this.resendWant || this.resendResponseWant;
+        const nowAny = want || respWant;
+        if (prevAny && !nowAny) {
+            this.clearResendTimers(); // 两组都关才清 pending
+        }
+        // 请求触发组日志
+        if (!this.resendWant && want) {
             logInfo(
-                `回放请求重发器:已启用,共 ${this.resendRules.length} 条重发规则,` +
+                `回放请求重发器(请求触发):已启用,共 ${this.resendRules.length} 条规则,` +
                     `触发 URL:${this.resendRules.map((r) => r.urlPattern).join(' | ')}`
             );
+        } else if (this.resendWant && !want) {
+            logInfo('回放请求重发器(请求触发):已停用。');
+        }
+        // 响应触发组日志
+        if (!this.resendResponseWant && respWant) {
+            logInfo(
+                `回放请求重发器(响应触发):已启用,共 ${this.responseResendRules.length} 条规则,` +
+                    `匹配响应 URL:${this.responseResendRules.map((r) => r.urlPattern).join(' | ')}`
+            );
+        } else if (this.resendResponseWant && !respWant) {
+            logInfo('回放请求重发器(响应触发):已停用。');
         }
         this.resendWant = want;
+        this.resendResponseWant = respWant;
+    }
+
+    /**
+     * 响应条件触发重发:被动观察每条响应,命中 responseTrigger 规则且条件满足时,
+     * 以「产生该响应的那个请求」为蓝本复用 scheduleReplayResend 发起重发。
+     * 门控:resendResponseWant;防递归:自发重发的响应(其请求带 x-macro-resend)跳过。
+     * 读体竞态(context 关闭)与任何异常都吞掉,不得影响主流程。
+     */
+    private async handleResponseTrigger(resp: Response): Promise<void> {
+        try {
+            if (!this.resendResponseWant) {
+                return;
+            }
+            const req = resp.request();
+            const reqHeaders = req.headers();
+            if (isResendOrigin(reqHeaders)) {
+                return; // 我们自己发的重发的响应,跳过(防递归自触发)
+            }
+            const rr = matchRule(this.responseResendRules, resp.url());
+            if (!rr || !rr.responseTrigger) {
+                return;
+            }
+            const trigger = rr.responseTrigger;
+            const status = resp.status();
+            const headers = resp.headers();
+            // 有 body 条件才异步读体(读不到=竞态/中断,放弃本次触发);无 body 条件不读、零开销
+            let bodyText: string | null = null;
+            if (triggerNeedsBody(trigger)) {
+                try {
+                    bodyText = await resp.text();
+                } catch {
+                    return;
+                }
+            }
+            if (!responseTriggerMet(trigger, status, headers, bodyText)) {
+                return;
+            }
+            this.scheduleReplayResend(rr, req.url(), reqHeaders, req.postData() ?? '');
+        } catch {
+            /* 响应触发支路不得影响主流程 */
+        }
     }
 
     /**

@@ -338,13 +338,33 @@ export interface RequestRule {
 }
 
 /**
+ * 「重发型」拦截规则的**响应条件触发器**(可选)。设了 ResendRule.responseTrigger 时,
+ * 该规则改由**响应观察器**驱动(而非请求侧 urlPattern 命中即触发):命中 urlPattern 的**响应**,
+ * 当 status / headers / bodyJson 三组条件**全部满足(AND)**时,才以「产生该响应的那个请求」为蓝本
+ * 发起重发。仅回放端生效(Playwright 在网络层读响应体,不受页面 CORS 限制)。
+ * 三组均可选;若 responseTrigger 存在但无任何子条件,则该 URL 的**任意响应**都触发。
+ */
+export interface ResendResponseTrigger {
+    /** 可选:响应状态码需**等于**此值(如 200) */
+    status?: number;
+    /** 可选:响应头条件,这些头需**全部相等**才命中(AND,头名大小写不敏感,值精确相等) */
+    headers?: Record<string, string>;
+    /**
+     * 可选:响应体 JSON 条件,**点路径 → 期望值**(如 `{"data.state":"done"}`),全部满足才命中(AND)。
+     * 响应体先 JSON.parse,按点路径(`a.b.c`)逐层取值,`String()` 后与期望值精确等值比较(值大小写敏感)。
+     * 解析失败 / 路径不存在 / 响应体读不到 → 该条件**不命中**。
+     */
+    bodyJson?: Record<string, string>;
+}
+
+/**
  * 「重发型」拦截规则:命中 urlPattern 的 POST 请求作为**触发器**,延时后取原 body 改参、
  * 主动重新发起一个新请求(**不改原请求**,原请求照常放行)。与改写规则 rules[] 物理分开存
  * resends[],避免 matchRule「首个命中即返回」让改写/重发互抢首命中。受 RequestRulesConfig.enabled
  * 总开关统管(enabled=true 且有 resends 才生效)。重发请求带标记头 x-macro-resend 防递归自触发。
  */
 export interface ResendRule {
-    /** 触发观察的 URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    /** 触发观察的 URL 匹配模式(CDP glob,`*` 通配);唯一必填。带 responseTrigger 时匹配**响应 URL** */
     urlPattern: string;
     /** 命中后首次重发延时(毫秒),"间隔 n 秒"= n*1000;缺省 0=立即 */
     delayMs?: number;
@@ -381,6 +401,12 @@ export interface ResendRule {
      * 防递归标记头 x-macro-resend 不可被删除(始终强制补回)。
      */
     removeHeaders?: string[];
+    /**
+     * 可选,**响应条件触发器**。设了它 → 本规则改由「响应观察器」触发(urlPattern 匹配响应 URL),
+     * status/headers/bodyJson 条件全部满足(AND)才重发;不设 = 保持原「请求侧 urlPattern 命中即触发」。
+     * 仅回放端生效。命中后仍复用上面全部动作字段(targetUrl/set/replaceWithFile/setHeaders/delayMs/repeat…)。
+     */
+    responseTrigger?: ResendResponseTrigger;
 }
 
 /**

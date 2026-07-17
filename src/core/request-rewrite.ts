@@ -3,7 +3,7 @@
 // 从原录制端 request-interceptor.ts 抽出——两端用同一套 glob 匹配与 body 改写函数,
 // 保证「录的什么、放的什么」逐字一致(尤其 CDP glob 方言:回放端也用 globToRegExp 判断,
 // 不走 Playwright 自带的 route glob,避免命中集漂移)。
-import type { RequestRule, ResponseHeaderRule } from './macro-types';
+import type { RequestRule, ResponseHeaderRule, ResendResponseTrigger } from './macro-types';
 
 /** 把 CDP glob(`*` 任意串、`?` 单字符、`\` 转义)编译为整串匹配的正则 */
 export function globToRegExp(glob: string): RegExp {
@@ -159,6 +159,25 @@ export function headerValue(headers: Record<string, string>, name: string): stri
 // ── 「响应头条件改写」支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
 
 /**
+ * 判断一组响应头是否**全部相等**(AND,头名大小写不敏感、值精确相等);expected 缺省 → 恒真。
+ * 被 responseConditionMet(响应头改写 when)与 responseTriggerMet(重发响应触发 headers)共用。
+ */
+export function headersAllEqual(
+    headers: Record<string, string>,
+    expected?: Record<string, string>
+): boolean {
+    if (!expected) {
+        return true;
+    }
+    for (const [name, val] of Object.entries(expected)) {
+        if (headerValue(headers, name) !== val) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * 判断响应头是否满足规则的 when 条件:when 里所有头需**全部相等**(AND,头名大小写不敏感);
  * when 缺省 → 恒真(无条件)。条件读的是**响应头**,复用 headerValue 大小写不敏感取值。
  */
@@ -166,12 +185,63 @@ export function responseConditionMet(
     headers: Record<string, string>,
     rule: ResponseHeaderRule
 ): boolean {
-    if (!rule.when) {
-        return true;
+    return headersAllEqual(headers, rule.when);
+}
+
+// ── 「重发型」响应条件触发的共享纯逻辑(仅回放端调用) ──
+
+/** 按点路径(`a.b.c`)逐层从 JSON 对象取值;遇非对象/缺失返回 undefined */
+export function getJsonByPath(obj: unknown, path: string): unknown {
+    const parts = path.split('.');
+    let cur: unknown = obj;
+    for (const p of parts) {
+        if (cur === null || typeof cur !== 'object') {
+            return undefined;
+        }
+        cur = (cur as Record<string, unknown>)[p];
     }
-    for (const [name, expected] of Object.entries(rule.when)) {
-        if (headerValue(headers, name) !== expected) {
+    return cur;
+}
+
+/** 该触发条件是否需要读响应体(有 bodyJson 子条件才需要),用于门控异步读体 */
+export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
+    return !!trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0;
+}
+
+/**
+ * 判断一条响应是否满足重发的响应触发条件:status / headers / bodyJson 三组**全部满足(AND)**。
+ * - status:给定则须严格等值;
+ * - headers:复用 headersAllEqual(AND,头名大小写不敏感);
+ * - bodyJson:bodyText 为 null 或 JSON.parse 失败 → 不命中;否则逐点路径 String(取值)===期望值(AND)。
+ * 三组均可选;都不给 → 恒真(该 URL 任意响应都触发)。
+ */
+export function responseTriggerMet(
+    trigger: ResendResponseTrigger,
+    status: number,
+    headers: Record<string, string>,
+    bodyText: string | null
+): boolean {
+    if (trigger.status !== undefined && status !== trigger.status) {
+        return false;
+    }
+    if (!headersAllEqual(headers, trigger.headers)) {
+        return false;
+    }
+    if (trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) {
+        if (bodyText === null) {
             return false;
+        }
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(bodyText);
+        } catch {
+            return false;
+        }
+        for (const [path, expected] of Object.entries(trigger.bodyJson)) {
+            const val = getJsonByPath(parsed, path);
+            if (val === undefined || String(val) !== expected) {
+                return false;
+            }
         }
     }
     return true;
