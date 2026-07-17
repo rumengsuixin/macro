@@ -28,6 +28,7 @@ import type {
     ResponseHeaderRule,
     BlockRule,
     DumpRule,
+    BodyReplaceRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -120,10 +121,15 @@ export class MacroRunner {
     private dumpSeq = 0;
     /** 落盘目录懒建标志(仿 TimelineRecorder.ready) */
     private dumpsReady = false;
-    /** 每页一个 CDP 会话(Fetch 域拦截,从 postDataEntries 取完整二进制;抓 File/Blob 上传体) */
+    /** 每页一个 CDP 会话(Fetch 域拦截,从 postDataEntries 取完整二进制;dump 落盘 + 整体替换共用) */
     private readonly dumpCdpSessions = new Map<Page, CDPSession>();
-    /** 所有活动 page 引用(初始页 + 每个弹窗):供 dump 热更新开启时补挂 CDP */
+    /** 所有活动 page 引用(初始页 + 每个弹窗):供 dump/替换 热更新开启时补挂 CDP */
     private readonly dumpPages = new Set<Page>();
+    // --- 「请求体整体替换(拦截替换)」支路运行期状态(与 dump 共用上面的 per-page CDP Fetch 拦截) ---
+    /** 当前生效的整体替换规则(命中即用本地文件字节整体替换请求体后放行) */
+    private replaceRules: BodyReplaceRule[] = [];
+    /** 是否启用整体替换(enabled 且有替换规则) */
+    private replaceWant = false;
 
     constructor(
         errorDir: string,
@@ -673,6 +679,7 @@ export class MacroRunner {
         this.applyReplayRecord(initial);
         this.applyReplayResend(initial);
         this.applyReplayDump(initial);
+        this.applyReplayBodyReplace(initial);
     }
 
     /**
@@ -687,6 +694,7 @@ export class MacroRunner {
         this.applyReplayRecord(cfg);
         this.applyReplayResend(cfg);
         this.applyReplayDump(cfg);
+        this.applyReplayBodyReplace(cfg);
     }
 
     /**
@@ -854,6 +862,25 @@ export class MacroRunner {
     }
 
     /**
+     * 按配置启用/停用请求体整体替换支路(仿 applyReplayDump):与 dump 共用 per-page CDP Fetch。
+     * enabled 且有替换规则才处理;关→开/开→关各记一条日志;尾部刷新 CDP(补挂/更新 patterns/卸载)。
+     */
+    private applyReplayBodyReplace(cfg: RequestRulesConfig): void {
+        this.replaceRules = cfg.bodyReplaces ?? [];
+        const want = cfg.enabled && this.replaceRules.length > 0;
+        if (this.replaceWant && !want) {
+            logInfo('回放请求体替换:已停用。');
+        } else if (!this.replaceWant && want) {
+            logInfo(
+                `回放请求体替换:已启用,共 ${this.replaceRules.length} 条替换规则,` +
+                    `匹配 URL:${this.replaceRules.map((r) => r.urlPattern).join(' | ')}`
+            );
+        }
+        this.replaceWant = want;
+        void this.refreshDumpCdp();
+    }
+
+    /**
      * 把一条命中请求的完整二进制请求体写成一个文件(缺省 .mp4)。文件名用毫秒戳 + 自增序号防撞名;
      * 目录懒建。写失败只记日志不抛(落盘支路不得影响回放)。**完整字节、禁止截断**。
      */
@@ -875,9 +902,24 @@ export class MacroRunner {
 
     // ===== 请求体落盘的 CDP Fetch 拦截(抓 File/Blob 上传体;Playwright postDataBuffer 对 Blob 返回 null)=====
 
-    /** dump 规则 → CDP Fetch.enable 的 patterns(只暂停命中 URL 的请求阶段,降开销) */
+    /** dump ∪ 整体替换 规则 URL → CDP Fetch.enable 的 patterns(只暂停命中 URL 的请求阶段,降开销) */
     private dumpFetchPatterns(): Array<{ urlPattern: string; requestStage: 'Request' }> {
-        return this.dumpRules.map((r) => ({ urlPattern: r.urlPattern, requestStage: 'Request' }));
+        const urls = new Set<string>();
+        for (const r of this.dumpRules) {
+            urls.add(r.urlPattern);
+        }
+        for (const r of this.replaceRules) {
+            urls.add(r.urlPattern);
+        }
+        return [...urls].map((urlPattern) => ({ urlPattern, requestStage: 'Request' }));
+    }
+
+    /** dump 或整体替换 任一启用(决定是否需要挂 CDP Fetch 拦截) */
+    private cdpFetchWant(): boolean {
+        return (
+            (this.dumpWant && this.dumpRules.length > 0) ||
+            (this.replaceWant && this.replaceRules.length > 0)
+        );
     }
 
     /**
@@ -904,11 +946,11 @@ export class MacroRunner {
     }
 
     /**
-     * 给一个 page 挂 CDP Fetch 拦截:命中 dump 规则的请求在发出前暂停,取完整 body 落盘后立即放行。
-     * 幂等;不需要落盘(dumpWant=false)或已挂则跳过;attach 失败记告警、该页不落盘、不致命。
+     * 给一个 page 挂 CDP Fetch 拦截:命中 dump/替换 规则的请求在发出前暂停,落盘/整体替换后立即放行。
+     * 幂等;不需要 CDP(dump 与替换都关)或已挂则跳过;attach 失败记告警、该页不生效、不致命。
      */
     private async attachDumpCdp(page: Page): Promise<void> {
-        if (!this.dumpWant || this.dumpRules.length === 0 || this.dumpCdpSessions.has(page)) {
+        if (!this.cdpFetchWant() || this.dumpCdpSessions.has(page)) {
             return;
         }
         const ctx = this.activeContext;
@@ -930,27 +972,54 @@ export class MacroRunner {
         }
     }
 
-    /** CDP Fetch.requestPaused 处理:命中 dump 规则则重组完整 body 落盘;**无论如何最后必须放行**。 */
+    /**
+     * CDP Fetch.requestPaused 处理:先按 dump 规则落盘原始 body,再按替换规则用文件字节整体替换后放行。
+     * dump 读旧、替换发新,可同时命中。**每条路径恰好放行一次**(替换命中即带 postData 放行并 return)。
+     */
     private async onDumpRequestPaused(cdp: CDPSession, params: CdpRequestPaused): Promise<void> {
         const { requestId, request } = params;
         try {
             // 只处理请求阶段(patterns 只配了 Request,响应阶段带 responseStatusCode,理论不会到这里,保险跳过)
             if (params.responseStatusCode === undefined && !isResendOrigin(request.headers)) {
-                const rule = matchRule(this.dumpRules, request.url);
+                // ① dump:命中则重组完整原始 body 落盘(落的是替换前的原始字节)
+                const dumpRule = matchRule(this.dumpRules, request.url);
                 if (
-                    rule &&
-                    (!rule.method || rule.method.toUpperCase() === request.method.toUpperCase())
+                    dumpRule &&
+                    (!dumpRule.method ||
+                        dumpRule.method.toUpperCase() === request.method.toUpperCase())
                 ) {
                     const buf = this.reassemblePostData(request);
                     if (buf && buf.length > 0) {
-                        this.writeDumpFile(rule, buf, request.url);
+                        this.writeDumpFile(dumpRule, buf, request.url);
+                    }
+                }
+                // ② 整体替换:命中则用本地文件字节整体替换请求体后放行(读文件失败落到末尾原样放行)
+                const rr = matchRule(this.replaceRules, request.url);
+                if (
+                    rr &&
+                    (!rr.method || rr.method.toUpperCase() === request.method.toUpperCase())
+                ) {
+                    try {
+                        const nb = fs.readFileSync(rr.replaceWithFile);
+                        await cdp.send('Fetch.continueRequest', {
+                            requestId,
+                            postData: nb.toString('base64'), // CDP 要 base64;Content-Length 网络栈重算
+                        });
+                        logInfo(
+                            `回放请求体替换:已用文件整体替换请求体 ${nb.length} 字节 [${request.url}] ← ${rr.replaceWithFile}`
+                        );
+                        return; // 已放行,不再走末尾
+                    } catch (err) {
+                        logError(
+                            `回放请求体替换:读替换文件失败(原样放行不替换):${(err as Error).message}`
+                        );
                     }
                 }
             }
         } catch (err) {
-            logError(`回放请求体落盘:CDP 处理请求出错:${(err as Error).message}`);
+            logError(`回放请求体拦截:CDP 处理请求出错:${(err as Error).message}`);
         }
-        // 铁律:每个暂停请求都必须放行,否则页面卡死
+        // 铁律:每个暂停请求都必须放行,否则页面卡死(未命中替换/替换失败走这里原样放行)
         try {
             await cdp.send('Fetch.continueRequest', { requestId });
         } catch {
@@ -963,7 +1032,7 @@ export class MacroRunner {
      * 与录制端 applyPatterns、回放端 applyReplay* 同构;在 applyReplayDump 与 page 生命周期处驱动。
      */
     private async refreshDumpCdp(): Promise<void> {
-        if (this.dumpWant && this.dumpRules.length > 0) {
+        if (this.cdpFetchWant()) {
             for (const page of this.dumpPages) {
                 const existing = this.dumpCdpSessions.get(page);
                 if (!existing) {

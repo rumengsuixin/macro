@@ -415,6 +415,22 @@ export interface DumpRule {
 }
 
 /**
+ * 「请求体整体替换(拦截替换)」规则:命中 urlPattern(可选限定 method)的请求,在拦截点把其**整个**
+ * 请求体替换成一个本地文件的完整字节,再放行发出。与 dump 是一对(dump 读、这个写)。因要能替换
+ * File/Blob 上传体,走 CDP Fetch `continueRequest({postData})` 整体替换(Content-Length 网络栈重算)。
+ * 与 rules/resends/responseRules/blocks/dumps 物理分开存 bodyReplaces[](matchRule 首命中即返回)。
+ * 受 RequestRulesConfig.enabled 总开关统管。**仅回放端生效**。
+ */
+export interface BodyReplaceRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 可选,仅替换指定 HTTP 方法(大小写不敏感,如 PUT/POST);缺省=替换命中 URL 的所有方法 */
+    method?: string;
+    /** 本地文件绝对路径;命中即用其完整字节整体替换请求体(缺省/读失败则原样放行不替换) */
+    replaceWithFile: string;
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -442,6 +458,8 @@ export interface RequestRulesConfig {
     blocks?: BlockRule[];
     /** 请求体落盘规则列表(命中即把完整二进制请求体写成文件;受 enabled 总开关管;仅回放端);缺省视为无 */
     dumps?: DumpRule[];
+    /** 请求体整体替换规则列表(命中即用本地文件字节整体替换请求体;受 enabled 总开关管;仅回放端);缺省视为无 */
+    bodyReplaces?: BodyReplaceRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
 }

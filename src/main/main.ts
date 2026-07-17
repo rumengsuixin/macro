@@ -558,13 +558,15 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
     const blockActive = requestRules.enabled && (requestRules.blocks?.length ?? 0) > 0;
     const dumpActive = requestRules.enabled && (requestRules.dumps?.length ?? 0) > 0;
+    const replaceActive = requestRules.enabled && (requestRules.bodyReplaces?.length ?? 0) > 0;
     if (
         rewriteActive ||
         recordActive ||
         resendActive ||
         responseRuleActive ||
         blockActive ||
-        dumpActive
+        dumpActive ||
+        replaceActive
     ) {
         options.requestRules = requestRules;
         if (rewriteActive) {
@@ -584,6 +586,11 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         if (dumpActive) {
             logInfo(
                 `回放将按 ${requestRules.dumps!.length} 条落盘规则把命中请求的完整二进制请求体写成文件(dumps/)。`
+            );
+        }
+        if (replaceActive) {
+            logInfo(
+                `回放将按 ${requestRules.bodyReplaces!.length} 条替换规则用本地文件整体替换命中请求的请求体。`
             );
         }
         if (recordActive) {

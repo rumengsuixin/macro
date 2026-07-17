@@ -7,6 +7,7 @@ import type {
     ResponseHeaderRule,
     BlockRule,
     DumpRule,
+    BodyReplaceRule,
     RequestRulesConfig,
     TimelineRecordConfig,
 } from '../core/macro-types';
@@ -66,6 +67,12 @@ function templateConfig(): RequestRulesConfig {
         // 上传型接口的字节体(如把视频上传请求体存成 mp4)。method 可选只落指定方法;缺省落所有方法。
         // 每命中一个请求落一个文件。与 rules/resends/responseRules/blocks 物理分开。enabled=false 时不生效。
         dumps: [{ urlPattern: '*upload.youtube.com*', extension: 'mp4' }],
+        // bodyReplaces:「请求体整体替换(拦截替换)」支路(受 enabled 总开关管,仅回放端)。命中 urlPattern
+        // 的请求,在拦截点把其**整个**请求体替换成 replaceWithFile(本地文件绝对路径)的完整字节再放行;
+        // 能替换 File/Blob 上传体(走 CDP)。method 可选只替换指定方法;缺省替换所有方法。读文件失败则原样放行。
+        bodyReplaces: [
+            { urlPattern: '*upload.youtube.com*', replaceWithFile: 'D:\\path\\to\\replacement.mp4' },
+        ],
         // record:「只记录不修改」支路(独立于 enabled)。改成 enabled:true 即拦截并记录所有请求
         // (不限 method)+ 响应到 timelines/timeline-*.jsonl,供事后分析;不改写任何请求。
         record: { enabled: false, urlPattern: '*', includeBody: true },
@@ -216,6 +223,28 @@ function normalizeDumpRule(raw: unknown): DumpRule | null {
     return rule;
 }
 
+/** 校验并归一化单条请求体整体替换规则;非法(含缺 replaceWithFile)返回 null(过滤掉) */
+function normalizeBodyReplaceRule(raw: unknown): BodyReplaceRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    if (typeof r.replaceWithFile !== 'string' || !r.replaceWithFile.trim()) {
+        return null; // 没有替换文件的规则无意义
+    }
+    const rule: BodyReplaceRule = {
+        urlPattern: r.urlPattern,
+        replaceWithFile: r.replaceWithFile,
+    };
+    if (typeof r.method === 'string' && r.method.trim()) {
+        rule.method = r.method;
+    }
+    return rule;
+}
+
 /** 校验并归一化 record 段(config 级,非 per-rule);非对象/缺省返回 undefined */
 function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     if (!raw || typeof raw !== 'object') {
@@ -270,6 +299,11 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
         const dumps = Array.isArray(raw.dumps)
             ? raw.dumps.map(normalizeDumpRule).filter((x): x is DumpRule => x !== null)
             : [];
+        const bodyReplaces = Array.isArray(raw.bodyReplaces)
+            ? raw.bodyReplaces
+                  .map(normalizeBodyReplaceRule)
+                  .filter((x): x is BodyReplaceRule => x !== null)
+            : [];
         return {
             enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
             rules,
@@ -277,6 +311,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             ...(responseRules.length ? { responseRules } : {}),
             ...(blocks.length ? { blocks } : {}),
             ...(dumps.length ? { dumps } : {}),
+            ...(bodyReplaces.length ? { bodyReplaces } : {}),
             ...(record ? { record } : {}),
         };
     } catch {
