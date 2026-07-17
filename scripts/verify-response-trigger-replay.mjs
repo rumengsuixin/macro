@@ -3,12 +3,15 @@
 // 新模型:urlPattern = 要捕获并重发的请求;responseTrigger.triggerUrl = 监听触发用的响应;无 targetUrl。
 //  即「捕获 urlPattern 请求 → 当 triggerUrl 的响应满足 status/headers/bodyJson(AND)时,重发捕获的请求」。
 //
-// 设计:
+// 设计(triggerUrl 响应用**深层嵌套+异构数组**结构,靠 bodyContains 原文子串匹配——点路径写不出的场景):
 //  - 本地服务:GET / 返回测试页,加载后**先** POST /payload(body {seq:"B"},被 urlPattern 捕获),
-//    **再** GET /status?case=pending 与 GET /status?case=done(响应均 x-ready:1,body {"data":{"state":...}})。
-//  - POST /payload 记录 { body, resent:!!x-macro-resend, ts };GET /status 按 case 返回 pending|done。
+//    **再** GET /status?case=pending 与 GET /status?case=done;/status 响应复刻 YouTube 上传反馈结构
+//    (continuationContents[0].uploadFeedbackItemContinuation.contents[0].transferProgressBar.fractionCompleted),
+//    done=1/「已上传 100%。」,pending=0.5/「已上传 50%。」,响应头 x-ready:1。
+//  - POST /payload 记录 { body, resent:!!x-macro-resend, ts }。
 //  - session:enabled:true、rules:[]、resends:[{ urlPattern:'*/payload*',
-//      responseTrigger:{ triggerUrl:'*/status*', status:200, headers:{'x-ready':'1'}, bodyJson:{'data.state':'done'} },
+//      responseTrigger:{ triggerUrl:'*/status*', status:200, headers:{'x-ready':'1'},
+//                        bodyContains:['uploadFeedbackItemContinuation','"fractionCompleted":1'] },
 //      delayMs:800, repeat:1 }]。
 //  - 宏 = [goto, pause];onPause 轮询「≥1 原始 payload && ≥1 重发 payload」才 resolve。
 // 断言:①/payload 恰 1 原始(resent=false);②恰 1 重发(resent=true、body seq=B 证重发的是捕获的 B);
@@ -68,9 +71,30 @@ const server = http.createServer((req, res) => {
         return;
     }
     if (req.method === 'GET' && req.url.startsWith('/status')) {
-        const state = req.url.includes('case=pending') ? 'pending' : 'done';
+        // 复刻 YouTube 上传反馈那种深层嵌套 + 异构数组结构:点路径难写,靠 bodyContains 原文子串匹配
+        const done = !req.url.includes('case=pending');
+        const frac = done ? 1 : 0.5;
+        const pct = done ? '已上传 100%。' : '已上传 50%。';
         res.writeHead(200, { 'Content-Type': 'application/json', 'x-ready': '1' });
-        res.end(JSON.stringify({ data: { state } }));
+        res.end(
+            JSON.stringify({
+                continuationContents: [
+                    {
+                        uploadFeedbackItemContinuation: {
+                            id: { a: 'innertube_studio:X:0' },
+                            contents: [
+                                {
+                                    transferProgressBar: {
+                                        fractionCompleted: frac,
+                                        progressMessage: { simpleText: pct },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                ],
+            })
+        );
         return;
     }
     res.writeHead(404);
@@ -107,7 +131,8 @@ const session = {
                     triggerUrl: '*/status*',
                     status: 200,
                     headers: { 'x-ready': '1' },
-                    bodyJson: { 'data.state': 'done' },
+                    // bodyContains:免路径原文子串匹配深层嵌套/数组(点路径写不出 transferProgressBar 的位置)
+                    bodyContains: ['uploadFeedbackItemContinuation', '"fractionCompleted":1'],
                 },
                 delayMs: DELAY_MS,
                 repeat: 1,

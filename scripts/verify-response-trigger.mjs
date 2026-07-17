@@ -47,11 +47,13 @@ assert(headersAllEqual({ a: '1', b: '2' }, { a: '1', b: '2' }), '多条件全满
 assert(!headersAllEqual({ a: '1', b: '9' }, { a: '1', b: '2' }), '多条件有一个不满足 → false');
 assert(headersAllEqual({ any: 'x' }, undefined), 'expected 缺省 → 恒真');
 
-console.log('3) triggerNeedsBody —— 仅有 bodyJson 子条件才需读体');
+console.log('3) triggerNeedsBody —— 有 bodyJson 或 bodyContains 才需读体');
 assert(triggerNeedsBody({ bodyJson: { 'a.b': 'x' } }) === true, '有 bodyJson → 需读体');
+assert(triggerNeedsBody({ bodyContains: ['x'] }) === true, '有 bodyContains → 需读体');
 assert(triggerNeedsBody({ headers: { x: '1' } }) === false, '只有 headers → 不需读体');
 assert(triggerNeedsBody({ status: 200 }) === false, '只有 status → 不需读体');
 assert(triggerNeedsBody({ bodyJson: {} }) === false, 'bodyJson 为空对象 → 不需读体');
+assert(triggerNeedsBody({ bodyContains: [] }) === false, 'bodyContains 为空数组 → 不需读体');
 assert(triggerNeedsBody({}) === false, '空触发器 → 不需读体');
 
 console.log('4) responseTriggerMet —— status/headers/bodyJson 三组 AND');
@@ -97,7 +99,50 @@ assert(
     'AND:status 满足但 bodyJson 不满足 → 整体 false'
 );
 
-console.log('5) responseConditionMet —— 重构后行为回归(委托 headersAllEqual)');
+console.log('5) responseTriggerMet —— bodyContains 原文子串(AND、免路径、适配嵌套数组)');
+// 复刻用户结构:深层嵌套 + 异构数组,点路径难写,靠原文子串匹配
+const nested = JSON.stringify({
+    continuationContents: [
+        {
+            uploadFeedbackItemContinuation: {
+                id: { a: 'innertube_studio:X:0' },
+                contents: [
+                    { transferProgressBar: { fractionCompleted: 1, progressMessage: { simpleText: '已上传 100%。' } } },
+                ],
+            },
+        },
+    ],
+});
+assert(
+    responseTriggerMet({ bodyContains: ['"fractionCompleted":1'] }, 200, {}, nested),
+    '单子串命中深层嵌套结构 → true(点路径写不出也能匹配)'
+);
+assert(
+    responseTriggerMet({ bodyContains: ['uploadFeedbackItemContinuation', '"fractionCompleted":1'] }, 200, {}, nested),
+    '多子串全含 → true(AND)'
+);
+assert(
+    !responseTriggerMet({ bodyContains: ['uploadFeedbackItemContinuation', '"fractionCompleted":0.5'] }, 200, {}, nested),
+    '多子串缺一个 → false'
+);
+assert(
+    !responseTriggerMet({ bodyContains: ['"fractionCompleted":1'] }, 200, {}, null),
+    '有 bodyContains 但 bodyText 为 null → false'
+);
+assert(
+    responseTriggerMet({ bodyContains: ['已上传 100%'] }, 200, {}, nested),
+    '中文子串(字面 UTF-8)也能命中 → true'
+);
+assert(
+    responseTriggerMet({ status: 200, bodyContains: ['"fractionCompleted":1'], bodyJson: { 'continuationContents.0.uploadFeedbackItemContinuation.contents.0.transferProgressBar.fractionCompleted': '1' } }, 200, {}, nested),
+    'bodyContains + bodyJson(数字下标点路径)+ status 组合全满足 → true(证 AND & 数字下标可走)'
+);
+assert(
+    !responseTriggerMet({ bodyContains: ['"fractionCompleted":1', 'NOT_PRESENT'] }, 200, {}, nested),
+    'AND:一个子串在、一个不在 → 整体 false'
+);
+
+console.log('6) responseConditionMet —— 重构后行为回归(委托 headersAllEqual)');
 assert(responseConditionMet({ xx: '1' }, { urlPattern: '*', when: { xx: '1' } }), 'when 相等 → true');
 assert(!responseConditionMet({ xx: '2' }, { urlPattern: '*', when: { xx: '1' } }), 'when 不等 → false');
 assert(responseConditionMet({ any: 'x' }, { urlPattern: '*' }), 'when 缺省 → 恒真');

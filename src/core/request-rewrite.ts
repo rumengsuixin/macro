@@ -203,17 +203,21 @@ export function getJsonByPath(obj: unknown, path: string): unknown {
     return cur;
 }
 
-/** 该触发条件是否需要读响应体(有 bodyJson 子条件才需要),用于门控异步读体 */
+/** 该触发条件是否需要读响应体(有 bodyJson 或 bodyContains 子条件才需要),用于门控异步读体 */
 export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
-    return !!trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0;
+    return (
+        (!!trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) ||
+        (!!trigger.bodyContains && trigger.bodyContains.length > 0)
+    );
 }
 
 /**
- * 判断一条响应是否满足重发的响应触发条件:status / headers / bodyJson 三组**全部满足(AND)**。
+ * 判断一条响应是否满足重发的响应触发条件:status / headers / bodyContains / bodyJson 各组**全部满足(AND)**。
  * - status:给定则须严格等值;
  * - headers:复用 headersAllEqual(AND,头名大小写不敏感);
+ * - bodyContains:bodyText 为 null → 不命中;否则每个子串都须 includes(AND,大小写敏感);不解析 JSON;
  * - bodyJson:bodyText 为 null 或 JSON.parse 失败 → 不命中;否则逐点路径 String(取值)===期望值(AND)。
- * 三组均可选;都不给 → 恒真(该 URL 任意响应都触发)。
+ * 各组均可选;都不给 → 恒真(该 URL 任意响应都触发)。
  */
 export function responseTriggerMet(
     trigger: ResendResponseTrigger,
@@ -226,6 +230,17 @@ export function responseTriggerMet(
     }
     if (!headersAllEqual(headers, trigger.headers)) {
         return false;
+    }
+    // bodyContains 先判(纯子串,免不必要的 JSON.parse)
+    if (trigger.bodyContains && trigger.bodyContains.length > 0) {
+        if (bodyText === null) {
+            return false;
+        }
+        for (const sub of trigger.bodyContains) {
+            if (!bodyText.includes(sub)) {
+                return false;
+            }
+        }
     }
     if (trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) {
         if (bodyText === null) {

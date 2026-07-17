@@ -53,13 +53,15 @@ function templateConfig(): RequestRulesConfig {
             },
             {
                 // 响应触发示例:捕获命中 */api/submit* 的请求;当 */api/status* 的响应 status=200、
-                // 响应头 x-ready=1 且响应体 JSON 的 data.state=done 时,延时 800ms 重发捕获的 submit 请求。
+                // 响应头 x-ready=1、响应体 JSON 的 data.state=done 且响应体原文含子串 "done" 时(全部 AND),
+                // 延时 800ms 重发捕获的 submit 请求。bodyContains=免路径的原文子串匹配(适配深层嵌套/数组)。
                 urlPattern: '*/api/submit*',
                 responseTrigger: {
                     triggerUrl: '*/api/status*',
                     status: 200,
                     headers: { 'x-ready': '1' },
                     bodyJson: { 'data.state': 'done' },
+                    bodyContains: ['"state":"done"'],
                 },
                 delayMs: 800,
                 repeat: 1,
@@ -209,6 +211,13 @@ function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | null {
     const bodyJson = normalizeStringMap(t.bodyJson);
     if (bodyJson) {
         out.bodyJson = bodyJson;
+    }
+    if (Array.isArray(t.bodyContains)) {
+        // 只保留非空字符串子串(空串 includes 恒真、无意义故剔除);结果非空才写
+        const subs = t.bodyContains.filter((x): x is string => typeof x === 'string' && x.length > 0);
+        if (subs.length) {
+            out.bodyContains = subs;
+        }
     }
     return out;
 }

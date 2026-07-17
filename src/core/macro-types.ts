@@ -359,6 +359,12 @@ export interface ResendResponseTrigger {
      * 解析失败 / 路径不存在 / 响应体读不到 → 该条件**不命中**。
      */
     bodyJson?: Record<string, string>;
+    /**
+     * 可选:响应体**原文子串**条件,这些子串需**全部出现**在响应体文本里才命中(AND,大小写敏感)。
+     * 不解析 JSON、不依赖路径,适配深层嵌套 / 异构数组结构(点路径难写易碎的场景)。
+     * 如 `["\"fractionCompleted\":1"]` 或 `["已上传 100%"]`。响应体读不到 → 不命中。
+     */
+    bodyContains?: string[];
 }
 
 /**
