@@ -18,7 +18,8 @@
         "resends[].method": "可选 POST | GET;缺省 POST",
         "resends[].repeat": "可选,一次触发重发几次;缺省 1,上限 100。intervalMs 为相邻两次间隔(毫秒)",
         "resends[].dedupeMs": "可选去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则同规则 N 毫秒内只发一次(防高频触发放大)",
-        "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。两端都在页面上下文里跑 fetch(带页面 cookie/登录态,DevTools Network 可见):录制端在录制 webview、回放端在当前活动页。跨域受 CSP/CORS 限制、需当前有活动页",
+        "resends[].replaceWithFile": "可选,本地文件**绝对路径**;设了它则整体用该文件完整字节作重发 body,忽略 set/append/remove/bodyType,content-type 保留触发请求原值。读文件失败则跳过本次重发。Windows 路径反斜杠要转义,如 D:\\\\videos\\\\new.mp4",
+        "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。两端都在页面上下文里跑 fetch(带页面 cookie/登录态,DevTools Network 可见):录制端在录制 webview、回放端在当前活动页。跨域受 CSP/CORS 限制、需当前有活动页。配 replaceWithFile 时文件经 base64 传入页面重建为二进制体(能发 mp4 等任意字节),超大文件慎用(内存开销比 bodyReplaces 大,超大上传优先用 bodyReplaces)",
         "responseRules[]": "「响应头条件改写」支路(受 enabled 总开关管,与 rules/resends 物理分开):命中 urlPattern 的响应,当其响应头满足 when 条件时,改写响应头。**条件读的是响应头、动作改的也是响应头**。录制端走 CDP Fetch 响应阶段、回放端走 Playwright route.fetch()+route.fulfill()",
         "responseRules[].urlPattern": "CDP glob 匹配响应对应的请求 URL(同 rules;与 method 无关,GET 也能改)",
         "responseRules[].when": "条件对象:这些响应头需全部相等才改(AND,头名大小写不敏感)。如 {\"xx\":\"1\"} 表示响应头 xx=1 时才改。缺省/不写=无条件总是改",
@@ -80,6 +81,12 @@
             "repeat": 3,
             "intervalMs": 2000,
             "dedupeMs": 5000
+        },
+        {
+            "_注": "命中上传型触发后,延时 0.5 秒用本地另一个 mp4 的完整字节整体作重发体(换视频上传);replaceWithFile 存在则忽略 set/append/remove",
+            "urlPattern": "*upload.youtube.com*",
+            "delayMs": 500,
+            "replaceWithFile": "D:\\videos\\replacement.mp4"
         }
     ],
     "responseRules": [

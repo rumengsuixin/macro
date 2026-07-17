@@ -38,6 +38,7 @@ function templateConfig(): RequestRulesConfig {
         // resends:「重发型」支路(受 enabled 总开关管)。命中 urlPattern 的 POST 后,延时 delayMs
         // 取原 body 改参(set/append/remove),主动重发一个新请求;repeat 次、间隔 intervalMs。
         // 重发请求带 x-macro-resend 标记头防递归。默认示例仅占位说明,enabled=false 时不触发。
+        // 某条 resends 项还可配 replaceWithFile=本地文件绝对路径,整体用文件字节作重发体(忽略 set/append/remove)。
         resends: [
             {
                 urlPattern: '*/api/trigger*',
@@ -128,6 +129,10 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
     }
     const rule: ResendRule = { urlPattern: r.urlPattern };
     applyActionFields(r, rule);
+    // 可选:整体用本地文件字节作重发体(存在则运行端忽略 set/append/remove);非空 string 才收
+    if (typeof r.replaceWithFile === 'string' && r.replaceWithFile.trim()) {
+        rule.replaceWithFile = r.replaceWithFile;
+    }
     if (typeof r.targetUrl === 'string' && r.targetUrl.trim()) {
         rule.targetUrl = r.targetUrl;
     }

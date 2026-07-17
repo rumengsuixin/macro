@@ -1089,20 +1089,47 @@ export class MacroRunner {
         const target = resolveResendTarget(rr.targetUrl, triggerUrl);
         const method = rr.method ?? 'POST';
         const contentType = headerValue(triggerHeaders, 'content-type');
-        const bodyType = decideBodyType(rr, contentType, originalBody || '');
-        // 改参:rr 的 set/append/remove 复用 rewritePostBody;无动作则原样重发
-        let payload = originalBody || '';
-        try {
-            const out = rewritePostBody(payload, bodyType, rr);
-            if (out !== null) {
-                payload = out;
+
+        // 两路产出统一的 (payload, binary, ctForHeaders):
+        //  - 文件路:整体用本地文件字节作重发体(payload=base64,binary=true),忽略 set/append/remove;
+        //  - 改参路:取原 body 用 rewritePostBody 做 set/append/remove(payload=明文,binary=false)。
+        let payload: string;
+        let binary = false;
+        let ctForHeaders: string;
+        if (rr.replaceWithFile && rr.replaceWithFile.trim() && method !== 'GET') {
+            // 文件整体替换路:读字节 → base64(文件只读一次,repeat 个定时器复用);读失败则跳过本次重发
+            let buf: Buffer;
+            try {
+                buf = fs.readFileSync(rr.replaceWithFile);
+            } catch (err) {
+                logError(
+                    `回放请求重发器:读替换文件失败,跳过本次重发 [${rr.replaceWithFile}]:${(err as Error).message}`
+                );
+                return;
             }
-        } catch (err) {
-            logError(`回放请求重发器:改参失败(按原 body 重发):${(err as Error).message}`);
+            payload = buf.toString('base64');
+            binary = true;
+            ctForHeaders = contentType; // 保留触发请求原 content-type,不强制 json/form 默认
+            logInfo(
+                `回放请求重发器:用文件字节作重发体 ${buf.length} 字节 ← ${rr.replaceWithFile}`
+            );
+        } else {
+            // 改参路:rr 的 set/append/remove 复用 rewritePostBody;无动作则原样重发
+            const bodyType = decideBodyType(rr, contentType, originalBody || '');
+            payload = originalBody || '';
+            try {
+                const out = rewritePostBody(payload, bodyType, rr);
+                if (out !== null) {
+                    payload = out;
+                }
+            } catch (err) {
+                logError(`回放请求重发器:改参失败(按原 body 重发):${(err as Error).message}`);
+            }
+            const defaultCt =
+                bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
+            ctForHeaders = contentType || defaultCt;
         }
-        const defaultCt =
-            bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
-        const headers = buildResendHeaders(triggerHeaders, contentType || defaultCt);
+        const headers = buildResendHeaders(triggerHeaders, ctForHeaders);
         const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
         const delay = Math.max(0, rr.delayMs ?? 0);
         const interval = Math.max(0, rr.intervalMs ?? 0);
@@ -1110,7 +1137,7 @@ export class MacroRunner {
             const timer = setTimeout(
                 () => {
                     this.resendTimers.delete(timer);
-                    void this.fireReplayResend(target, method, headers, payload);
+                    void this.fireReplayResend(target, method, headers, payload, binary);
                 },
                 delay + i * interval
             );
@@ -1127,7 +1154,8 @@ export class MacroRunner {
         target: string,
         method: 'POST' | 'GET',
         headers: Record<string, string>,
-        body: string
+        body: string,
+        binaryBase64 = false
     ): Promise<void> {
         const page = this.activePage;
         if (!page || page.isClosed()) {
@@ -1136,17 +1164,25 @@ export class MacroRunner {
         }
         try {
             await page.evaluate(
-                ({ url, m, h, b }) => {
+                ({ url, m, h, b, bin }) => {
+                    // payload 用 any:二进制路是 Uint8Array,规避 DOM BodyInit 泛型对 Uint8Array 的挑剔
+                    let payload: any;
+                    if (m !== 'GET') {
+                        // bin:base64 → 二进制串 → 逐字节 Uint8Array(还原任意二进制,含无效 UTF-8)
+                        payload = bin ? Uint8Array.from(atob(b), (c) => c.charCodeAt(0)) : b;
+                    }
                     void fetch(url, {
                         method: m,
                         headers: h,
-                        ...(m === 'GET' ? {} : { body: b }),
+                        ...(m === 'GET' ? {} : { body: payload }),
                         credentials: 'include',
                     }).catch(() => {});
                 },
-                { url: target, m: method, h: headers, b: body }
+                { url: target, m: method, h: headers, b: body, bin: binaryBase64 }
             );
-            logInfo(`回放请求重发器:已重发(页面内)${method} ${target}`);
+            logInfo(
+                `回放请求重发器:已重发(页面内)${method} ${target}${binaryBase64 ? '(文件字节体)' : ''}`
+            );
         } catch (err) {
             logError(`回放请求重发器:重发失败 [${target}]:${(err as Error).message}`);
         }

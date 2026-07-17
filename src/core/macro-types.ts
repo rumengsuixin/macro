@@ -358,6 +358,13 @@ export interface ResendRule {
     set?: Record<string, unknown>;
     append?: Record<string, unknown>;
     remove?: string[];
+    /**
+     * 可选,本地文件**绝对路径**。设了它则**整体**用该文件完整字节作重发 body,
+     * 忽略 set/append/remove/bodyType(二进制文件无法做字段级改写);
+     * content-type 保留触发请求原值(不强制 json/form)。读文件失败则**跳过本次重发**(不抛)。
+     * 仅回放端生效。典型用途:命中上传型触发后,用本地另一个 mp4 的字节作为重发体。
+     */
+    replaceWithFile?: string;
     /** 一次触发重发几次;缺省 1,归一化时 clamp 到 [1,100] */
     repeat?: number;
     /** repeat>1 时相邻两次重发的间隔(毫秒);缺省 0 */
