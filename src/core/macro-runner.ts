@@ -685,6 +685,13 @@ export class MacroRunner {
                     for (const rr of this.responseResendRules) {
                         try {
                             if (globToRegExp(rr.urlPattern).test(req.url())) {
+                                // 只在首次捕获 / 捕获的 URL 变化时打日志(高频轮询同一 URL 不刷屏)
+                                const prev = this.resendCaptures.get(rr.urlPattern);
+                                if (!prev || prev.url !== req.url()) {
+                                    logInfo(
+                                        `回放请求重发器(响应触发):已捕获待重发请求 [${rr.urlPattern}] ← ${req.method()} ${req.url()}`
+                                    );
+                                }
                                 this.resendCaptures.set(rr.urlPattern, {
                                     url: req.url(),
                                     method: req.method(),
