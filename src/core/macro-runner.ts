@@ -9,6 +9,7 @@ import {
     type Locator,
     type Route,
     type Request,
+    type CDPSession,
 } from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -43,6 +44,26 @@ import {
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
+
+/** CDP Fetch.requestPaused 事件里的 request 结构(取用到的字段;Playwright CDPSession 事件为弱类型) */
+interface CdpPausedRequest {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    /** 小文本 body 事件自带(字符串);二进制/大 body 走 postDataEntries */
+    postData?: string;
+    /** post data 分块,每块 bytes 为 base64(对 File/Blob 也保真,重组即完整字节) */
+    postDataEntries?: Array<{ bytes?: string }>;
+    hasPostData?: boolean;
+}
+
+/** CDP Fetch.requestPaused 事件参数(取用到的字段) */
+interface CdpRequestPaused {
+    requestId: string;
+    request: CdpPausedRequest;
+    /** 有值=响应阶段(dump 只配 Request 阶段,理论不出现) */
+    responseStatusCode?: number;
+}
 
 export class MacroRunner {
     private errorDir: string;
@@ -99,6 +120,10 @@ export class MacroRunner {
     private dumpSeq = 0;
     /** 落盘目录懒建标志(仿 TimelineRecorder.ready) */
     private dumpsReady = false;
+    /** 每页一个 CDP 会话(Fetch 域拦截,从 postDataEntries 取完整二进制;抓 File/Blob 上传体) */
+    private readonly dumpCdpSessions = new Map<Page, CDPSession>();
+    /** 所有活动 page 引用(初始页 + 每个弹窗):供 dump 热更新开启时补挂 CDP */
+    private readonly dumpPages = new Set<Page>();
 
     constructor(
         errorDir: string,
@@ -128,6 +153,7 @@ export class MacroRunner {
     cancel(): void {
         this.cancelled = true;
         this.clearResendTimers(); // 停止:清掉未触发的重发定时器
+        void this.detachAllDumpCdp(); // 停止:卸载 dump CDP 会话(须早于 context 关闭)
         if (this.activeContext) {
             // 关闭失败(如已关)静默忽略;正在进行的操作会抛 "Target closed" 由 run() 的 catch 兜住
             this.activeContext.close().catch(() => undefined);
@@ -310,12 +336,18 @@ export class MacroRunner {
             // 初始页已创建完毕(挂监听前),故此后每次 page 事件都是弹窗。
             activePage = page;
             this.activePage = page;
+            // 请求体落盘:CDP session 是 per-page,给初始页挂一个(dumpWant 时才真正 attach)
+            this.dumpPages.add(page);
+            void this.attachDumpCdp(page);
             context.on('page', (popup) => {
                 activePage = popup;
                 this.activePage = popup;
                 popup.setDefaultTimeout(this.timeoutMs);
                 popup.setDefaultNavigationTimeout(this.timeoutMs);
                 logInfo('检测到新标签页弹窗,已切换为活动页继续回放。');
+                // 弹窗也各自挂 CDP,保证在新标签页里的上传体也能落盘
+                this.dumpPages.add(popup);
+                void this.attachDumpCdp(popup);
             });
 
             // 通用下载捕获:挂在 context 上,回放过程中任何触发的下载都落盘
@@ -428,6 +460,8 @@ export class MacroRunner {
         } finally {
             // 先清未触发的重发定时器,避免它们在 context 关闭后 fire 抛 "Target closed"
             this.clearResendTimers();
+            await this.detachAllDumpCdp(); // 卸载 dump CDP 会话(须早于 context 关闭,同重发定时器)
+            this.dumpPages.clear();
             this.activePage = null; // 清活动页引用(重发用它);run 结束后页面即将关闭
             // 持久化 context 关闭即退浏览器进程;临时模式下额外关 browser。
             // 停止(cancel)时 context 可能已被关过,故各自 try/catch,避免二次 close 抛错覆盖返回值。
@@ -629,33 +663,9 @@ export class MacroRunner {
             }
         });
 
-        // ⑤ 请求体落盘观察监听:常挂、被动(不改原请求),靠 dumpWant 标志决定是否处理。
-        //    命中 dumps 规则(可选限 method)则取**完整二进制** body(postDataBuffer,非 postData string)
-        //    写成一个文件(缺省 .mp4)——用于抓取上传型接口的字节体(见 writeDumpFile)。
-        context.on('request', (req: Request) => {
-            try {
-                if (!this.dumpWant) {
-                    return;
-                }
-                if (isResendOrigin(req.headers())) {
-                    return; // 跳过工具自己发的重发请求(防抓到重发体)
-                }
-                const rule = matchRule(this.dumpRules, req.url());
-                if (!rule) {
-                    return;
-                }
-                if (rule.method && rule.method.toUpperCase() !== req.method().toUpperCase()) {
-                    return; // 配了 method 但不匹配
-                }
-                const buf = req.postDataBuffer(); // 原始字节 Buffer(保真二进制,不做 UTF-8 解码)
-                if (!buf || buf.length === 0) {
-                    return; // 无请求体(如 GET)自然跳过
-                }
-                this.writeDumpFile(rule, buf, req.url());
-            } catch {
-                /* 落盘支路不得影响主流程 */
-            }
-        });
+        // ⑤ 请求体落盘:不走被动 context.on('request')(其 postDataBuffer 对 File/Blob 上传体返回 null),
+        //    改为 per-page CDP Fetch 域拦截,从 Fetch.requestPaused 的 postDataEntries 取完整二进制。
+        //    CDP session 按页挂载(见 attachDumpCdp),在 run() 的 page 生命周期处接线,此处仅应用初始标志。
 
         // ③ 应用初始配置(初始改写注册须 await,保证 route 早于第一个 goto 就位)
         const initial = this.session.requestRules ?? { enabled: false, rules: [] };
@@ -839,6 +849,8 @@ export class MacroRunner {
             );
         }
         this.dumpWant = want;
+        // 落盘走 per-page CDP Fetch:开启则对所有已知 page 补挂/更新 patterns,关闭则全部卸载(热更新)
+        void this.refreshDumpCdp();
     }
 
     /**
@@ -859,6 +871,131 @@ export class MacroRunner {
         } catch (err) {
             logError(`回放请求体落盘:写文件失败(不影响回放):${(err as Error).message}`);
         }
+    }
+
+    // ===== 请求体落盘的 CDP Fetch 拦截(抓 File/Blob 上传体;Playwright postDataBuffer 对 Blob 返回 null)=====
+
+    /** dump 规则 → CDP Fetch.enable 的 patterns(只暂停命中 URL 的请求阶段,降开销) */
+    private dumpFetchPatterns(): Array<{ urlPattern: string; requestStage: 'Request' }> {
+        return this.dumpRules.map((r) => ({ urlPattern: r.urlPattern, requestStage: 'Request' }));
+    }
+
+    /**
+     * 从 CDP 暂停请求里重组**完整二进制**请求体:优先 postDataEntries(base64 分块,对 File/Blob 保真)
+     * 逐块 Buffer.concat;为空则回退事件自带 postData 字符串(小文本 body);都无返回 null。禁止截断。
+     */
+    private reassemblePostData(request: CdpPausedRequest): Buffer | null {
+        const entries = request.postDataEntries;
+        if (Array.isArray(entries) && entries.length > 0) {
+            const bufs: Buffer[] = [];
+            for (const e of entries) {
+                if (e && typeof e.bytes === 'string') {
+                    bufs.push(Buffer.from(e.bytes, 'base64'));
+                }
+            }
+            if (bufs.length > 0) {
+                return Buffer.concat(bufs);
+            }
+        }
+        if (typeof request.postData === 'string' && request.postData.length > 0) {
+            return Buffer.from(request.postData, 'utf8');
+        }
+        return null;
+    }
+
+    /**
+     * 给一个 page 挂 CDP Fetch 拦截:命中 dump 规则的请求在发出前暂停,取完整 body 落盘后立即放行。
+     * 幂等;不需要落盘(dumpWant=false)或已挂则跳过;attach 失败记告警、该页不落盘、不致命。
+     */
+    private async attachDumpCdp(page: Page): Promise<void> {
+        if (!this.dumpWant || this.dumpRules.length === 0 || this.dumpCdpSessions.has(page)) {
+            return;
+        }
+        const ctx = this.activeContext;
+        if (!ctx) {
+            return;
+        }
+        try {
+            const cdp = await ctx.newCDPSession(page);
+            this.dumpCdpSessions.set(page, cdp);
+            // 注:dump(独立 CDP Fetch)与改写/真拦截(Playwright route,底层亦 CDP Fetch)命中同一 URL 时,
+            // 两者各自拦截同一请求(实测共存不冲突、都生效);dump 抓到的 body 时序上可能是改写前或改写后。
+            cdp.on('Fetch.requestPaused', (params: CdpRequestPaused) => {
+                void this.onDumpRequestPaused(cdp, params);
+            });
+            await cdp.send('Fetch.enable', { patterns: this.dumpFetchPatterns() });
+        } catch (err) {
+            this.dumpCdpSessions.delete(page);
+            logError(`回放请求体落盘:CDP 挂载失败(该页不落盘,不影响回放):${(err as Error).message}`);
+        }
+    }
+
+    /** CDP Fetch.requestPaused 处理:命中 dump 规则则重组完整 body 落盘;**无论如何最后必须放行**。 */
+    private async onDumpRequestPaused(cdp: CDPSession, params: CdpRequestPaused): Promise<void> {
+        const { requestId, request } = params;
+        try {
+            // 只处理请求阶段(patterns 只配了 Request,响应阶段带 responseStatusCode,理论不会到这里,保险跳过)
+            if (params.responseStatusCode === undefined && !isResendOrigin(request.headers)) {
+                const rule = matchRule(this.dumpRules, request.url);
+                if (
+                    rule &&
+                    (!rule.method || rule.method.toUpperCase() === request.method.toUpperCase())
+                ) {
+                    const buf = this.reassemblePostData(request);
+                    if (buf && buf.length > 0) {
+                        this.writeDumpFile(rule, buf, request.url);
+                    }
+                }
+            }
+        } catch (err) {
+            logError(`回放请求体落盘:CDP 处理请求出错:${(err as Error).message}`);
+        }
+        // 铁律:每个暂停请求都必须放行,否则页面卡死
+        try {
+            await cdp.send('Fetch.continueRequest', { requestId });
+        } catch {
+            /* 请求/会话可能已失效,忽略 */
+        }
+    }
+
+    /**
+     * 落盘热更新:开启则对所有已知 page 补挂(未挂的)/重下发 patterns(已挂的),关闭则全部卸载。
+     * 与录制端 applyPatterns、回放端 applyReplay* 同构;在 applyReplayDump 与 page 生命周期处驱动。
+     */
+    private async refreshDumpCdp(): Promise<void> {
+        if (this.dumpWant && this.dumpRules.length > 0) {
+            for (const page of this.dumpPages) {
+                const existing = this.dumpCdpSessions.get(page);
+                if (!existing) {
+                    await this.attachDumpCdp(page);
+                } else {
+                    try {
+                        await existing.send('Fetch.enable', { patterns: this.dumpFetchPatterns() });
+                    } catch {
+                        /* 会话可能已失效,下次 attach 重建 */
+                    }
+                }
+            }
+        } else {
+            await this.detachAllDumpCdp();
+        }
+    }
+
+    /** 卸载所有 dump CDP 会话(Fetch.disable + detach;context 关闭后 transport 已断会抛,全 try/catch)。 */
+    private async detachAllDumpCdp(): Promise<void> {
+        for (const cdp of this.dumpCdpSessions.values()) {
+            try {
+                await cdp.send('Fetch.disable');
+            } catch {
+                /* 忽略 */
+            }
+            try {
+                await cdp.detach();
+            } catch {
+                /* 忽略 */
+            }
+        }
+        this.dumpCdpSessions.clear();
     }
 
     /**
