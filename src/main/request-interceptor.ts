@@ -605,7 +605,10 @@ export class RequestInterceptor {
         }
         const defaultCt =
             bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
-        const headers = buildResendHeaders(request.headers, contentType || defaultCt);
+        const headers = buildResendHeaders(request.headers, contentType || defaultCt, {
+            setHeaders: rr.setHeaders,
+            removeHeaders: rr.removeHeaders,
+        });
         const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
         const delay = Math.max(0, rr.delayMs ?? 0);
         const interval = Math.max(0, rr.intervalMs ?? 0);

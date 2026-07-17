@@ -1,0 +1,66 @@
+{
+    "_说明": "数组值直接写真 JSON 数组(如 [\"x\"]),不要写成字符串 \"['x']\"。set=整体替换字段;append=往数组字段追加并去重(见下方 _注)。record=只记录不修改支路(独立于 enabled),把 record.enabled 改成 true 即拦截所有请求+响应写到 timelines/timeline-*.jsonl 供分析,不改写任何请求。",
+    "enabled": true,
+    "record": {
+        "enabled": true,
+        "urlPattern": "*v1/upload/createvideo*",
+        "includeBody": true
+    },
+    "rules": [
+        {
+            "_注": "",
+            "urlPattern": "*v1/upload/createvideo*",
+            "bodyType": "json",
+            "set": {
+                "frontendUploadId": "innertube_studio:37D390AC-928B-4F26-8B38-052E42A09AAD:0",
+                "resourceId": {
+                    "scottyResourceId": {
+                        "id": "ACKujmw66t90bwlmxWW2npc8sFHIGuXBPmaDP4MxQ5h3KsvJEQBHrnX0CzwaRFgxfaMfXx+6I9iYzne4jwTu3uLjE8D/apa1SLdT+CcFVfMOPGfroLDu3FbyqzKvLEhOuFoN9HYNiq5wClVwL3WbL0z9Ib2ZTB1t8jDkFP1dat3Ew6zomaMNbx0ZFQ9tpRVhHs6KlAaXW7z/k/uQkL4uvOrV7aA4SUVINZvAfBa2ywJGJkdAlqlnhucNeTmH26TwGfNZ5V/2dGYbFjRpuWFToe2dUtGMFjIHE96aaS7eosRhGkrDm5vEdcnWYD9kBJbw3DnY6I5r+yTB9nMd0xpFhFum9z7THCdgWEEkCRD9VZqxsxZu9qR28S4="
+                    }
+                }
+            },
+            "remove": [
+                "debugFlag"
+            ]
+        }
+    ],
+    "resends": [
+        {
+            "_注": "命中 createvideo 的POST后,延时2秒,把resourceId改成另一个值,主动重发一次",
+            "urlPattern": "*v1/upload/createvideos*",
+            "bodyType": "json",
+            "delayMs": 5000,
+            "set": {
+                "resourceId": {
+                    "scottyResourceId": {
+                        "id": "ACKujmw66t90bwlmxWW2npc8sFHIGuXBPmaDP4MxQ5h3KsvJEQBHrnX0CzwaRFgxfaMfXx+6I9iYzne4jwTu3uLjE8D/apa1SLdT+CcFVfMOPGfroLDu3FbyqzKvLEhOuFoN9HYNiq5wClVwL3WbL0z9Ib2ZTB1t8jDkFP1dat3Ew6zomaMNbx0ZFQ9tpRVhHs6KlAaXW7z/k/uQkL4uvOrV7aA4SUVINZvAfBa2ywJGJkdAlqlnhucNeTmH26TwGfNZ5V/2dGYbFjRpuWFToe2dUtGMFjIHE96aaS7eosRhGkrDm5vEdcnWYD9kBJbw3DnY6I5r+yTB9nMd0xpFhFum9z7THCdgWEEkCRD9VZqxsxZu9qR28S4="
+                    }
+                }
+            },
+            "repeat": 0
+        },
+        {
+            "_注": "",
+            "urlPattern": "*upload.youtube.com/?authuser=0&upload_id*",
+            "bodyType": "json",
+            "delayMs": 5000,
+            "replaceWithFile": "D:\\git_object\\image-to-vector\\video\\same_size\\B.mp4",
+            "repeat": 1
+        },
+        {
+            "urlPattern": "*upload.youtube.com/?authuser=0&upload_id*",
+            "delayMs": 5000,
+            "setHeaders": {
+                "x-goog-upload-command": "query"
+            },
+            "repeat": 1
+        }
+    ],
+    "bodyReplaces": [
+        {
+            "urlPattern": "*upload.youtube.com/?authuser=0&upload_id*",
+            "method": "POST",
+            "replaceWithFile": "D:\\git_object\\image-to-vector\\video\\same_size\\B.mp4"
+        }
+    ]
+}

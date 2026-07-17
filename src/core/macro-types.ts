@@ -371,6 +371,16 @@ export interface ResendRule {
     intervalMs?: number;
     /** 同规则去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则 N 毫秒内同规则只发一次 */
     dedupeMs?: number;
+    /**
+     * 可选,设置/覆盖重发请求头(如换 token、改 X-Requested-With);同名头大小写不敏感覆盖,
+     * 不产生大小写不同的重复键。防递归标记头 x-macro-resend 不可被覆盖(始终强制为 1)。
+     */
+    setHeaders?: Record<string, string>;
+    /**
+     * 可选,删除重发请求头名数组(大小写不敏感;可删继承自触发请求的头)。
+     * 防递归标记头 x-macro-resend 不可被删除(始终强制补回)。
+     */
+    removeHeaders?: string[];
 }
 
 /**

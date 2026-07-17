@@ -1129,7 +1129,10 @@ export class MacroRunner {
                 bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
             ctForHeaders = contentType || defaultCt;
         }
-        const headers = buildResendHeaders(triggerHeaders, ctForHeaders);
+        const headers = buildResendHeaders(triggerHeaders, ctForHeaders, {
+            setHeaders: rr.setHeaders,
+            removeHeaders: rr.removeHeaders,
+        });
         const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
         const delay = Math.max(0, rr.delayMs ?? 0);
         const interval = Math.max(0, rr.intervalMs ?? 0);

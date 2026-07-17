@@ -273,11 +273,13 @@ export function resolveResendTarget(targetUrl: string | undefined, triggerUrl: s
  * 组装重发请求头:拷贝触发请求头(保留 Authorization / X-CSRF-Token 等业务头),
  * 排除浏览器会自置或禁止手动设置的头(host/content-length/connection/cookie/origin/referer/
  * content-type——cookie 由发送端凭据自动带,content-type 统一用参数值避免大小写重复键),
- * 最后补 Content-Type 与重发标记头。
+ * 补 Content-Type,再应用用户 override(setHeaders 覆盖 / removeHeaders 删除,均大小写不敏感),
+ * 最后补重发标记头。标记头放在最后无条件写入,确保不被 override 破坏(防递归核心)。
  */
 export function buildResendHeaders(
     triggerHeaders: Record<string, string>,
-    contentType: string
+    contentType: string,
+    overrides?: { setHeaders?: Record<string, string>; removeHeaders?: string[] }
 ): Record<string, string> {
     const forbidden = new Set([
         'host',
@@ -297,6 +299,25 @@ export function buildResendHeaders(
     if (contentType) {
         out['Content-Type'] = contentType;
     }
-    out[RESEND_MARK_HEADER] = '1';
+    // 用户请求头改写:大小写不敏感,先删掉 remove∪set 命中的键(允许覆盖 Content-Type),再写 set 新值。
+    // 借鉴 rewriteResponseHeaderRecord 的 dropLower 写法,保证不出现大小写不同的重复键。
+    if (overrides) {
+        const setEntries = overrides.setHeaders ? Object.entries(overrides.setHeaders) : [];
+        const removeNames = overrides.removeHeaders ?? [];
+        if (setEntries.length || removeNames.length) {
+            const dropLower = new Set(
+                [...removeNames, ...setEntries.map(([k]) => k)].map((n) => n.toLowerCase())
+            );
+            for (const k of Object.keys(out)) {
+                if (dropLower.has(k.toLowerCase())) {
+                    delete out[k];
+                }
+            }
+            for (const [k, v] of setEntries) {
+                out[k] = String(v);
+            }
+        }
+    }
+    out[RESEND_MARK_HEADER] = '1'; // 放最后,保护防递归标记不被 override 覆盖/删除
     return out;
 }

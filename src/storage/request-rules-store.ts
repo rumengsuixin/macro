@@ -152,6 +152,14 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
     if (typeof r.repeat === 'number' && Number.isFinite(r.repeat) && r.repeat >= 1) {
         rule.repeat = Math.min(Math.floor(r.repeat), 100);
     }
+    // 可选:改重发请求头(与 responseRules 的 setHeaders/removeHeaders 同款校验,复用 normalizeStringMap)
+    const setHeaders = normalizeStringMap(r.setHeaders);
+    if (setHeaders) {
+        rule.setHeaders = setHeaders;
+    }
+    if (Array.isArray(r.removeHeaders)) {
+        rule.removeHeaders = r.removeHeaders.filter((x): x is string => typeof x === 'string');
+    }
     return rule;
 }
 
