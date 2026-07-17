@@ -14,18 +14,18 @@
         "resends[].delayMs": "命中后首次重发延时(毫秒),间隔 n 秒 = n*1000;缺省 0 立即",
         "resends[].set/append/remove": "对重发副本改哪些参数(语义同 rules,复用同一改写逻辑;都不填=原样重发)",
         "resends[].bodyType": "可选 json | form(同 rules)",
-        "resends[].targetUrl": "可选,重发目标 URL;缺省=触发请求同 URL(相对 URL 相对触发请求绝对化)",
-        "resends[].method": "可选 POST | GET;缺省 POST",
+        "resends[].method": "可选 POST | GET;缺省 POST。仅请求触发生效;响应触发用捕获请求的原方法",
         "resends[].repeat": "可选,一次触发重发几次;缺省 1,上限 100。intervalMs 为相邻两次间隔(毫秒)",
         "resends[].dedupeMs": "可选去抖窗口(毫秒);缺省 0=每次命中都重发。设 N 则同规则 N 毫秒内只发一次(防高频触发放大)",
         "resends[].replaceWithFile": "可选,本地文件**绝对路径**;设了它则整体用该文件完整字节作重发 body,忽略 set/append/remove/bodyType,content-type 保留触发请求原值。读文件失败则跳过本次重发。Windows 路径反斜杠要转义,如 D:\\\\videos\\\\new.mp4",
         "resends[].setHeaders": "可选,设置/覆盖重发请求头(如换 token、改 X-Requested-With);同名头大小写不敏感覆盖,不产生重复键。标记头 x-macro-resend 不可被覆盖(始终强制为 1)",
         "resends[].removeHeaders": "可选,删除重发请求头名数组(大小写不敏感;可删继承自触发请求的头)。标记头 x-macro-resend 不可被删除",
-        "resends[].responseTrigger": "可选(仅回放端):设了它则本条改由**响应**触发,而非请求侧 urlPattern 命中即触发。此时 urlPattern 匹配的是响应的 URL;当 responseTrigger 的 status/headers/bodyJson 条件**全部满足(AND)**时,才以「产生该响应的请求」为蓝本发起重发(仍用上面的 targetUrl/set/replaceWithFile/setHeaders/delayMs/repeat 等)。三组子条件都可选,都不写=该 URL 任意响应都触发",
+        "resends[].responseTrigger": "可选(仅回放端):设了它则本条改由**响应**触发。此时顶层 urlPattern = 要**捕获并重发的请求**(回放中抓到命中它的真实请求,记下 url/method/头/体);当 responseTrigger.triggerUrl 的响应满足 status/headers/bodyJson 条件**全部满足(AND)**时,重发捕获的那个请求(仍用上面 set/replaceWithFile/setHeaders/delayMs/repeat 修饰)。即「监听 triggerUrl 的响应 → 重发 urlPattern 捕获的请求」",
+        "resends[].responseTrigger.triggerUrl": "**必填**:监听哪个响应作为触发闸门(CDP glob 匹配响应 URL)。缺失则整条规则被丢弃",
         "resends[].responseTrigger.status": "可选,响应状态码需等于此值(如 200)",
         "resends[].responseTrigger.headers": "可选,响应头条件对象:这些头需全部相等才命中(AND,头名大小写不敏感,值精确相等)。如 {\"x-ready\":\"1\"}",
         "resends[].responseTrigger.bodyJson": "可选,响应体 JSON 条件对象:点路径→期望值,全部满足才命中(AND)。响应体先 JSON.parse,按 a.b.c 逐层取值,String() 后与期望值精确等值比较。如 {\"data.state\":\"done\"}。解析失败/路径不存在/读不到体=不命中",
-        "_响应触发说明": "响应体读取走 Playwright 网络层(不受页面 CORS 限制,能读跨域响应体);但重发本身仍是页面内 fetch,需当前有活动页且宏此刻仍在跑(如带 pause 步保活),否则重发被跳过。有 bodyJson 条件才会异步读响应体(status/headers 先筛),把开销降到最低",
+        "_响应触发说明": "响应体读取走 Playwright 网络层(不受页面 CORS 限制,能读跨域响应体);但重发本身仍是页面内 fetch,需当前有活动页且宏此刻仍在跑(如带 pause 步保活),否则重发被跳过。urlPattern 请求须先于 triggerUrl 响应被捕获,否则跳过+日志。捕获上传型(File/Blob)请求的 body 会为空(被动读 Blob 返回 null),此类要重发完整字节须配 replaceWithFile(url/头仍能捕获)。有 bodyJson 条件才异步读响应体(status/headers 先筛)",
         "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。两端都在页面上下文里跑 fetch(带页面 cookie/登录态,DevTools Network 可见):录制端在录制 webview、回放端在当前活动页。跨域受 CSP/CORS 限制、需当前有活动页。配 replaceWithFile 时文件经 base64 传入页面重建为二进制体(能发 mp4 等任意字节),超大文件慎用(内存开销比 bodyReplaces 大,超大上传优先用 bodyReplaces)",
         "responseRules[]": "「响应头条件改写」支路(受 enabled 总开关管,与 rules/resends 物理分开):命中 urlPattern 的响应,当其响应头满足 when 条件时,改写响应头。**条件读的是响应头、动作改的也是响应头**。录制端走 CDP Fetch 响应阶段、回放端走 Playwright route.fetch()+route.fulfill()",
         "responseRules[].urlPattern": "CDP glob 匹配响应对应的请求 URL(同 rules;与 method 无关,GET 也能改)",
@@ -105,14 +105,14 @@
             "removeHeaders": ["X-Requested-With"]
         },
         {
-            "_注": "响应触发(仅回放端):当 /api/status 的响应 status=200、响应头 x-ready=1 且响应体 JSON 的 data.state=done 时,延时 800ms 往 /api/next 发一个新请求(条件全满足 AND 才触发)",
-            "urlPattern": "*/api/status*",
+            "_注": "响应触发(仅回放端):捕获命中 /api/submit 的请求;当 /api/status 的响应 status=200、响应头 x-ready=1 且响应体 JSON 的 data.state=done 时(AND),延时 800ms 重发捕获的 submit 请求",
+            "urlPattern": "*/api/submit*",
             "responseTrigger": {
+                "triggerUrl": "*/api/status*",
                 "status": 200,
                 "headers": { "x-ready": "1" },
                 "bodyJson": { "data.state": "done" }
             },
-            "targetUrl": "/api/next",
             "delayMs": 800,
             "repeat": 1
         }

@@ -338,13 +338,17 @@ export interface RequestRule {
 }
 
 /**
- * 「重发型」拦截规则的**响应条件触发器**(可选)。设了 ResendRule.responseTrigger 时,
- * 该规则改由**响应观察器**驱动(而非请求侧 urlPattern 命中即触发):命中 urlPattern 的**响应**,
- * 当 status / headers / bodyJson 三组条件**全部满足(AND)**时,才以「产生该响应的那个请求」为蓝本
- * 发起重发。仅回放端生效(Playwright 在网络层读响应体,不受页面 CORS 限制)。
- * 三组均可选;若 responseTrigger 存在但无任何子条件,则该 URL 的**任意响应**都触发。
+ * 「重发型」拦截规则的**响应条件触发器**。设了 ResendRule.responseTrigger 时,该规则改由**响应观察器**驱动
+ * (而非请求侧 urlPattern 命中即触发):
+ *   ① 回放期间**捕获**命中顶层 urlPattern 的请求(记下 url/method/头/体,存最近一次);
+ *   ② 当命中 `triggerUrl` 的**响应**满足 status / headers / bodyJson 三组条件**全部满足(AND)**时,
+ *      把①捕获到的请求原样(可叠加 set/replaceWithFile/setHeaders 修饰)重发。
+ * 即「监听 triggerUrl 的响应 → 重发 urlPattern 捕获的请求」。仅回放端生效
+ * (Playwright 在网络层读响应体,不受页面 CORS 限制)。status/headers/bodyJson 均可选、都不给则该响应恒满足条件。
  */
 export interface ResendResponseTrigger {
+    /** **必填**:监听哪个响应作为触发闸门(CDP glob 匹配响应 URL);缺失则整条规则被丢弃 */
+    triggerUrl: string;
     /** 可选:响应状态码需**等于**此值(如 200) */
     status?: number;
     /** 可选:响应头条件,这些头需**全部相等**才命中(AND,头名大小写不敏感,值精确相等) */
@@ -364,13 +368,15 @@ export interface ResendResponseTrigger {
  * 总开关统管(enabled=true 且有 resends 才生效)。重发请求带标记头 x-macro-resend 防递归自触发。
  */
 export interface ResendRule {
-    /** 触发观察的 URL 匹配模式(CDP glob,`*` 通配);唯一必填。带 responseTrigger 时匹配**响应 URL** */
+    /**
+     * 触发观察的 URL 匹配模式(CDP glob,`*` 通配);唯一必填。
+     * - 不带 responseTrigger(请求触发):命中该 URL 的 POST 请求即改参重发它自己;
+     * - 带 responseTrigger(响应触发):这是**要捕获并重发的请求**(见 ResendResponseTrigger)。
+     */
     urlPattern: string;
     /** 命中后首次重发延时(毫秒),"间隔 n 秒"= n*1000;缺省 0=立即 */
     delayMs?: number;
-    /** 重发目标 URL;缺省=触发请求同 URL(相对 URL 相对触发请求绝对化) */
-    targetUrl?: string;
-    /** 重发使用的 method;缺省 'POST' */
+    /** 重发使用的 method;缺省 'POST'。**仅请求触发生效;响应触发用捕获请求的原方法、忽略此字段** */
     method?: 'POST' | 'GET';
     /** body 类型;省略则按触发请求 Content-Type 嗅探(语义同 RequestRule) */
     bodyType?: 'json' | 'form';
@@ -402,9 +408,10 @@ export interface ResendRule {
      */
     removeHeaders?: string[];
     /**
-     * 可选,**响应条件触发器**。设了它 → 本规则改由「响应观察器」触发(urlPattern 匹配响应 URL),
-     * status/headers/bodyJson 条件全部满足(AND)才重发;不设 = 保持原「请求侧 urlPattern 命中即触发」。
-     * 仅回放端生效。命中后仍复用上面全部动作字段(targetUrl/set/replaceWithFile/setHeaders/delayMs/repeat…)。
+     * 可选,**响应条件触发器**。设了它 → 本规则改由「响应观察器」触发:捕获命中 urlPattern 的请求,
+     * 当 responseTrigger.triggerUrl 的响应满足条件(AND)时重发捕获的请求;不设 = 保持原「请求侧
+     * urlPattern 命中即触发」。仍复用上面的动作字段(set/replaceWithFile/setHeaders/delayMs/repeat…)。
+     * 仅回放端生效。triggerUrl 必填,缺失则整条规则被归一化丢弃。
      */
     responseTrigger?: ResendResponseTrigger;
 }

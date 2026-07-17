@@ -36,12 +36,12 @@ import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
 import {
     matchRule,
+    globToRegExp,
     decideBodyType,
     rewritePostBody,
     rewriteResponseHeaderRecord,
     headerValue,
     isResendOrigin,
-    resolveResendTarget,
     buildResendHeaders,
     responseTriggerMet,
     triggerNeedsBody,
@@ -113,6 +113,11 @@ export class MacroRunner {
     private responseResendRules: ResendRule[] = [];
     /** 是否启用响应触发重发(enabled 且有响应触发规则) */
     private resendResponseWant = false;
+    /** 响应触发的请求捕获:规则 urlPattern → 最近一次命中它的请求(供触发时重发,后到覆盖) */
+    private readonly resendCaptures = new Map<
+        string,
+        { url: string; method: string; headers: Record<string, string>; body: string }
+    >();
     /** 未触发的重发定时器集合:cancel/run 结束/热关闭时统一清理,防泄漏与 "Target closed" */
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
@@ -656,28 +661,50 @@ export class MacroRunner {
             }
         });
 
-        // ④ 重发观察监听:常挂、被动(不改原请求),靠 resendWant 标志决定是否处理。
-        //    命中 resends 规则 → 延时改参、主动发新请求(见 scheduleReplayResend)。
+        // ④ 重发观察监听:常挂、被动(不改原请求)。两支:
+        //    A. 请求触发(resendWant,仅 POST):命中 resends 规则 → 延时改参、主动发新请求;
+        //    B. 响应触发捕获(resendResponseWant,不限方法):命中 responseTrigger 规则的 urlPattern →
+        //       把该请求 url/method/头/体存进 resendCaptures(最近一次),等其 triggerUrl 的响应满足条件再重发。
         context.on('request', (req: Request) => {
             try {
-                if (!this.resendWant || req.method().toUpperCase() !== 'POST') {
-                    return;
-                }
                 if (isResendOrigin(req.headers())) {
-                    return; // 我们自己发的重发请求,跳过(防递归自触发)
+                    return; // 我们自己发的重发请求,跳过(防递归自触发 + 不被自己捕获)
                 }
-                const rr = matchRule(this.resendRules, req.url());
-                if (!rr) {
-                    return;
+                if (this.resendWant && req.method().toUpperCase() === 'POST') {
+                    const rr = matchRule(this.resendRules, req.url());
+                    if (rr) {
+                        this.scheduleReplayResend(rr, {
+                            url: req.url(),
+                            method: rr.method ?? 'POST',
+                            headers: req.headers(),
+                            body: req.postData() ?? '',
+                        });
+                    }
                 }
-                this.scheduleReplayResend(rr, req.url(), req.headers(), req.postData() ?? '');
+                if (this.resendResponseWant) {
+                    for (const rr of this.responseResendRules) {
+                        try {
+                            if (globToRegExp(rr.urlPattern).test(req.url())) {
+                                this.resendCaptures.set(rr.urlPattern, {
+                                    url: req.url(),
+                                    method: req.method(),
+                                    headers: req.headers(),
+                                    body: req.postData() ?? '',
+                                });
+                            }
+                        } catch {
+                            /* 非法 pattern 跳过 */
+                        }
+                    }
+                }
             } catch {
                 /* 重发支路不得影响主流程 */
             }
         });
 
         // ⑥ 响应条件触发重发观察监听:常挂、被动(不改响应),靠 resendResponseWant 标志决定是否处理。
-        //    命中 responseTrigger 规则且 status/headers/bodyJson 条件满足 → 以「产生该响应的请求」为蓝本重发。
+        //    命中某规则的 responseTrigger.triggerUrl 且 status/headers/bodyJson 条件满足 →
+        //    重发④已捕获的、命中该规则 urlPattern 的那个请求。
         context.on('response', (resp: Response) => {
             void this.handleResponseTrigger(resp).catch(() => undefined);
         });
@@ -863,7 +890,9 @@ export class MacroRunner {
         if (!this.resendResponseWant && respWant) {
             logInfo(
                 `回放请求重发器(响应触发):已启用,共 ${this.responseResendRules.length} 条规则,` +
-                    `匹配响应 URL:${this.responseResendRules.map((r) => r.urlPattern).join(' | ')}`
+                    `监听→重发:${this.responseResendRules
+                        .map((r) => `${r.responseTrigger?.triggerUrl} → ${r.urlPattern}`)
+                        .join(' | ')}`
             );
         } else if (this.resendResponseWant && !respWant) {
             logInfo('回放请求重发器(响应触发):已停用。');
@@ -873,41 +902,57 @@ export class MacroRunner {
     }
 
     /**
-     * 响应条件触发重发:被动观察每条响应,命中 responseTrigger 规则且条件满足时,
-     * 以「产生该响应的那个请求」为蓝本复用 scheduleReplayResend 发起重发。
+     * 响应条件触发重发:被动观察每条响应,遍历所有响应触发规则——命中某规则的 triggerUrl 且
+     * status/headers/bodyJson 条件满足时,重发④已捕获的、命中该规则 urlPattern 的那个请求。
      * 门控:resendResponseWant;防递归:自发重发的响应(其请求带 x-macro-resend)跳过。
-     * 读体竞态(context 关闭)与任何异常都吞掉,不得影响主流程。
+     * 未捕获到目标请求 → 记日志跳过本次(不中断回放)。读体竞态(context 关闭)与任何异常都吞掉。
      */
     private async handleResponseTrigger(resp: Response): Promise<void> {
         try {
             if (!this.resendResponseWant) {
                 return;
             }
-            const req = resp.request();
-            const reqHeaders = req.headers();
-            if (isResendOrigin(reqHeaders)) {
+            if (isResendOrigin(resp.request().headers())) {
                 return; // 我们自己发的重发的响应,跳过(防递归自触发)
             }
-            const rr = matchRule(this.responseResendRules, resp.url());
-            if (!rr || !rr.responseTrigger) {
-                return;
-            }
-            const trigger = rr.responseTrigger;
             const status = resp.status();
             const headers = resp.headers();
-            // 有 body 条件才异步读体(读不到=竞态/中断,放弃本次触发);无 body 条件不读、零开销
+            const url = resp.url();
+            // 响应体最多懒读一次,多条规则命中同一响应时复用
             let bodyText: string | null = null;
-            if (triggerNeedsBody(trigger)) {
-                try {
-                    bodyText = await resp.text();
-                } catch {
-                    return;
+            let bodyRead = false;
+            for (const rr of this.responseResendRules) {
+                const trigger = rr.responseTrigger;
+                if (!trigger || !trigger.triggerUrl) {
+                    continue;
                 }
+                try {
+                    if (!globToRegExp(trigger.triggerUrl).test(url)) {
+                        continue;
+                    }
+                } catch {
+                    continue; // 非法 triggerUrl 跳过
+                }
+                if (triggerNeedsBody(trigger) && !bodyRead) {
+                    bodyRead = true;
+                    try {
+                        bodyText = await resp.text();
+                    } catch {
+                        bodyText = null; // 读不到(竞态/中断)→ 有 body 条件的规则将不命中
+                    }
+                }
+                if (!responseTriggerMet(trigger, status, headers, bodyText)) {
+                    continue;
+                }
+                const cap = this.resendCaptures.get(rr.urlPattern);
+                if (!cap) {
+                    logInfo(
+                        `回放请求重发器(响应触发):命中 triggerUrl 但尚未捕获到 [${rr.urlPattern}] 的请求,跳过本次重发。`
+                    );
+                    continue;
+                }
+                this.scheduleReplayResend(rr, cap);
             }
-            if (!responseTriggerMet(trigger, status, headers, bodyText)) {
-                return;
-            }
-            this.scheduleReplayResend(rr, req.url(), reqHeaders, req.postData() ?? '');
         } catch {
             /* 响应触发支路不得影响主流程 */
         }
@@ -1141,14 +1186,13 @@ export class MacroRunner {
     }
 
     /**
-     * 命中重发规则后调度:去抖 → 算目标/类型/改参/头 → repeat 次 setTimeout 延时发射。
-     * 不改原请求(原请求已由页面正常发出),这里只额外发新请求。
+     * 命中重发规则后调度:去抖 → 算类型/改参/头 → repeat 次 setTimeout 延时发射。
+     * base = 重发蓝本(url/method/头/体):请求触发时是触发请求本身,响应触发时是捕获到的 urlPattern 请求。
+     * 目标 URL 恒为 base.url(已无 targetUrl 概念)。不改原请求,这里只额外发新请求。
      */
     private scheduleReplayResend(
         rr: ResendRule,
-        triggerUrl: string,
-        triggerHeaders: Record<string, string>,
-        originalBody: string
+        base: { url: string; method: string; headers: Record<string, string>; body: string }
     ): void {
         // 去抖:同规则 dedupeMs 内只发一次(默认 0=每次命中都发)
         if (rr.dedupeMs && rr.dedupeMs > 0) {
@@ -1159,8 +1203,11 @@ export class MacroRunner {
             }
             this.resendLastFireAt.set(rr.urlPattern, now);
         }
-        const target = resolveResendTarget(rr.targetUrl, triggerUrl);
-        const method = rr.method ?? 'POST';
+        const target = base.url;
+        const method = base.method || 'POST';
+        const isGet = method.toUpperCase() === 'GET';
+        const triggerHeaders = base.headers;
+        const originalBody = base.body;
         const contentType = headerValue(triggerHeaders, 'content-type');
 
         // 两路产出统一的 (payload, binary, ctForHeaders):
@@ -1169,7 +1216,7 @@ export class MacroRunner {
         let payload: string;
         let binary = false;
         let ctForHeaders: string;
-        if (rr.replaceWithFile && rr.replaceWithFile.trim() && method !== 'GET') {
+        if (rr.replaceWithFile && rr.replaceWithFile.trim() && !isGet) {
             // 文件整体替换路:读字节 → base64(文件只读一次,repeat 个定时器复用);读失败则跳过本次重发
             let buf: Buffer;
             try {
@@ -1228,7 +1275,7 @@ export class MacroRunner {
      */
     private async fireReplayResend(
         target: string,
-        method: 'POST' | 'GET',
+        method: string,
         headers: Record<string, string>,
         body: string,
         binaryBase64 = false
@@ -1241,16 +1288,17 @@ export class MacroRunner {
         try {
             await page.evaluate(
                 ({ url, m, h, b, bin }) => {
+                    const noBody = m.toUpperCase() === 'GET' || m.toUpperCase() === 'HEAD';
                     // payload 用 any:二进制路是 Uint8Array,规避 DOM BodyInit 泛型对 Uint8Array 的挑剔
                     let payload: any;
-                    if (m !== 'GET') {
+                    if (!noBody) {
                         // bin:base64 → 二进制串 → 逐字节 Uint8Array(还原任意二进制,含无效 UTF-8)
                         payload = bin ? Uint8Array.from(atob(b), (c) => c.charCodeAt(0)) : b;
                     }
                     void fetch(url, {
                         method: m,
                         headers: h,
-                        ...(m === 'GET' ? {} : { body: payload }),
+                        ...(noBody ? {} : { body: payload }),
                         credentials: 'include',
                     }).catch(() => {});
                 },
@@ -1264,13 +1312,14 @@ export class MacroRunner {
         }
     }
 
-    /** 清空所有未触发的重发定时器(cancel / run 结束 / 热关闭时调用) */
+    /** 清空所有未触发的重发定时器 + 去抖记录 + 响应触发捕获(cancel / run 结束 / 热关闭时调用) */
     private clearResendTimers(): void {
         for (const t of this.resendTimers) {
             clearTimeout(t);
         }
         this.resendTimers.clear();
         this.resendLastFireAt.clear();
+        this.resendCaptures.clear();
     }
 
     /**

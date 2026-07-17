@@ -323,23 +323,6 @@ export function isResendOrigin(headers: Record<string, string>): boolean {
 }
 
 /**
- * 计算重发目标 URL:
- * - targetUrl 空 → 用触发请求 URL 本身;
- * - targetUrl 相对 → 相对触发请求 URL 绝对化;
- * - 解析失败 → 原样返回 targetUrl(交由发送端处理)。
- */
-export function resolveResendTarget(targetUrl: string | undefined, triggerUrl: string): string {
-    if (!targetUrl || !targetUrl.trim()) {
-        return triggerUrl;
-    }
-    try {
-        return new URL(targetUrl, triggerUrl).toString();
-    } catch {
-        return targetUrl;
-    }
-}
-
-/**
  * 组装重发请求头:拷贝触发请求头(保留 Authorization / X-CSRF-Token 等业务头),
  * 排除浏览器会自置或禁止手动设置的头(host/content-length/connection/cookie/origin/referer/
  * content-type——cookie 由发送端凭据自动带,content-type 统一用参数值避免大小写重复键),

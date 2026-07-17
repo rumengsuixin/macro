@@ -19,7 +19,6 @@ import {
     rewriteResponseHeaderEntries,
     headerValue,
     isResendOrigin,
-    resolveResendTarget,
     buildResendHeaders,
 } from '../core/request-rewrite';
 import { TimelineRecorder } from '../core/timeline-recorder';
@@ -589,7 +588,7 @@ export class RequestInterceptor {
             }
             this.resendLastFireAt.set(rr.urlPattern, now);
         }
-        const target = resolveResendTarget(rr.targetUrl, request.url);
+        const target = request.url; // targetUrl 已移除,重发恒打回触发请求 URL
         const method = rr.method ?? 'POST';
         const contentType = headerValue(request.headers, 'content-type');
         const bodyType = decideBodyType(rr, contentType, originalBody || '');
