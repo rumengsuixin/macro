@@ -44,6 +44,7 @@ import {
     rewriteRequestHeaderRecord,
     headerValue,
     isResendOrigin,
+    resendHop,
     buildResendHeaders,
     responseTriggerMet,
     triggerNeedsBody,
@@ -129,6 +130,11 @@ export class MacroRunner {
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
     private readonly resendLastFireAt = new Map<string, number>();
+    /**
+     * 响应触发的**链式跳数上限**(熔断阈值):触发响应所属请求跳数达此值即不再继续触发。
+     * 支持「连环触发」的同时防无限自环/互环。由 request-rules.json 的 maxResendHops 覆盖,缺省 5。
+     */
+    private maxResendHops = 5;
     // --- 「请求体落盘(dump)」支路运行期状态(受 enabled 总开关管,与改写共用 fs.watchFile 热更新) ---
     /** 请求体落盘输出目录;缺省回退到 errorDir 同级的 dumps */
     private dumpsDir: string;
@@ -915,6 +921,14 @@ export class MacroRunner {
      * 关→开记日志;两组均关闭时清掉未触发的定时器(定时器共享,热关即时停)。
      */
     private applyReplayResend(cfg: RequestRulesConfig): void {
+        // 链式跳数上限:有效正整数才覆盖默认 5,clamp 到 [1,100](与 store 归一化一致,双保险)
+        if (
+            typeof cfg.maxResendHops === 'number' &&
+            Number.isFinite(cfg.maxResendHops) &&
+            cfg.maxResendHops >= 1
+        ) {
+            this.maxResendHops = Math.min(Math.floor(cfg.maxResendHops), 100);
+        }
         const all = cfg.resends ?? [];
         this.resendRules = all.filter((r) => !r.responseTrigger);
         this.responseResendRules = all.filter((r) => !!r.responseTrigger);
@@ -960,12 +974,22 @@ export class MacroRunner {
             if (!this.resendResponseWant) {
                 return;
             }
-            if (isResendOrigin(resp.request().headers())) {
-                return; // 我们自己发的重发的响应,跳过(防递归自触发)
+            const reqHeaders = resp.request().headers(); // triggerUrl 那条请求的头(供 requestHeaders 条件用 + 读跳数)
+            // 链式熔断:触发响应所属请求已达跳数上限 → 不再继续触发(支持连环的同时防无限自环/互环)。
+            // 真实浏览器请求 hop=0 正常放行;工具重发的响应带 hop>=1,未达上限时也放行以支持连环触发。
+            const triggerHop = resendHop(reqHeaders);
+            if (triggerHop >= this.maxResendHops) {
+                const sig = `hopcap:${triggerHop}`;
+                if (!this.resendMissWarned.has(sig)) {
+                    this.resendMissWarned.add(sig);
+                    logInfo(
+                        `回放请求重发器(响应触发):链式重发已达跳数上限 ${this.maxResendHops}(当前第 ${triggerHop} 跳),熔断,不再继续触发(防无限自环)。`
+                    );
+                }
+                return;
             }
             const status = resp.status();
             const headers = resp.headers();
-            const reqHeaders = resp.request().headers(); // triggerUrl 那条请求的头(供 requestHeaders 条件用)
             const url = resp.url();
             // 响应体最多懒读一次,多条规则命中同一响应时复用
             let bodyText: string | null = null;
@@ -1009,7 +1033,8 @@ export class MacroRunner {
                     );
                     continue;
                 }
-                this.scheduleReplayResend(rr, cap);
+                // 新重发跳数 = 触发源跳数 + 1(链式接力;真实源 hop0 → 首发 hop1)
+                this.scheduleReplayResend(rr, cap, triggerHop + 1);
             }
         } catch {
             /* 响应触发支路不得影响主流程 */
@@ -1250,7 +1275,8 @@ export class MacroRunner {
      */
     private scheduleReplayResend(
         rr: ResendRule,
-        base: { url: string; method: string; headers: Record<string, string>; body: string }
+        base: { url: string; method: string; headers: Record<string, string>; body: string },
+        hop = 1
     ): void {
         // 去抖:同规则 dedupeMs 内只发一次(默认 0=每次命中都发)
         if (rr.dedupeMs && rr.dedupeMs > 0) {
@@ -1307,10 +1333,15 @@ export class MacroRunner {
                 bodyType === 'json' ? 'application/json' : 'application/x-www-form-urlencoded';
             ctForHeaders = contentType || defaultCt;
         }
-        const headers = buildResendHeaders(triggerHeaders, ctForHeaders, {
-            setHeaders: rr.setHeaders,
-            removeHeaders: rr.removeHeaders,
-        });
+        const headers = buildResendHeaders(
+            triggerHeaders,
+            ctForHeaders,
+            {
+                setHeaders: rr.setHeaders,
+                removeHeaders: rr.removeHeaders,
+            },
+            hop // 链上跳数写进标记头,供响应触发的熔断判定(真实源→首发 hop1,连环逐跳 +1)
+        );
         const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
         const delay = Math.max(0, rr.delayMs ?? 0);
         const interval = Math.max(0, rr.intervalMs ?? 0);

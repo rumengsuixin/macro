@@ -505,12 +505,31 @@ export function rewriteResponseHeaderEntries(
 
 // ── 「重发型」拦截支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
 
-/** 重发请求的标记头名:带此头即为本工具主动发出的重发请求,观察路径识别到应整体跳过(防递归自触发) */
+/**
+ * 重发请求的标记头名:带此头即为本工具主动发出的重发请求。
+ * 头**值 = 该请求在重发链上的跳数(hop)**:真实浏览器请求不带此头(视为第 0 跳),
+ * 第 k 次重发带值 "k"。用于两件事:
+ *  - 是否重发来源(isResendOrigin):route 改写 / dump / 请求捕获三处据此「不再加工重发请求」;
+ *  - 链式熔断(resendHop + 上限判定):响应触发放开对重发响应的观察,但按跳数封顶防无限。
+ */
 export const RESEND_MARK_HEADER = 'x-macro-resend';
 
-/** 判断一个请求是否是我们自己发出的重发请求(大小写不敏感判标记头) */
+/** 判断一个请求是否是我们自己发出的重发请求(大小写不敏感判标记头存在与否) */
 export function isResendOrigin(headers: Record<string, string>): boolean {
     return headerValue(headers, RESEND_MARK_HEADER) !== '';
+}
+
+/**
+ * 读取一个请求在重发链上的跳数:标记头值 parseInt。
+ * 缺失 / 非法 / 负数一律归 0(真实浏览器请求即第 0 跳)。供响应触发的链式熔断判定用。
+ */
+export function resendHop(headers: Record<string, string>): number {
+    const raw = headerValue(headers, RESEND_MARK_HEADER);
+    if (!raw) {
+        return 0;
+    }
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /**
@@ -519,11 +538,14 @@ export function isResendOrigin(headers: Record<string, string>): boolean {
  * content-type——cookie 由发送端凭据自动带,content-type 统一用参数值避免大小写重复键),
  * 补 Content-Type,再应用用户 override(setHeaders 覆盖 / removeHeaders 删除,均大小写不敏感),
  * 最后补重发标记头。标记头放在最后无条件写入,确保不被 override 破坏(防递归核心)。
+ * hop = 本次重发在链上的跳数(标记头的值);缺省 1(由真实请求点燃的第一跳)。链式触发时由调用方传
+ * 「触发源跳数 + 1」,配合 resendHop + 上限判定实现「支持连环、按跳数封顶防无限」。
  */
 export function buildResendHeaders(
     triggerHeaders: Record<string, string>,
     contentType: string,
-    overrides?: { setHeaders?: Record<string, string>; removeHeaders?: string[] }
+    overrides?: { setHeaders?: Record<string, string>; removeHeaders?: string[] },
+    hop = 1
 ): Record<string, string> {
     const forbidden = new Set([
         'host',
@@ -562,6 +584,7 @@ export function buildResendHeaders(
             }
         }
     }
-    out[RESEND_MARK_HEADER] = '1'; // 放最后,保护防递归标记不被 override 覆盖/删除
+    // 放最后,保护标记不被 override 覆盖/删除;值=跳数(>=1),供链式熔断按 resendHop 判定
+    out[RESEND_MARK_HEADER] = String(hop >= 1 ? Math.floor(hop) : 1);
     return out;
 }

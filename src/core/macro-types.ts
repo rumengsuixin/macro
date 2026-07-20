@@ -547,6 +547,12 @@ export interface RequestRulesConfig {
     bodyReplaces?: BodyReplaceRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
+    /**
+     * 响应触发重发的**链式跳数上限**(熔断阈值,仅回放端)。真实浏览器请求视为第 0 跳,每被重发一次 +1。
+     * 当触发响应所属请求的跳数已达此值时,不再继续触发新的重发——用来在支持「连环触发」(一条重发的响应
+     * 再触发下一条规则)的同时,兜底防止无限自环/互环。缺省 5;归一化后 clamp 到 [1,100]。
+     */
+    maxResendHops?: number;
 }
 
 /** 浏览器会话/登录态复用配置(存于项目根 browser-config.json) */

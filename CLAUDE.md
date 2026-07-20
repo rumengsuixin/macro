@@ -27,7 +27,7 @@
 - **构建**:纯 tsc 双 tsconfig(主进程 CommonJS + 渲染进程 ESM)+ `scripts/copy-assets.mjs`。入口 `dist/main/main.js`,启动 `npm run dev`。
 - **运行时目录**(自动创建):`macros/`(宏)· `exports/`(Excel)· `errors/`(错误截图)· `downloads/`(回放下载)· `timelines/`(请求时间线)· `dumps/`(请求体落盘)。
 - **提取 4 模式**(`ExtractConfig.mode`):`single`(整页单行)· `list`(逐项采字段)· `list-detail`(逐项进详情页采字段)· `list-action`(逐项点按钮下载,不采数据)。翻页由步骤右键「标记翻页操作」+ 总页数控制(标了才逐页处理)。
-- **请求拦截 8 支路**(配置 `request-rules.json`,**仅回放端生效**,运行中 `fs.watchFile` 热更新):`rules`(改 POST body)· `resends`(命中后延时改参重发,支持响应条件触发 `responseTrigger`/文件整体替换)· `responseRules`(改响应头)· `requestHeaderRules`(改原始请求头)· `blocks`(硬阻断)· `dumps`(请求体落盘为文件)· `bodyReplaces`(本地文件整体替换请求体)· `record`(只记录不改,独立于 `enabled`)。全字段速查见 `拦截器规则配置手册.html`。
+- **请求拦截 8 支路**(配置 `request-rules.json`,**仅回放端生效**,运行中 `fs.watchFile` 热更新):`rules`(改 POST body)· `resends`(命中后延时改参重发,支持响应条件触发 `responseTrigger`/文件整体替换;标记头 `x-macro-resend` 带跳数,可**链式连环**A→B→C,`maxResendHops` 缺省5熔断防无限)· `responseRules`(改响应头)· `requestHeaderRules`(改原始请求头)· `blocks`(硬阻断)· `dumps`(请求体落盘为文件)· `bodyReplaces`(本地文件整体替换请求体)· `record`(只记录不改,独立于 `enabled`)。全字段速查见 `拦截器规则配置手册.html`。
 - **关键源文件**:`src/core/` — `macro-runner.ts`(回放引擎)· `request-rewrite.ts`(拦截纯逻辑)· `extractor.ts`(提取)· `selector-generator.ts`(选择器生成 + 语义指纹)· `ai-extract.ts`(AI 对接)· `download-manager.ts` · `timeline-recorder.ts` · `post-processors/`(后处理注册表 + 银行整合桥)。`src/main/` — `main.ts`(主进程/IPC)· `webview-preload.ts`(录制注入)· `request-interceptor.ts`(录制端 CDP 拦截器,现已不接线、仅自检直用)。`src/renderer/`(UI)。
 - **已知限制**:`waitForSelector` 不自动录制(可手动加 / 拾取器点选);localStorage 注入仅覆盖录制页当前 origin(多域靠持久 profile 兜底)。
 

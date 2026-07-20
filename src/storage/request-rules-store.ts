@@ -109,6 +109,10 @@ function templateConfig(): RequestRulesConfig {
         // record:「只记录不修改」支路(独立于 enabled)。改成 enabled:true 即拦截并记录所有请求
         // (不限 method)+ 响应到 timelines/timeline-*.jsonl,供事后分析;不改写任何请求。
         record: { enabled: false, urlPattern: '*', includeBody: true },
+        // maxResendHops:响应触发重发的「链式跳数上限」。允许一条重发的响应再触发下一条规则(连环触发),
+        // 真实请求算第 0 跳、每重发一次 +1;当触发源已达此跳数就熔断,不再继续——兜底防无限自环/互环。
+        // 缺省 5(clamp 到 [1,100])。想让 A→B→C… 更长的连环走通就调大;只想单发把它设成 1。
+        maxResendHops: 5,
     };
 }
 
@@ -422,6 +426,13 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
                   .map(normalizeBodyReplaceRule)
                   .filter((x): x is BodyReplaceRule => x !== null)
             : [];
+        // 响应触发链式跳数上限:有效正整数才写(clamp [1,100]);缺省/非法则不写,运行端用默认 5
+        const maxResendHops =
+            typeof raw.maxResendHops === 'number' &&
+            Number.isFinite(raw.maxResendHops) &&
+            raw.maxResendHops >= 1
+                ? Math.min(Math.floor(raw.maxResendHops), 100)
+                : undefined;
         return {
             enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
             rules,
@@ -432,6 +443,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             ...(dumps.length ? { dumps } : {}),
             ...(bodyReplaces.length ? { bodyReplaces } : {}),
             ...(record ? { record } : {}),
+            ...(maxResendHops !== undefined ? { maxResendHops } : {}),
         };
     } catch {
         // 坏 JSON 等异常:回退空配置

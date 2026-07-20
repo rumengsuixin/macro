@@ -413,7 +413,7 @@
 
         <!-- ============ 总览 ============ -->
         <h2 id="overview"><span class="num">§</span>顶层结构总览</h2>
-        <p class="section-hint">配置根对象共 8 个键。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 总开关统管。</p>
+        <p class="section-hint">配置根对象:8 个支路键 + 顶层 <code class="inline">maxResendHops</code>(响应触发连环的跳数上限)。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 总开关统管。</p>
 
         <div class="overview-grid">
             <a class="ov-item" href="#concepts"><div class="k">enabled</div><div class="d">总开关,管所有改写/拦截支路(不含 record)</div></a>
@@ -425,6 +425,7 @@
             <a class="ov-item" href="#dumps"><div class="k">dumps[]</div><div class="d">把请求体完整字节落成文件</div></a>
             <a class="ov-item" href="#bodyReplaces"><div class="k">bodyReplaces[]</div><div class="d">用本地文件整体替换请求体</div></a>
             <a class="ov-item" href="#record"><div class="k">record</div><div class="d">只记录不修改,独立开关</div></a>
+            <a class="ov-item" href="#resends"><div class="k">maxResendHops</div><div class="d">响应触发连环的跳数上限(缺省5熔断)</div></a>
         </div>
 
         <div class="note info">
@@ -445,6 +446,7 @@
                     <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>bodyReplaces</code></td><td class="type">BodyReplaceRule[]</td><td><span class="badge opt">可选</span></td><td>请求体整体替换规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>record</code></td><td class="type">TimelineRecordConfig</td><td><span class="badge opt">可选</span></td><td>只记录不修改支路(独立开关)</td><td>不记录</td></tr>
+                    <tr><td class="field"><code>maxResendHops</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>响应触发重发的<b>链式跳数上限</b>:一条重发的响应可再触发下一条规则(连环),达此跳数即熔断防无限</td><td>缺省 <code class="inline">5</code>;clamp[1,100]</td></tr>
                 </tbody>
             </table>
         </div>
@@ -484,8 +486,9 @@
             <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">④ 为什么支路是分开的数组</h3>
             <p class="section-hint">匹配引擎「首个命中即返回」。若把改写 / 重发 / 阻断混进同一个数组,会互抢首命中。因此 <code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code> <b>各自独立数组</b>,互不干扰,同一个 URL 可同时命中多个支路。</p>
 
-            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑤ 防递归标记头</h3>
-            <p class="section-hint">重发的请求会带 <code class="inline">x-macro-resend: 1</code> 头。两端观察路径识别到它即整体跳过(不改写、不再触发重发),避免工具自己发的请求把自己再次触发。该标记头<b>不可被 setHeaders 覆盖、不可被 removeHeaders 删除</b>。</p>
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑤ 防递归标记头 + 链式跳数熔断</h3>
+            <p class="section-hint">重发的请求会带 <code class="inline">x-macro-resend</code> 头,其<b>值 = 该请求在重发链上的跳数(hop)</b>:真实浏览器请求不带此头(第 0 跳),第一次重发带 <code class="inline">1</code>,之后每被链式重发一次 +1。<code class="inline">route</code> 改写 / <code class="inline">dumps</code> 落盘 / 请求捕获三处见到此头即整体跳过(不再加工工具自己发的请求)。该标记头<b>不可被 setHeaders 覆盖、不可被 removeHeaders 删除</b>。</p>
+            <p class="section-hint"><b>响应触发支持连环</b>:一条重发的<b>响应</b>可以继续触发下一条 <code class="inline">responseTrigger</code> 规则(A→B→C…),用 <code class="inline">setHeaders</code> 盖业务标记头 + 下一条规则的 <code class="inline">requestHeaders</code> 条件精确接棒即可串起来。为防无限自环/互环,当触发响应所属请求的跳数<b>达到 <code class="inline">maxResendHops</code>(顶层配置,缺省 5)即熔断</b>,不再继续触发并打一条日志。想串更长的链就调大它;只想单发不连环就设成 <code class="inline">1</code>。</p>
 
             <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑥ Windows 路径转义</h3>
             <p class="section-hint">JSON 里反斜杠要转义:<code class="inline">"D:\\videos\\new.mp4"</code>。<code class="inline">replaceWithFile</code> 必须是<b>绝对路径</b>。</p>
