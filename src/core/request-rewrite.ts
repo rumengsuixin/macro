@@ -262,6 +262,112 @@ export function responseTriggerMet(
     return true;
 }
 
+/** 从子串里取最长的 [A-Za-z0-9_] 关键字(用于在响应体里定位实际片段);无则返回 '' */
+function longestWordToken(s: string): string {
+    const m = s.match(/[A-Za-z0-9_]+/g);
+    if (!m) {
+        return '';
+    }
+    return m.reduce((a, b) => (b.length > a.length ? b : a), '');
+}
+
+/**
+ * 解释「响应触发为什么没命中」:与 responseTriggerMet 同判定顺序,返回 null 表示其实满足(不该报)。
+ * 否则返回 { signature, message }:
+ *  - message:人读原因(含响应体实际片段),给日志用;
+ *  - signature:稳定去重键(不含实际片段),调用端按它限流,同一失败模式只打一次。
+ * 只做展示性截断(仅日志可读性),不参与任何数据处理。
+ */
+export function explainResponseTriggerMiss(
+    trigger: ResendResponseTrigger,
+    status: number,
+    headers: Record<string, string>,
+    bodyText: string | null
+): { signature: string; message: string } | null {
+    const parts: string[] = [];
+    const sig: string[] = [];
+
+    if (trigger.status !== undefined && status !== trigger.status) {
+        parts.push(`status 期望 ${trigger.status} 实际 ${status}`);
+        sig.push(`status:${trigger.status}!=${status}`);
+    }
+
+    if (trigger.headers) {
+        for (const [name, expected] of Object.entries(trigger.headers)) {
+            const actual = headerValue(headers, name);
+            if (actual !== expected) {
+                parts.push(`头 ${name} 期望 "${expected}" 实际 "${actual}"`);
+                sig.push(`h:${name.toLowerCase()}`);
+            }
+        }
+    }
+
+    if (trigger.bodyContains && trigger.bodyContains.length > 0) {
+        if (bodyText === null) {
+            parts.push('响应体读不到(可能已中断)');
+            sig.push('bc:null');
+        } else {
+            const bodyNoWs = bodyText.replace(/\s+/g, '');
+            for (const sub of trigger.bodyContains) {
+                if (bodyText.includes(sub)) {
+                    continue;
+                }
+                if (bodyNoWs.includes(sub.replace(/\s+/g, ''))) {
+                    parts.push(
+                        `bodyContains 缺 [${sub}](仅空白差异,原文里冒号后可能有空格,请按原文写)`
+                    );
+                    sig.push(`bc:ws:${sub}`);
+                } else {
+                    const key = longestWordToken(sub);
+                    const at = key ? bodyText.indexOf(key) : -1;
+                    if (at >= 0) {
+                        const snippet = bodyText.slice(Math.max(0, at - 30), at + key.length + 40);
+                        parts.push(`bodyContains 缺 [${sub}];响应体实际: …${snippet}…`);
+                    } else if (key) {
+                        parts.push(`bodyContains 缺 [${sub}];关键字 "${key}" 未出现在响应体`);
+                    } else {
+                        parts.push(`bodyContains 缺 [${sub}]`);
+                    }
+                    sig.push(`bc:miss:${sub}`);
+                }
+            }
+        }
+    }
+
+    if (trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) {
+        if (bodyText === null) {
+            parts.push('响应体读不到(可能已中断)');
+            sig.push('bj:null');
+        } else {
+            let parsed: unknown;
+            try {
+                parsed = JSON.parse(bodyText);
+            } catch {
+                parts.push('bodyJson 条件:响应体不是合法 JSON');
+                sig.push('bj:parse');
+                parsed = undefined;
+            }
+            if (parsed !== undefined) {
+                for (const [path, expected] of Object.entries(trigger.bodyJson)) {
+                    const val = getJsonByPath(parsed, path);
+                    if (val === undefined) {
+                        parts.push(`bodyJson 路径 ${path} 不存在`);
+                        sig.push(`bj:missing:${path}`);
+                    } else if (String(val) !== expected) {
+                        parts.push(`bodyJson 路径 ${path} 期望 "${expected}" 实际 "${String(val)}"`);
+                        sig.push(`bj:ne:${path}`);
+                    }
+                }
+            }
+        }
+    }
+
+    if (parts.length === 0) {
+        return null; // 其实满足,不该报
+    }
+    return { signature: sig.join('|'), message: parts.join(';') };
+}
+
 /**
  * 回放端(Playwright)用:按规则改写响应头 Record,返回新 Record;
  * 无 setHeaders/removeHeaders 动作、或 when 条件不满足 → 返回 null(表示不改)。

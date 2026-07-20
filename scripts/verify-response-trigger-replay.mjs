@@ -34,6 +34,14 @@ const DELAY_MS = 800;
 /** 服务端收到的每个 /payload:{ body(已解析), resent(是否带标记头), ts } */
 const payloadHits = [];
 
+// 捕获 runner 的中文日志(logInfo → console.log),用于断言「未命中原因」诊断日志
+const logLines = [];
+const origLog = console.log;
+console.log = (...a) => {
+    logLines.push(a.join(' '));
+    origLog(...a);
+};
+
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?'))) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -202,6 +210,13 @@ assert(
 assert(
     resent.length === 1,
     `重发数 == repeat(=1)不增长(pending 未触发 + 防递归,实际 ${resent.length})`
+);
+// pending(fractionCompleted:0.5)响应会打一条「未命中原因」诊断日志
+const missLine = logLines.find((l) => /未命中 \[\*\/payload\*\]/.test(l));
+assert(!!missLine, 'pending 响应打出未命中诊断日志(未命中 [*/payload*])');
+assert(
+    !!missLine && missLine.includes('"fractionCompleted":1'),
+    '未命中日志点明缺 "fractionCompleted":1'
 );
 
 if (failed > 0) {

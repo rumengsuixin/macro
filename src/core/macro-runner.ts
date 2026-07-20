@@ -45,6 +45,7 @@ import {
     buildResendHeaders,
     responseTriggerMet,
     triggerNeedsBody,
+    explainResponseTriggerMiss,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
@@ -118,6 +119,8 @@ export class MacroRunner {
         string,
         { url: string; method: string; headers: Record<string, string>; body: string }
     >();
+    /** 响应触发「未命中原因」诊断日志的去重键(按失败模式 signature,同种只打一次) */
+    private readonly resendMissWarned = new Set<string>();
     /** 未触发的重发定时器集合:cancel/run 结束/热关闭时统一清理,防泄漏与 "Target closed" */
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
@@ -949,6 +952,15 @@ export class MacroRunner {
                     }
                 }
                 if (!responseTriggerMet(trigger, status, headers, bodyText)) {
+                    // 诊断:triggerUrl 命中但条件没过 → 说清为什么(缺哪个子串/实际片段/仅空白差异),
+                    // 按失败模式去重限流,避免轮询期刷屏。
+                    const miss = explainResponseTriggerMiss(trigger, status, headers, bodyText);
+                    if (miss && !this.resendMissWarned.has(miss.signature)) {
+                        this.resendMissWarned.add(miss.signature);
+                        logInfo(
+                            `回放请求重发器(响应触发):未命中 [${rr.urlPattern}] ← ${miss.message}`
+                        );
+                    }
                     continue;
                 }
                 const cap = this.resendCaptures.get(rr.urlPattern);
@@ -1327,6 +1339,7 @@ export class MacroRunner {
         this.resendTimers.clear();
         this.resendLastFireAt.clear();
         this.resendCaptures.clear();
+        this.resendMissWarned.clear();
     }
 
     /**

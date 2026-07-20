@@ -14,6 +14,7 @@ const {
     triggerNeedsBody,
     headersAllEqual,
     responseConditionMet,
+    explainResponseTriggerMiss,
 } = require('../dist/core/request-rewrite.js');
 
 let failed = 0;
@@ -147,6 +148,74 @@ assert(responseConditionMet({ xx: '1' }, { urlPattern: '*', when: { xx: '1' } })
 assert(!responseConditionMet({ xx: '2' }, { urlPattern: '*', when: { xx: '1' } }), 'when 不等 → false');
 assert(responseConditionMet({ any: 'x' }, { urlPattern: '*' }), 'when 缺省 → 恒真');
 assert(responseConditionMet({ XX: '1' }, { urlPattern: '*', when: { xx: '1' } }), '头名大小写不敏感');
+
+console.log('7) explainResponseTriggerMiss —— 未命中原因诊断');
+{
+    // 条件其实满足 → null(不该报)
+    const ok = explainResponseTriggerMiss(
+        { bodyContains: ['"fractionCompleted":1'] },
+        200,
+        {},
+        '{"transferProgressBar":{"fractionCompleted":1}}'
+    );
+    assert(ok === null, '条件满足 → 返回 null(不报)');
+
+    // 仅空白差异:规则写无空格,响应体冒号后有空格
+    const ws = explainResponseTriggerMiss(
+        { bodyContains: ['"fractionCompleted":1'] },
+        200,
+        {},
+        '{"transferProgressBar":{"fractionCompleted": 1}}'
+    );
+    assert(ws !== null && /仅空白差异/.test(ws.message), '空格差异 → message 提示「仅空白差异」');
+    assert(ws !== null && /bc:ws:/.test(ws.signature), '空格差异 → signature 标 bc:ws');
+
+    // 真缺失(关键字在、值不同):展示实际片段
+    const miss = explainResponseTriggerMiss(
+        { bodyContains: ['"fractionCompleted":1'] },
+        200,
+        {},
+        '{"transferProgressBar":{"fractionCompleted":0.5}}'
+    );
+    assert(miss !== null && /响应体实际/.test(miss.message), '值不同 → message 含「响应体实际」片段');
+    assert(
+        miss !== null && miss.message.includes('fractionCompleted":0.5'),
+        '实际片段里能看到真实值 0.5'
+    );
+    // 空格差异与真缺失是不同 signature(各打一次)
+    assert(ws.signature !== miss.signature, '空格差异与真缺失 signature 不同(各自去重)');
+
+    // 关键字都没出现
+    const nokey = explainResponseTriggerMiss(
+        { bodyContains: ['"fractionCompleted":1'] },
+        200,
+        {},
+        '{"other":123}'
+    );
+    assert(nokey !== null && /未出现在响应体/.test(nokey.message), '关键字缺失 → 「未出现在响应体」');
+
+    // 响应体读不到
+    const nullBody = explainResponseTriggerMiss({ bodyContains: ['x'] }, 200, {}, null);
+    assert(nullBody !== null && /读不到/.test(nullBody.message), 'bodyText=null → 「响应体读不到」');
+
+    // status 不等
+    const st = explainResponseTriggerMiss({ status: 200 }, 500, {}, null);
+    assert(st !== null && /status 期望 200 实际 500/.test(st.message), 'status 不等 → 说清期望/实际');
+
+    // 同输入两次 signature 相同(可去重)
+    const a = explainResponseTriggerMiss({ bodyContains: ['"fractionCompleted":1'] }, 200, {}, '{"fractionCompleted":0.5}');
+    const b = explainResponseTriggerMiss({ bodyContains: ['"fractionCompleted":1'] }, 200, {}, '{"fractionCompleted":0.5}');
+    assert(a.signature === b.signature, '同一失败模式 signature 稳定(可去重)');
+
+    // bodyJson 路径值不等
+    const bj = explainResponseTriggerMiss(
+        { bodyJson: { 'data.state': 'done' } },
+        200,
+        {},
+        '{"data":{"state":"pending"}}'
+    );
+    assert(bj !== null && /data\.state 期望 "done" 实际 "pending"/.test(bj.message), 'bodyJson 值不等 → 说清路径/期望/实际');
+}
 
 if (failed > 0) {
     console.error(`\n自检失败:${failed} 项未通过。`);
