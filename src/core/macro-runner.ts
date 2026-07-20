@@ -49,6 +49,8 @@ import {
     responseTriggerMet,
     triggerNeedsBody,
     explainResponseTriggerMiss,
+    extractResendVars,
+    renderResendActions,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
@@ -1033,8 +1035,10 @@ export class MacroRunner {
                     );
                     continue;
                 }
+                // 从触发响应提取命名变量(复用已读的响应头/体),供动作字段 {{占位符}} 注入重发
+                const vars = extractResendVars(trigger, headers, bodyText);
                 // 新重发跳数 = 触发源跳数 + 1(链式接力;真实源 hop0 → 首发 hop1)
-                this.scheduleReplayResend(rr, cap, triggerHop + 1);
+                this.scheduleReplayResend(rr, cap, triggerHop + 1, vars);
             }
         } catch {
             /* 响应触发支路不得影响主流程 */
@@ -1276,16 +1280,20 @@ export class MacroRunner {
     private scheduleReplayResend(
         rr: ResendRule,
         base: { url: string; method: string; headers: Record<string, string>; body: string },
-        hop = 1
+        hop = 1,
+        vars: Record<string, string> = {}
     ): void {
+        // 用提取到的变量渲染动作字段(set/append/setHeaders 里的 {{占位符}});vars 空 → 原样返回不动。
+        // 后续 decideBodyType/rewritePostBody/buildResendHeaders 全部基于 eff(rr 的超集副本)。
+        const eff = renderResendActions(rr, vars);
         // 去抖:同规则 dedupeMs 内只发一次(默认 0=每次命中都发)
-        if (rr.dedupeMs && rr.dedupeMs > 0) {
+        if (eff.dedupeMs && eff.dedupeMs > 0) {
             const now = Date.now();
-            const last = this.resendLastFireAt.get(rr.urlPattern) ?? 0;
-            if (now - last < rr.dedupeMs) {
+            const last = this.resendLastFireAt.get(eff.urlPattern) ?? 0;
+            if (now - last < eff.dedupeMs) {
                 return;
             }
-            this.resendLastFireAt.set(rr.urlPattern, now);
+            this.resendLastFireAt.set(eff.urlPattern, now);
         }
         const target = base.url;
         const method = base.method || 'POST';
@@ -1300,14 +1308,14 @@ export class MacroRunner {
         let payload: string;
         let binary = false;
         let ctForHeaders: string;
-        if (rr.replaceWithFile && rr.replaceWithFile.trim() && !isGet) {
+        if (eff.replaceWithFile && eff.replaceWithFile.trim() && !isGet) {
             // 文件整体替换路:读字节 → base64(文件只读一次,repeat 个定时器复用);读失败则跳过本次重发
             let buf: Buffer;
             try {
-                buf = fs.readFileSync(rr.replaceWithFile);
+                buf = fs.readFileSync(eff.replaceWithFile);
             } catch (err) {
                 logError(
-                    `回放请求重发器:读替换文件失败,跳过本次重发 [${rr.replaceWithFile}]:${(err as Error).message}`
+                    `回放请求重发器:读替换文件失败,跳过本次重发 [${eff.replaceWithFile}]:${(err as Error).message}`
                 );
                 return;
             }
@@ -1315,14 +1323,14 @@ export class MacroRunner {
             binary = true;
             ctForHeaders = contentType; // 保留触发请求原 content-type,不强制 json/form 默认
             logInfo(
-                `回放请求重发器:用文件字节作重发体 ${buf.length} 字节 ← ${rr.replaceWithFile}`
+                `回放请求重发器:用文件字节作重发体 ${buf.length} 字节 ← ${eff.replaceWithFile}`
             );
         } else {
-            // 改参路:rr 的 set/append/remove 复用 rewritePostBody;无动作则原样重发
-            const bodyType = decideBodyType(rr, contentType, originalBody || '');
+            // 改参路:eff 的 set/append/remove(占位符已渲染)复用 rewritePostBody;无动作则原样重发
+            const bodyType = decideBodyType(eff, contentType, originalBody || '');
             payload = originalBody || '';
             try {
-                const out = rewritePostBody(payload, bodyType, rr);
+                const out = rewritePostBody(payload, bodyType, eff);
                 if (out !== null) {
                     payload = out;
                 }
@@ -1337,14 +1345,14 @@ export class MacroRunner {
             triggerHeaders,
             ctForHeaders,
             {
-                setHeaders: rr.setHeaders,
-                removeHeaders: rr.removeHeaders,
+                setHeaders: eff.setHeaders,
+                removeHeaders: eff.removeHeaders,
             },
             hop // 链上跳数写进标记头,供响应触发的熔断判定(真实源→首发 hop1,连环逐跳 +1)
         );
-        const repeat = Math.min(Math.max(1, rr.repeat ?? 1), 100);
-        const delay = Math.max(0, rr.delayMs ?? 0);
-        const interval = Math.max(0, rr.intervalMs ?? 0);
+        const repeat = Math.min(Math.max(1, eff.repeat ?? 1), 100);
+        const delay = Math.max(0, eff.delayMs ?? 0);
+        const interval = Math.max(0, eff.intervalMs ?? 0);
         for (let i = 0; i < repeat; i += 1) {
             const timer = setTimeout(
                 () => {

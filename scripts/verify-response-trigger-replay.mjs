@@ -16,11 +16,15 @@
 //      delayMs:800, repeat:1 }]。
 //  - 三个 /status 触发请求:pending(x-phase:final,body 0.5)、done(x-phase:final,body 1)、
 //      badhdr(x-phase:wrong,body 1)——分别验证 body 门槛、全满足触发、请求头门槛。
+//  - done 响应带响应头 x-goog-session-id:sid-xyz;规则用 extract 取「响应头值 + 响应体点路径值」→
+//      经 {{sid}}/{{fid}} 注入重发的 setHeaders(x-injected-sid)与 set(body.injected_fid),验证动态注入。
 //  - 宏 = [goto, pause];onPause 轮询「≥1 原始 payload && ≥1 重发 payload」才 resolve。
 // 断言:①/payload 恰 1 原始(resent=false);②恰 1 重发(resent=true、body seq=B 证重发的是捕获的 B);
 //       ③pending 响应不触发(body 门槛)、badhdr 不触发(requestHeaders 门槛)、只有 done 触发;
 //       ④延时≈800ms;⑤重发数==1 不增长(重发的 /payload 响应不匹配 triggerUrl 且带标记头 → 不递归);
-//       ⑥pending 打 body 未命中诊断、badhdr 打请求头未命中诊断。
+//       ⑥pending 打 body 未命中诊断、badhdr 打请求头未命中诊断;
+//       ⑦重发请求头 x-injected-sid==sid-xyz(响应头提取注入)、重发 body.injected_fid==innertube_studio:X:0
+//         (响应体点路径提取注入)、原始 /payload 不带注入头(注入只发生在重发)。
 // 用法:MACRO_HEADLESS=1 node scripts/verify-response-trigger-replay.mjs
 //   缺 headless_shell 时:PLAYWRIGHT_BROWSERS_PATH=<repo>/build/ms-playwright MACRO_HEADLESS=1 node ...
 import { createRequire } from 'node:module';
@@ -80,7 +84,13 @@ const server = http.createServer((req, res) => {
             } catch {
                 body = { _raw: data };
             }
-            payloadHits.push({ body, resent: !!req.headers['x-macro-resend'], ts: Date.now() });
+            payloadHits.push({
+                body,
+                resent: !!req.headers['x-macro-resend'],
+                // 提取注入验证:重发请求头里被注入的 sid(原始请求不带,重发时经 {{sid}} 注入)
+                injectedSid: req.headers['x-injected-sid'],
+                ts: Date.now(),
+            });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end('{"ok":true}');
         });
@@ -91,7 +101,12 @@ const server = http.createServer((req, res) => {
         const done = !req.url.includes('case=pending');
         const frac = done ? 1 : 0.5;
         const pct = done ? '已上传 100%。' : '已上传 50%。';
-        res.writeHead(200, { 'Content-Type': 'application/json', 'x-ready': '1' });
+        // 提取注入验证:done 触发响应带一个自定义响应头,供 extract.fromHeader 取值注入重发请求头
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'x-ready': '1',
+            'x-goog-session-id': 'sid-xyz',
+        });
         res.end(
             JSON.stringify({
                 continuationContents: [
@@ -151,7 +166,17 @@ const session = {
                     requestHeaders: { 'x-phase': 'final' },
                     // bodyContains:免路径原文子串匹配深层嵌套/数组(点路径写不出 transferProgressBar 的位置)
                     bodyContains: ['uploadFeedbackItemContinuation', '"fractionCompleted":1'],
+                    // extract:从触发响应取值 → 命名变量,供下方 setHeaders/set 用 {{占位符}} 注入重发
+                    extract: {
+                        sid: { fromHeader: 'x-goog-session-id', default: 'NOSID' },
+                        fid: {
+                            fromBody: 'continuationContents.0.uploadFeedbackItemContinuation.id.a',
+                        },
+                    },
                 },
+                // 注入验证:请求头 x-injected-sid ← {{sid}}(响应头值);body 加 injected_fid ← {{fid}}(响应体点路径值)
+                setHeaders: { 'x-injected-sid': '{{sid}}' },
+                set: { injected_fid: '{{fid}}' },
                 delayMs: DELAY_MS,
                 repeat: 1,
             },
@@ -212,6 +237,21 @@ assert(resent.length === 1, `/payload 恰有 1 重发(实际 ${resent.length})`)
 assert(
     resent[0] && resent[0].body && resent[0].body.seq === 'B',
     '重发的是捕获的 /payload 请求(body seq=B)'
+);
+// 提取注入:响应头值 sid-xyz 经 {{sid}} 注入到重发请求头 x-injected-sid
+assert(
+    resent[0] && resent[0].injectedSid === 'sid-xyz',
+    '重发请求头 x-injected-sid == "sid-xyz"(从触发响应头提取注入)'
+);
+// 提取注入:响应体点路径值经 {{fid}} 注入到重发 body 的 injected_fid
+assert(
+    resent[0] && resent[0].body && resent[0].body.injected_fid === 'innertube_studio:X:0',
+    '重发 body.injected_fid == "innertube_studio:X:0"(从触发响应体点路径提取注入)'
+);
+// 原始 /payload 不带注入头,证明注入只发生在重发上
+assert(
+    original[0] && original[0].injectedSid === undefined,
+    '原始 /payload 不含 x-injected-sid(注入只发生在重发)'
 );
 assert(
     original[0] && resent[0] && resent[0].ts - original[0].ts >= DELAY_MS - 300,

@@ -5,6 +5,7 @@ import type {
     RequestRule,
     ResendRule,
     ResendResponseTrigger,
+    ResendVarSource,
     ResponseHeaderRule,
     RequestHeaderRule,
     BlockRule,
@@ -240,7 +241,45 @@ function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | null {
             out.bodyContains = subs;
         }
     }
+    const extract = normalizeResendExtract(t.extract);
+    if (extract) {
+        out.extract = extract;
+    }
     return out;
+}
+
+/**
+ * 校验并归一化 responseTrigger.extract(变量名 → 取值源)。每个源保留 fromBody/fromHeader/default(仅 string);
+ * 既无 fromBody 也无 fromHeader 的条目丢弃(无从取值);结果空返回 undefined。
+ */
+function normalizeResendExtract(
+    raw: unknown
+): Record<string, ResendVarSource> | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return undefined;
+    }
+    const out: Record<string, ResendVarSource> = {};
+    for (const [name, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+            continue;
+        }
+        const s = v as Record<string, unknown>;
+        const src: ResendVarSource = {};
+        if (typeof s.fromBody === 'string' && s.fromBody.trim()) {
+            src.fromBody = s.fromBody;
+        }
+        if (typeof s.fromHeader === 'string' && s.fromHeader.trim()) {
+            src.fromHeader = s.fromHeader;
+        }
+        if (src.fromBody === undefined && src.fromHeader === undefined) {
+            continue; // 无取值源,丢弃该条
+        }
+        if (typeof s.default === 'string') {
+            src.default = s.default;
+        }
+        out[name] = src;
+    }
+    return Object.keys(out).length ? out : undefined;
 }
 
 /** 把原始对象归一化成 string→string 映射(仅保留值为 string 的键);空/非对象返回 undefined */

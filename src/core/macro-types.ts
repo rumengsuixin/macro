@@ -338,6 +338,20 @@ export interface RequestRule {
 }
 
 /**
+ * 「重发型」响应触发的**变量提取源**:从触发响应里取一个值,命名后供动作字段用 `{{name}}` 占位注入重发。
+ * fromBody 与 fromHeader **二选一**(都给时 fromBody 优先);两者都取不到 → 用 default(缺省空串)。
+ * 仅回放端生效。
+ */
+export interface ResendVarSource {
+    /** 从触发响应体 JSON 按点路径(`a.b.c`)取值,复用 getJsonByPath;命中值为对象/数组则 JSON.stringify,否则 String() */
+    fromBody?: string;
+    /** 从触发响应头按名取值(大小写不敏感) */
+    fromHeader?: string;
+    /** 取不到时的兜底默认值;缺省空串 */
+    default?: string;
+}
+
+/**
  * 「重发型」拦截规则的**响应条件触发器**。设了 ResendRule.responseTrigger 时,该规则改由**响应观察器**驱动
  * (而非请求侧 urlPattern 命中即触发):
  *   ① 回放期间**捕获**命中顶层 urlPattern 的请求(记下 url/method/头/体,存最近一次);
@@ -372,6 +386,12 @@ export interface ResendResponseTrigger {
      * 如 `["\"fractionCompleted\":1"]` 或 `["已上传 100%"]`。响应体读不到 → 不命中。
      */
     bodyContains?: string[];
+    /**
+     * 可选:从触发响应提取命名变量(变量名 → 取值源),供本规则的动作字段 set / append / setHeaders 用
+     * `{{name}}` 占位引用注入重发(如把响应体里的新 token 写进重发请求头 Authorization)。取值在触发命中后、
+     * 复用已读到的响应体/响应头进行;取不到用各源的 default(缺省空串)。仅回放端生效。
+     */
+    extract?: Record<string, ResendVarSource>;
 }
 
 /**

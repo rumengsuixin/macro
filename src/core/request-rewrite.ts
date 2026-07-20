@@ -7,6 +7,7 @@ import type {
     RequestRule,
     ResponseHeaderRule,
     RequestHeaderRule,
+    ResendRule,
     ResendResponseTrigger,
 } from './macro-types';
 
@@ -219,11 +220,16 @@ export function getJsonByPath(obj: unknown, path: string): unknown {
     return cur;
 }
 
-/** 该触发条件是否需要读响应体(有 bodyJson 或 bodyContains 子条件才需要),用于门控异步读体 */
+/**
+ * 该触发条件是否需要读响应体,用于门控异步读体。三种情况需要:
+ * 有 bodyJson 子条件、有 bodyContains 子条件、或 extract 里存在任一 fromBody 取值源(要从响应体取值注入)。
+ */
 export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
     return (
         (!!trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) ||
-        (!!trigger.bodyContains && trigger.bodyContains.length > 0)
+        (!!trigger.bodyContains && trigger.bodyContains.length > 0) ||
+        (!!trigger.extract &&
+            Object.values(trigger.extract).some((s) => s.fromBody !== undefined))
     );
 }
 
@@ -399,6 +405,106 @@ export function explainResponseTriggerMiss(
         return null; // 其实满足,不该报
     }
     return { signature: sig.join('|'), message: parts.join(';') };
+}
+
+// ── 「重发型」响应值提取 → 占位符注入的共享纯逻辑(仅回放端调用) ──
+
+/**
+ * 从触发响应提取命名变量:遍历 trigger.extract,每个变量按 fromBody(响应体点路径)或 fromHeader(响应头名)取值。
+ * - fromBody:bodyText 只 JSON.parse 一次(复用),按点路径取值;命中对象/数组→JSON.stringify,基本类型→String();
+ * - fromHeader:headerValue 大小写不敏感取值;
+ * - 两者都取不到(缺失/读不到体/路径不存在/头为空)→ 用该源 default(缺省空串)。
+ * 无 extract → 返回 {}。纯逻辑、零 IO,便于离线自检。
+ */
+export function extractResendVars(
+    trigger: ResendResponseTrigger,
+    headers: Record<string, string>,
+    bodyText: string | null
+): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!trigger.extract) {
+        return out;
+    }
+    let parsed: unknown;
+    let parsedTried = false;
+    for (const [name, src] of Object.entries(trigger.extract)) {
+        let val: string | undefined;
+        if (src.fromBody !== undefined) {
+            if (!parsedTried) {
+                parsedTried = true;
+                try {
+                    parsed = bodyText ? JSON.parse(bodyText) : undefined;
+                } catch {
+                    parsed = undefined; // 响应体非合法 JSON → fromBody 取不到,走 default
+                }
+            }
+            const v = parsed !== undefined ? getJsonByPath(parsed, src.fromBody) : undefined;
+            if (v !== undefined && v !== null) {
+                val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            }
+        } else if (src.fromHeader !== undefined) {
+            const hv = headerValue(headers, src.fromHeader);
+            if (hv) {
+                val = hv;
+            }
+        }
+        out[name] = val !== undefined ? val : src.default ?? '';
+    }
+    return out;
+}
+
+/** 占位符正则:`{{name}}`(允许两侧空白),变量名限 [A-Za-z0-9_] */
+const RESEND_VAR_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+
+/** 把字符串里的 `{{name}}` 占位符替换为 vars[name];未知变量渲染为空串 */
+export function renderTemplate(value: string, vars: Record<string, string>): string {
+    return value.replace(RESEND_VAR_RE, (_m, name: string) =>
+        Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : ''
+    );
+}
+
+/** 深度渲染任意 JSON 值里的字符串叶子(递归对象/数组);非字符串原样返回 */
+function renderDeep(value: unknown, vars: Record<string, string>): unknown {
+    if (typeof value === 'string') {
+        return renderTemplate(value, vars);
+    }
+    if (Array.isArray(value)) {
+        return value.map((v) => renderDeep(v, vars));
+    }
+    if (value && typeof value === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+            out[k] = renderDeep(v, vars);
+        }
+        return out;
+    }
+    return value;
+}
+
+/**
+ * 用提取到的变量渲染一条重发规则的动作字段(set/append 的字符串叶子、setHeaders 的值),返回渲染后的副本。
+ * vars 为空 → 直接返回原规则(不拷贝、不动)。其余字段(replaceWithFile/repeat/delayMs/bodyType…)原样保留。
+ * 渲染后照旧交给现有 rewritePostBody / buildResendHeaders,两者无需改动。
+ */
+export function renderResendActions(rr: ResendRule, vars: Record<string, string>): ResendRule {
+    if (!vars || Object.keys(vars).length === 0) {
+        return rr;
+    }
+    const out: ResendRule = { ...rr };
+    if (rr.set) {
+        out.set = renderDeep(rr.set, vars) as Record<string, unknown>;
+    }
+    if (rr.append) {
+        out.append = renderDeep(rr.append, vars) as Record<string, unknown>;
+    }
+    if (rr.setHeaders) {
+        const sh: Record<string, string> = {};
+        for (const [k, v] of Object.entries(rr.setHeaders)) {
+            sh[k] = renderTemplate(v, vars);
+        }
+        out.setHeaders = sh;
+    }
+    return out;
 }
 
 /**

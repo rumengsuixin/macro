@@ -27,6 +27,7 @@
         "resends[].responseTrigger.requestHeaders": "可选,请求头条件对象:triggerUrl 那条**请求**的头需全部相等才命中(AND,头名大小写不敏感,值精确相等)。与 headers(响应头)对称、判同一 triggerUrl 事务的请求侧;同步可得不触发读体。如 {\"x-goog-upload-command\":\"upload, finalize\"}",
         "resends[].responseTrigger.bodyJson": "可选,响应体 JSON 条件对象:点路径→期望值,全部满足才命中(AND)。响应体先 JSON.parse,按 a.b.c 逐层取值,String() 后与期望值精确等值比较。如 {\"data.state\":\"done\"}。解析失败/路径不存在/读不到体=不命中。深层嵌套+异构数组结构点路径难写易碎时,改用 bodyContains",
         "resends[].responseTrigger.bodyContains": "可选,响应体**原文子串**数组:这些子串需全部出现在响应体文本里才命中(AND,大小写敏感,不解析 JSON)。适配深层嵌套/异构数组(点路径写不出的场景),如 [\"\\\"fractionCompleted\\\":1\"] 检测上传 100%。优先用稳定 ASCII 标记;中文若被 \\u 转义会失配。读不到体=不命中",
+        "resends[].responseTrigger.extract": "可选(仅回放端):从触发响应提取命名变量(变量名→取值源),供本规则 set/append(body 参数)/setHeaders(请求头)用 {{变量名}} 占位注入重发。每个源二选一:fromBody(响应体 JSON 点路径,取值方式同 bodyJson,命中对象/数组→JSON.stringify)或 fromHeader(响应头名,大小写不敏感);取不到用 default(缺省空串)。如 {\"token\":{\"fromBody\":\"data.uploadToken\"},\"sid\":{\"fromHeader\":\"x-goog-session-id\"}}。占位符仅在动作值里生效、不影响真实数据,未知变量渲染为空串;请求头仅支持 set 注入(无 append)。有 fromBody 源会异步读响应体",
         "_响应触发说明": "响应体读取走 Playwright 网络层(不受页面 CORS 限制,能读跨域响应体);但重发本身仍是页面内 fetch,需当前有活动页且宏此刻仍在跑(如带 pause 步保活),否则重发被跳过。urlPattern 请求须先于 triggerUrl 响应被捕获,否则跳过+日志。捕获上传型(File/Blob)请求的 body 会为空(被动读 Blob 返回 null),此类要重发完整字节须配 replaceWithFile(url/头仍能捕获)。有 bodyJson 条件才异步读响应体(status/headers 先筛)",
         "_重发说明": "重发请求带 x-macro-resend 标记头,两端识别到即跳过(不改写/不再触发重发,防递归)。两端都在页面上下文里跑 fetch(带页面 cookie/登录态,DevTools Network 可见):录制端在录制 webview、回放端在当前活动页。跨域受 CSP/CORS 限制、需当前有活动页。配 replaceWithFile 时文件经 base64 传入页面重建为二进制体(能发 mp4 等任意字节),超大文件慎用(内存开销比 bodyReplaces 大,超大上传优先用 bodyReplaces)",
         "responseRules[]": "「响应头条件改写」支路(受 enabled 总开关管,与 rules/resends 物理分开):命中 urlPattern 的响应,当其响应头满足 when 条件时,改写响应头。**条件读的是响应头、动作改的也是响应头**。录制端走 CDP Fetch 响应阶段、回放端走 Playwright route.fetch()+route.fulfill()",
@@ -134,6 +135,22 @@
                 "bodyContains": ["uploadFeedbackItemContinuation", "\"fractionCompleted\":1"]
             },
             "delayMs": 500,
+            "repeat": 1
+        },
+        {
+            "_注": "响应触发 + extract:当 /api/status 响应 data.state=done 时,从其响应体 data.uploadToken 与响应头 x-goog-session-id 提取值,经 {{token}}/{{sid}} 注入到重发 /api/submit 的请求头(authorization/x-sid)与请求体参数(session_id)",
+            "urlPattern": "*/api/submit*",
+            "responseTrigger": {
+                "triggerUrl": "*/api/status*",
+                "bodyJson": { "data.state": "done" },
+                "extract": {
+                    "token": { "fromBody": "data.uploadToken" },
+                    "sid": { "fromHeader": "x-goog-session-id", "default": "" }
+                }
+            },
+            "setHeaders": { "authorization": "Bearer {{token}}", "x-sid": "{{sid}}" },
+            "set": { "session_id": "{{sid}}" },
+            "delayMs": 300,
             "repeat": 1
         }
     ],
