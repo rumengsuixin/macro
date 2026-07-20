@@ -482,8 +482,9 @@ function renderDeep(value: unknown, vars: Record<string, string>): unknown {
 }
 
 /**
- * 用提取到的变量渲染一条重发规则的动作字段(set/append 的字符串叶子、setHeaders 的值),返回渲染后的副本。
- * vars 为空 → 直接返回原规则(不拷贝、不动)。其余字段(replaceWithFile/repeat/delayMs/bodyType…)原样保留。
+ * 用提取到的变量渲染一条重发规则的动作字段(set/append 的字符串叶子、setHeaders 的值、setUrl 模板),返回渲染后的副本。
+ * vars 为空 → 直接返回原规则(不拷贝、不动;静态 setUrl 无占位符时原样透传即正确)。
+ * 其余字段(replaceWithFile/repeat/delayMs/bodyType…)原样保留。
  * 渲染后照旧交给现有 rewritePostBody / buildResendHeaders,两者无需改动。
  */
 export function renderResendActions(rr: ResendRule, vars: Record<string, string>): ResendRule {
@@ -503,6 +504,9 @@ export function renderResendActions(rr: ResendRule, vars: Record<string, string>
             sh[k] = renderTemplate(v, vars);
         }
         out.setHeaders = sh;
+    }
+    if (rr.setUrl) {
+        out.setUrl = renderTemplate(rr.setUrl, vars);
     }
     return out;
 }

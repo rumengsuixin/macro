@@ -387,9 +387,9 @@ export interface ResendResponseTrigger {
      */
     bodyContains?: string[];
     /**
-     * 可选:从触发响应提取命名变量(变量名 → 取值源),供本规则的动作字段 set / append / setHeaders 用
-     * `{{name}}` 占位引用注入重发(如把响应体里的新 token 写进重发请求头 Authorization)。取值在触发命中后、
-     * 复用已读到的响应体/响应头进行;取不到用各源的 default(缺省空串)。仅回放端生效。
+     * 可选:从触发响应提取命名变量(变量名 → 取值源),供本规则的动作字段 set / append / setHeaders / setUrl 用
+     * `{{name}}` 占位引用注入重发(如把响应体里的新 token 写进重发请求头 Authorization、或把新 id 拼进重发 URL)。
+     * 取值在触发命中后、复用已读到的响应体/响应头进行;取不到用各源的 default(缺省空串)。仅回放端生效。
      */
     extract?: Record<string, ResendVarSource>;
 }
@@ -424,6 +424,13 @@ export interface ResendRule {
      * 仅回放端生效。典型用途:命中上传型触发后,用本地另一个 mp4 的字节作为重发体。
      */
     replaceWithFile?: string;
+    /**
+     * 可选,重发目标 URL 模板。设了它则用该模板作重发目标 URL(整体覆盖捕获/触发请求的原 URL);
+     * 值里可写 `{{name}}` 占位引用 responseTrigger.extract 提取的变量(与 setHeaders 同款渲染)。
+     * 渲染后 trim,渲染为空/纯空白则回退原 URL。无 extract 变量时=静态 URL 覆盖(重发到另一端点)。
+     * 仅回放端生效。响应触发下 method 仍用捕获请求原方法(本字段只改 URL,不改方法/体)。
+     */
+    setUrl?: string;
     /** 一次触发重发几次;缺省 1,归一化时 clamp 到 [1,100] */
     repeat?: number;
     /** repeat>1 时相邻两次重发的间隔(毫秒);缺省 0 */
@@ -443,7 +450,7 @@ export interface ResendRule {
     /**
      * 可选,**响应条件触发器**。设了它 → 本规则改由「响应观察器」触发:捕获命中 urlPattern 的请求,
      * 当 responseTrigger.triggerUrl 的响应满足条件(AND)时重发捕获的请求;不设 = 保持原「请求侧
-     * urlPattern 命中即触发」。仍复用上面的动作字段(set/replaceWithFile/setHeaders/delayMs/repeat…)。
+     * urlPattern 命中即触发」。仍复用上面的动作字段(set/replaceWithFile/setHeaders/setUrl/delayMs/repeat…)。
      * 仅回放端生效。triggerUrl 必填,缺失则整条规则被归一化丢弃。
      */
     responseTrigger?: ResendResponseTrigger;

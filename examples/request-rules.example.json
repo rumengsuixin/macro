@@ -138,18 +138,20 @@
             "repeat": 1
         },
         {
-            "_注": "响应触发 + extract:当 /api/status 响应 data.state=done 时,从其响应体 data.uploadToken 与响应头 x-goog-session-id 提取值,经 {{token}}/{{sid}} 注入到重发 /api/submit 的请求头(authorization/x-sid)与请求体参数(session_id)",
+            "_注": "响应触发 + extract:当 /api/status 响应 data.state=done 时,从其响应体 data.uploadToken/data.resourceId 与响应头 x-goog-session-id 提取值,经 {{token}}/{{rid}}/{{sid}} 注入到重发的请求头(authorization/x-sid)、请求体参数(session_id),并用 setUrl 把重发目标 URL 整体覆盖为 /api/v2/{rid}/commit?token={token}(URL 也支持注入)",
             "urlPattern": "*/api/submit*",
             "responseTrigger": {
                 "triggerUrl": "*/api/status*",
                 "bodyJson": { "data.state": "done" },
                 "extract": {
                     "token": { "fromBody": "data.uploadToken" },
+                    "rid": { "fromBody": "data.resourceId" },
                     "sid": { "fromHeader": "x-goog-session-id", "default": "" }
                 }
             },
             "setHeaders": { "authorization": "Bearer {{token}}", "x-sid": "{{sid}}" },
             "set": { "session_id": "{{sid}}" },
+            "setUrl": "https://host/api/v2/{{rid}}/commit?token={{token}}",
             "delayMs": 300,
             "repeat": 1
         }

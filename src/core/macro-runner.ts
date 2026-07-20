@@ -1295,7 +1295,10 @@ export class MacroRunner {
             }
             this.resendLastFireAt.set(eff.urlPattern, now);
         }
-        const target = base.url;
+        // 目标 URL:设了 setUrl(占位符已由 renderResendActions 渲染)则整体覆盖原捕获 URL;
+        // 渲染成空/纯空白 → 回退捕获请求原 URL(安全兜底,不发到坏地址)
+        const renderedUrl = eff.setUrl?.trim();
+        const target = renderedUrl ? renderedUrl : base.url;
         const method = base.method || 'POST';
         const isGet = method.toUpperCase() === 'GET';
         const triggerHeaders = base.headers;

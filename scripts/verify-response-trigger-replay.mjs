@@ -17,14 +17,16 @@
 //  - 三个 /status 触发请求:pending(x-phase:final,body 0.5)、done(x-phase:final,body 1)、
 //      badhdr(x-phase:wrong,body 1)——分别验证 body 门槛、全满足触发、请求头门槛。
 //  - done 响应带响应头 x-goog-session-id:sid-xyz;规则用 extract 取「响应头值 + 响应体点路径值」→
-//      经 {{sid}}/{{fid}} 注入重发的 setHeaders(x-injected-sid)与 set(body.injected_fid),验证动态注入。
+//      经 {{sid}}/{{fid}} 注入重发的 setHeaders(x-injected-sid)、set(body.injected_fid)与
+//      setUrl(重发目标 URL 整体覆盖为 /resend-target?fid=…&sid=…),验证请求头/请求体/URL 三处动态注入。
 //  - 宏 = [goto, pause];onPause 轮询「≥1 原始 payload && ≥1 重发 payload」才 resolve。
 // 断言:①/payload 恰 1 原始(resent=false);②恰 1 重发(resent=true、body seq=B 证重发的是捕获的 B);
 //       ③pending 响应不触发(body 门槛)、badhdr 不触发(requestHeaders 门槛)、只有 done 触发;
 //       ④延时≈800ms;⑤重发数==1 不增长(重发的 /payload 响应不匹配 triggerUrl 且带标记头 → 不递归);
 //       ⑥pending 打 body 未命中诊断、badhdr 打请求头未命中诊断;
 //       ⑦重发请求头 x-injected-sid==sid-xyz(响应头提取注入)、重发 body.injected_fid==innertube_studio:X:0
-//         (响应体点路径提取注入)、原始 /payload 不带注入头(注入只发生在重发)。
+//         (响应体点路径提取注入)、原始 /payload 不带注入头(注入只发生在重发);
+//       ⑧重发命中 setUrl 覆盖的 /resend-target 端点、且 URL 查询含注入的提取值(证明 URL 也能注入)。
 // 用法:MACRO_HEADLESS=1 node scripts/verify-response-trigger-replay.mjs
 //   缺 headless_shell 时:PLAYWRIGHT_BROWSERS_PATH=<repo>/build/ms-playwright MACRO_HEADLESS=1 node ...
 import { createRequire } from 'node:module';
@@ -72,7 +74,8 @@ const server = http.createServer((req, res) => {
 </script>`);
         return;
     }
-    if (req.method === 'POST' && req.url.startsWith('/payload')) {
+    // 兼容两个落点:原捕获请求 /payload、以及被 setUrl 整体覆盖后的重发目标 /resend-target
+    if (req.method === 'POST' && (req.url.startsWith('/payload') || req.url.startsWith('/resend-target'))) {
         let data = '';
         req.on('data', (c) => {
             data += c;
@@ -86,6 +89,8 @@ const server = http.createServer((req, res) => {
             }
             payloadHits.push({
                 body,
+                // 落点 URL:验证 setUrl 是否把重发导到 /resend-target 且 URL 含注入的提取值
+                url: req.url,
                 resent: !!req.headers['x-macro-resend'],
                 // 提取注入验证:重发请求头里被注入的 sid(原始请求不带,重发时经 {{sid}} 注入)
                 injectedSid: req.headers['x-injected-sid'],
@@ -177,6 +182,9 @@ const session = {
                 // 注入验证:请求头 x-injected-sid ← {{sid}}(响应头值);body 加 injected_fid ← {{fid}}(响应体点路径值)
                 setHeaders: { 'x-injected-sid': '{{sid}}' },
                 set: { injected_fid: '{{fid}}' },
+                // setUrl 注入验证:重发目标 URL 整体覆盖为 /resend-target,并用 {{fid}}/{{sid}} 拼进查询,
+                // 证明 URL 也能注入 extract 值(${port} 是 Node 端口插值,{{}} 才是 renderTemplate 占位符)
+                setUrl: `http://127.0.0.1:${port}/resend-target?fid={{fid}}&sid={{sid}}`,
                 delayMs: DELAY_MS,
                 repeat: 1,
             },
@@ -247,6 +255,16 @@ assert(
 assert(
     resent[0] && resent[0].body && resent[0].body.injected_fid === 'innertube_studio:X:0',
     '重发 body.injected_fid == "innertube_studio:X:0"(从触发响应体点路径提取注入)'
+);
+// setUrl 注入:重发目标 URL 被整体覆盖为 /resend-target(而非发回原捕获的 /payload)
+assert(
+    resent[0] && typeof resent[0].url === 'string' && resent[0].url.startsWith('/resend-target'),
+    '重发命中 setUrl 指定的独立端点 /resend-target(证明重发 URL 被整体覆盖)'
+);
+// setUrl 注入:URL 查询里含经 {{fid}}/{{sid}} 注入的提取值
+assert(
+    resent[0] && /fid=innertube_studio/.test(resent[0].url) && /sid=sid-xyz/.test(resent[0].url),
+    '重发 URL 查询含注入的提取值(fid=innertube_studio…&sid=sid-xyz)'
 );
 // 原始 /payload 不带注入头,证明注入只发生在重发上
 assert(

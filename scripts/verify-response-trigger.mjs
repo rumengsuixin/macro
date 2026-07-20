@@ -334,13 +334,14 @@ console.log('10) renderTemplate —— {{name}} 占位符替换');
     assert(renderTemplate('${token}', vars) === '${token}', '非 {{}} 语法($xx)不动');
 }
 
-console.log('11) renderResendActions —— set/append/setHeaders 深度渲染;vars 空则不动');
+console.log('11) renderResendActions —— set/append/setHeaders/setUrl 深度渲染;vars 空则不动');
 {
     const rr = {
         urlPattern: '*/submit*',
         set: { session_id: '{{sid}}', flag: 'x', meta: { token: 'Bearer {{token}}', n: 5 } },
         append: { ids: ['{{token}}', 'lit'] },
         setHeaders: { authorization: 'Bearer {{token}}', 'x-sid': '{{sid}}' },
+        setUrl: 'https://host/api/{{sid}}/commit?tok={{token}}',
         repeat: 3,
         replaceWithFile: '/some/path',
     };
@@ -352,9 +353,11 @@ console.log('11) renderResendActions —— set/append/setHeaders 深度渲染;v
     assert(eff.append.ids[0] === 'T' && eff.append.ids[1] === 'lit', 'append 数组字符串元素渲染');
     assert(eff.setHeaders.authorization === 'Bearer T', 'setHeaders 值渲染');
     assert(eff.setHeaders['x-sid'] === 'S', 'setHeaders 多值渲染');
+    assert(eff.setUrl === 'https://host/api/S/commit?tok=T', 'setUrl 模板占位符渲染');
     assert(eff.repeat === 3 && eff.replaceWithFile === '/some/path', '非动作字段原样保留');
     // 不改原对象
     assert(rr.set.session_id === '{{sid}}', '原规则未被就地修改(返回副本)');
+    assert(rr.setUrl === 'https://host/api/{{sid}}/commit?tok={{token}}', '原规则 setUrl 未被就地修改');
     // vars 空 → 原样返回同一引用
     assert(renderResendActions(rr, {}) === rr, 'vars 空 → 直接返回原规则(同引用,不拷贝)');
 }

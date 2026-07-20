@@ -170,6 +170,10 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
     if (typeof r.replaceWithFile === 'string' && r.replaceWithFile.trim()) {
         rule.replaceWithFile = r.replaceWithFile;
     }
+    // 可选:重发目标 URL 模板(设了则覆盖捕获请求原 URL;值支持 {{占位符}} 注入 extract 变量);非空 string 才收
+    if (typeof r.setUrl === 'string' && r.setUrl.trim()) {
+        rule.setUrl = r.setUrl;
+    }
     if (r.method === 'POST' || r.method === 'GET') {
         rule.method = r.method;
     }
