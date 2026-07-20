@@ -581,11 +581,12 @@
                     <tr><td class="field"><code>triggerUrl</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>监听哪个响应作触发闸门(CDP glob 匹配响应 URL)</td><td><b>缺失则整条 resends 规则被丢弃</b></td></tr>
                     <tr><td class="field"><code>status</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>响应状态码需等于此值</td><td>如 200</td></tr>
                     <tr><td class="field"><code>headers</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>响应头需全部相等(AND)</td><td>头名大小写不敏感,值精确相等</td></tr>
+                    <tr><td class="field"><code>requestHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td><b>请求头</b>条件:<code class="inline">triggerUrl</code> 那条<b>请求</b>的头需全部相等(AND)</td><td>头名大小写不敏感,值精确相等;与 <code class="inline">headers</code>(响应头)对称,判同一 triggerUrl 事务的请求侧;同步可得,不触发读体</td></tr>
                     <tr><td class="field"><code>bodyJson</code></td><td class="type">object(点路径→值)</td><td><span class="badge opt">可选</span></td><td>响应体 JSON 按点路径取值,全部相等(AND)</td><td><code class="inline">JSON.parse</code> 后 <code class="inline">a.b.c</code> 逐层取,<code class="inline">String()</code> 后精确比;解析失败/路径缺失/读不到体=不命中</td></tr>
                     <tr><td class="field"><code>bodyContains</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>响应体<b>原文子串</b>需全部出现(AND)</td><td>不解析 JSON、不依赖路径,适配深层嵌套/异构数组;<b>大小写敏感</b>;中文若被 <code class="inline">\u</code> 转义会失配,优先用 ASCII 标记</td></tr>
                 </tbody>
             </table>
-            <div class="note info"><span class="nt">三组条件都可选</span>status / headers / bodyJson / bodyContains 都不给,则该响应恒满足条件(命中即触发)。只要有 bodyJson 或 bodyContains 才会异步读响应体(status/headers 先筛)。</div>
+            <div class="note info"><span class="nt">各组条件都可选</span>status / headers / requestHeaders / bodyJson / bodyContains 都不给,则该响应恒满足条件(命中即触发)。只要有 bodyJson 或 bodyContains 才会异步读响应体(status / headers / requestHeaders 先筛,均同步)。</div>
         </div>
 
         <div class="note limit"><span class="nt">resends 限制</span>
@@ -608,6 +609,19 @@
     <span class="k">"bodyContains"</span>: [<span class="s">"uploadFeedbackItemContinuation"</span>, <span class="s">"\"fractionCompleted\":1"</span>]
   },
   <span class="k">"delayMs"</span>: <span class="n">800</span>,
+  <span class="k">"repeat"</span>: <span class="n">1</span>
+}</pre>
+        </div>
+        <div class="card">
+<pre><span class="c">// 响应触发 + requestHeaders 请求头门控:仅当 triggerUrl 那条请求带 x-goog-upload-command:upload,finalize 时才重发</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*v1/upload/createvideo*"</span>,        <span class="c">// 捕获这个请求</span>
+  <span class="k">"responseTrigger"</span>: {
+    <span class="k">"triggerUrl"</span>: <span class="s">"*/upload/feedback*"</span>,          <span class="c">// 监听这个响应</span>
+    <span class="k">"status"</span>: <span class="n">200</span>,
+    <span class="k">"requestHeaders"</span>: { <span class="k">"x-goog-upload-command"</span>: <span class="s">"upload, finalize"</span> }  <span class="c">// triggerUrl 请求头需相等</span>
+  },
+  <span class="k">"delayMs"</span>: <span class="n">500</span>,
   <span class="k">"repeat"</span>: <span class="n">1</span>
 }</pre>
         </div>

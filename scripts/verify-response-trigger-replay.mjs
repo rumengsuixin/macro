@@ -11,12 +11,16 @@
 //  - POST /payload 记录 { body, resent:!!x-macro-resend, ts }。
 //  - session:enabled:true、rules:[]、resends:[{ urlPattern:'*/payload*',
 //      responseTrigger:{ triggerUrl:'*/status*', status:200, headers:{'x-ready':'1'},
+//                        requestHeaders:{'x-phase':'final'},
 //                        bodyContains:['uploadFeedbackItemContinuation','"fractionCompleted":1'] },
 //      delayMs:800, repeat:1 }]。
+//  - 三个 /status 触发请求:pending(x-phase:final,body 0.5)、done(x-phase:final,body 1)、
+//      badhdr(x-phase:wrong,body 1)——分别验证 body 门槛、全满足触发、请求头门槛。
 //  - 宏 = [goto, pause];onPause 轮询「≥1 原始 payload && ≥1 重发 payload」才 resolve。
 // 断言:①/payload 恰 1 原始(resent=false);②恰 1 重发(resent=true、body seq=B 证重发的是捕获的 B);
-//       ③pending 响应不触发(条件门槛)、只有 done 触发;④延时≈800ms;⑤重发数==1 不增长(重发的
-//       /payload 响应不匹配 triggerUrl 且带标记头 → 不递归)。
+//       ③pending 响应不触发(body 门槛)、badhdr 不触发(requestHeaders 门槛)、只有 done 触发;
+//       ④延时≈800ms;⑤重发数==1 不增长(重发的 /payload 响应不匹配 triggerUrl 且带标记头 → 不递归);
+//       ⑥pending 打 body 未命中诊断、badhdr 打请求头未命中诊断。
 // 用法:MACRO_HEADLESS=1 node scripts/verify-response-trigger-replay.mjs
 //   缺 headless_shell 时:PLAYWRIGHT_BROWSERS_PATH=<repo>/build/ms-playwright MACRO_HEADLESS=1 node ...
 import { createRequire } from 'node:module';
@@ -54,8 +58,12 @@ const server = http.createServer((req, res) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ seq: 'B' })
   }).catch(function () {}).then(function () {
-    fetch('/status?case=pending').catch(function () {});
-    fetch('/status?case=done').catch(function () {});
+    // pending:请求头达标(x-phase:final)但 body 未到 100% → 被 bodyContains 挡
+    fetch('/status?case=pending', { headers: { 'x-phase': 'final' } }).catch(function () {});
+    // done:请求头 x-phase:final + body 100% → 全 AND 满足,触发重发
+    fetch('/status?case=done', { headers: { 'x-phase': 'final' } }).catch(function () {});
+    // badhdr:body 到 100% 但请求头 x-phase:wrong → 被 requestHeaders 挡(证请求头门控独立生效)
+    fetch('/status?case=badhdr', { headers: { 'x-phase': 'wrong' } }).catch(function () {});
   });
 </script>`);
         return;
@@ -139,6 +147,8 @@ const session = {
                     triggerUrl: '*/status*',
                     status: 200,
                     headers: { 'x-ready': '1' },
+                    // requestHeaders:门控 triggerUrl 那条 /status 请求的头(x-phase=final);badhdr 用 wrong 会被挡
+                    requestHeaders: { 'x-phase': 'final' },
                     // bodyContains:免路径原文子串匹配深层嵌套/数组(点路径写不出 transferProgressBar 的位置)
                     bodyContains: ['uploadFeedbackItemContinuation', '"fractionCompleted":1'],
                 },
@@ -211,12 +221,15 @@ assert(
     resent.length === 1,
     `重发数 == repeat(=1)不增长(pending 未触发 + 防递归,实际 ${resent.length})`
 );
-// pending(fractionCompleted:0.5)响应会打一条「未命中原因」诊断日志
-const missLine = logLines.find((l) => /未命中 \[\*\/payload\*\]/.test(l));
-assert(!!missLine, 'pending 响应打出未命中诊断日志(未命中 [*/payload*])');
+// pending(fractionCompleted:0.5)响应会打一条「未命中原因」诊断日志(body 差异)
+const missBodyLine = logLines.find((l) => /未命中 \[\*\/payload\*\]/.test(l) && l.includes('"fractionCompleted":1'));
+assert(!!missBodyLine, 'pending 响应打出未命中诊断日志(缺 "fractionCompleted":1)');
+// badhdr(body 达标但请求头 x-phase:wrong)会打一条请求头未命中诊断
+const missHdrLine = logLines.find((l) => /未命中 \[\*\/payload\*\]/.test(l) && /请求头 x-phase 期望 "final" 实际 "wrong"/.test(l));
+assert(!!missHdrLine, 'badhdr 响应打出请求头未命中诊断(请求头 x-phase 期望 "final" 实际 "wrong")');
 assert(
-    !!missLine && missLine.includes('"fractionCompleted":1'),
-    '未命中日志点明缺 "fractionCompleted":1'
+    resent.length === 1,
+    `请求头门控生效:badhdr(body 达标但请求头不符)未额外触发重发,重发数仍为 1(实际 ${resent.length})`
 );
 
 if (failed > 0) {
@@ -224,6 +237,6 @@ if (failed > 0) {
     process.exit(1);
 }
 console.log(
-    '\n✅ 回放端「响应条件触发重发(捕获-重放)」通过:捕获 urlPattern 请求 → triggerUrl 响应满足条件才重发捕获的请求,pending 被门槛挡掉、防递归。'
+    '\n✅ 回放端「响应条件触发重发(捕获-重放)」通过:捕获 urlPattern 请求 → triggerUrl 响应满足条件才重发捕获的请求,pending(body)/badhdr(请求头)被门槛挡掉、防递归。'
 );
 process.exit(0);

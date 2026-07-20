@@ -341,10 +341,11 @@ export interface RequestRule {
  * 「重发型」拦截规则的**响应条件触发器**。设了 ResendRule.responseTrigger 时,该规则改由**响应观察器**驱动
  * (而非请求侧 urlPattern 命中即触发):
  *   ① 回放期间**捕获**命中顶层 urlPattern 的请求(记下 url/method/头/体,存最近一次);
- *   ② 当命中 `triggerUrl` 的**响应**满足 status / headers / bodyJson 三组条件**全部满足(AND)**时,
- *      把①捕获到的请求原样(可叠加 set/replaceWithFile/setHeaders 修饰)重发。
+ *   ② 当命中 `triggerUrl` 的**响应**满足 status / headers / requestHeaders / bodyJson / bodyContains 各组条件
+ *      **全部满足(AND)**时,把①捕获到的请求原样(可叠加 set/replaceWithFile/setHeaders 修饰)重发。
+ *      其中 requestHeaders 判的是 triggerUrl 那条**请求**的头(其余判响应侧)。
  * 即「监听 triggerUrl 的响应 → 重发 urlPattern 捕获的请求」。仅回放端生效
- * (Playwright 在网络层读响应体,不受页面 CORS 限制)。status/headers/bodyJson 均可选、都不给则该响应恒满足条件。
+ * (Playwright 在网络层读响应体,不受页面 CORS 限制)。各组条件均可选、都不给则该响应恒满足条件。
  */
 export interface ResendResponseTrigger {
     /** **必填**:监听哪个响应作为触发闸门(CDP glob 匹配响应 URL);缺失则整条规则被丢弃 */
@@ -353,6 +354,12 @@ export interface ResendResponseTrigger {
     status?: number;
     /** 可选:响应头条件,这些头需**全部相等**才命中(AND,头名大小写不敏感,值精确相等) */
     headers?: Record<string, string>;
+    /**
+     * 可选:**请求头条件**——triggerUrl 那条请求(即被监听的触发闸门事务本身)的请求头需**全部相等**才命中
+     * (AND,头名大小写不敏感,值精确相等)。与 headers(响应头)对称,同判一个 triggerUrl 事务的请求侧/响应侧。
+     * 缺省=不校验请求头。请求头同步可得,不触发异步读响应体。
+     */
+    requestHeaders?: Record<string, string>;
     /**
      * 可选:响应体 JSON 条件,**点路径 → 期望值**(如 `{"data.state":"done"}`),全部满足才命中(AND)。
      * 响应体先 JSON.parse,按点路径(`a.b.c`)逐层取值,`String()` 后与期望值精确等值比较(值大小写敏感)。

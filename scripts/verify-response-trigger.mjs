@@ -217,6 +217,69 @@ console.log('7) explainResponseTriggerMiss —— 未命中原因诊断');
     assert(bj !== null && /data\.state 期望 "done" 实际 "pending"/.test(bj.message), 'bodyJson 值不等 → 说清路径/期望/实际');
 }
 
+console.log('8) responseTriggerMet —— requestHeaders 请求头条件(第 5 参,判 triggerUrl 请求侧的头)');
+{
+    const reqOk = { 'x-phase': 'final', 'content-type': 'application/json' };
+    // 命中:请求头满足
+    assert(
+        responseTriggerMet({ requestHeaders: { 'x-phase': 'final' } }, 200, {}, null, reqOk),
+        '请求头满足 → true'
+    );
+    // 大小写不敏感(头名)
+    assert(
+        responseTriggerMet({ requestHeaders: { 'X-Phase': 'final' } }, 200, {}, null, reqOk),
+        '请求头名大小写不敏感 → true'
+    );
+    // 不满足:值不等
+    assert(
+        !responseTriggerMet({ requestHeaders: { 'x-phase': 'start' } }, 200, {}, null, reqOk),
+        '请求头值不等 → false'
+    );
+    // 不满足:请求头缺失(第 5 参缺省 {})
+    assert(
+        !responseTriggerMet({ requestHeaders: { 'x-phase': 'final' } }, 200, {}, null),
+        '第 5 参缺省 {} 且 trigger 要请求头 → false(缺失)'
+    );
+    // 向后兼容:trigger 无 requestHeaders 时,不传第 5 参也恒真
+    assert(
+        responseTriggerMet({ status: 200 }, 200, {}, null),
+        '向后兼容:trigger 无 requestHeaders、4 参调用 → 不受影响(恒真)'
+    );
+    // AND:响应头 + 请求头 + status 组合,请求头拖后腿 → 整体 false
+    assert(
+        !responseTriggerMet(
+            { status: 200, headers: { 'x-ready': '1' }, requestHeaders: { 'x-phase': 'final' } },
+            200,
+            { 'x-ready': '1' },
+            null,
+            { 'x-phase': 'start' }
+        ),
+        'AND:status/响应头满足但请求头不满足 → 整体 false'
+    );
+    // 多请求头 AND
+    assert(
+        responseTriggerMet({ requestHeaders: { 'x-phase': 'final', 'content-type': 'application/json' } }, 200, {}, null, reqOk),
+        '多请求头全满足 → true(AND)'
+    );
+
+    // 诊断:请求头不符时说清期望/实际,signature 标 rh:
+    const rhMiss = explainResponseTriggerMiss(
+        { requestHeaders: { 'x-phase': 'final' } },
+        200,
+        {},
+        null,
+        { 'x-phase': 'start' }
+    );
+    assert(
+        rhMiss !== null && /请求头 x-phase 期望 "final" 实际 "start"/.test(rhMiss.message),
+        '诊断:请求头不符 → 说清期望/实际'
+    );
+    assert(rhMiss !== null && /rh:x-phase/.test(rhMiss.signature), '诊断:请求头 signature 标 rh:');
+    // 诊断:请求头满足则不报(与响应头分开归因)
+    const rhOk = explainResponseTriggerMiss({ requestHeaders: { 'x-phase': 'final' } }, 200, {}, null, { 'x-phase': 'final' });
+    assert(rhOk === null, '诊断:请求头满足 → null(不报)');
+}
+
 if (failed > 0) {
     console.error(`\n自检失败:${failed} 项未通过。`);
     process.exit(1);

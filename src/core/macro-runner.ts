@@ -965,6 +965,7 @@ export class MacroRunner {
             }
             const status = resp.status();
             const headers = resp.headers();
+            const reqHeaders = resp.request().headers(); // triggerUrl 那条请求的头(供 requestHeaders 条件用)
             const url = resp.url();
             // 响应体最多懒读一次,多条规则命中同一响应时复用
             let bodyText: string | null = null;
@@ -989,10 +990,10 @@ export class MacroRunner {
                         bodyText = null; // 读不到(竞态/中断)→ 有 body 条件的规则将不命中
                     }
                 }
-                if (!responseTriggerMet(trigger, status, headers, bodyText)) {
-                    // 诊断:triggerUrl 命中但条件没过 → 说清为什么(缺哪个子串/实际片段/仅空白差异),
+                if (!responseTriggerMet(trigger, status, headers, bodyText, reqHeaders)) {
+                    // 诊断:triggerUrl 命中但条件没过 → 说清为什么(缺哪个子串/实际片段/仅空白差异/请求头不符),
                     // 按失败模式去重限流,避免轮询期刷屏。
-                    const miss = explainResponseTriggerMiss(trigger, status, headers, bodyText);
+                    const miss = explainResponseTriggerMiss(trigger, status, headers, bodyText, reqHeaders);
                     if (miss && !this.resendMissWarned.has(miss.signature)) {
                         this.resendMissWarned.add(miss.signature);
                         logInfo(

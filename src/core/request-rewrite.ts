@@ -228,23 +228,29 @@ export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
 }
 
 /**
- * 判断一条响应是否满足重发的响应触发条件:status / headers / bodyContains / bodyJson 各组**全部满足(AND)**。
+ * 判断一条响应是否满足重发的响应触发条件:status / headers / requestHeaders / bodyContains / bodyJson 各组**全部满足(AND)**。
  * - status:给定则须严格等值;
- * - headers:复用 headersAllEqual(AND,头名大小写不敏感);
+ * - headers:响应头,复用 headersAllEqual(AND,头名大小写不敏感);
+ * - requestHeaders:triggerUrl 那条**请求**的头,复用 headersAllEqual(AND,头名大小写不敏感);缺省=不校验;
  * - bodyContains:bodyText 为 null → 不命中;否则每个子串都须 includes(AND,大小写敏感);不解析 JSON;
  * - bodyJson:bodyText 为 null 或 JSON.parse 失败 → 不命中;否则逐点路径 String(取值)===期望值(AND)。
- * 各组均可选;都不给 → 恒真(该 URL 任意响应都触发)。
+ * 各组均可选;都不给 → 恒真(该 URL 任意响应都触发)。requestHeaders 缺省 {} 便于纯逻辑/离线自检按需省略。
  */
 export function responseTriggerMet(
     trigger: ResendResponseTrigger,
     status: number,
     headers: Record<string, string>,
-    bodyText: string | null
+    bodyText: string | null,
+    requestHeaders: Record<string, string> = {}
 ): boolean {
     if (trigger.status !== undefined && status !== trigger.status) {
         return false;
     }
     if (!headersAllEqual(headers, trigger.headers)) {
+        return false;
+    }
+    // requestHeaders:判 triggerUrl 请求侧的头(便宜、无需读体,放在响应体读取前提前短路)
+    if (!headersAllEqual(requestHeaders, trigger.requestHeaders)) {
         return false;
     }
     // bodyContains 先判(纯子串,免不必要的 JSON.parse)
@@ -298,7 +304,8 @@ export function explainResponseTriggerMiss(
     trigger: ResendResponseTrigger,
     status: number,
     headers: Record<string, string>,
-    bodyText: string | null
+    bodyText: string | null,
+    requestHeaders: Record<string, string> = {}
 ): { signature: string; message: string } | null {
     const parts: string[] = [];
     const sig: string[] = [];
@@ -312,8 +319,18 @@ export function explainResponseTriggerMiss(
         for (const [name, expected] of Object.entries(trigger.headers)) {
             const actual = headerValue(headers, name);
             if (actual !== expected) {
-                parts.push(`头 ${name} 期望 "${expected}" 实际 "${actual}"`);
+                parts.push(`响应头 ${name} 期望 "${expected}" 实际 "${actual}"`);
                 sig.push(`h:${name.toLowerCase()}`);
+            }
+        }
+    }
+
+    if (trigger.requestHeaders) {
+        for (const [name, expected] of Object.entries(trigger.requestHeaders)) {
+            const actual = headerValue(requestHeaders, name);
+            if (actual !== expected) {
+                parts.push(`请求头 ${name} 期望 "${expected}" 实际 "${actual}"`);
+                sig.push(`rh:${name.toLowerCase()}`);
             }
         }
     }

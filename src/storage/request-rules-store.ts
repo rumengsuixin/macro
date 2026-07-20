@@ -203,7 +203,7 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
 
 /**
  * 校验并归一化重发规则的 responseTrigger。**triggerUrl 必填**(非空 string,否则返回 null → 整条规则被丢弃)。
- * status 取有限 number;headers/bodyJson 复用 normalizeStringMap(路径→字符串);三组子条件均可选。
+ * status 取有限 number;headers/requestHeaders/bodyJson 复用 normalizeStringMap(路径→字符串);各组子条件均可选。
  */
 function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -220,6 +220,10 @@ function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | null {
     const headers = normalizeStringMap(t.headers);
     if (headers) {
         out.headers = headers;
+    }
+    const requestHeaders = normalizeStringMap(t.requestHeaders);
+    if (requestHeaders) {
+        out.requestHeaders = requestHeaders;
     }
     const bodyJson = normalizeStringMap(t.bodyJson);
     if (bodyJson) {
