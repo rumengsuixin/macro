@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拦截器规则配置手册 · request-rules.json</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --primary-dark: #0a8f96;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --deep-2: #16414c;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --danger: #e0503a;
+        --ai: #7c5cff;
+        --ink: #1a2b31;
+        --muted: #5b737b;
+        --line: #dbe7ea;
+        --bg: #f4f8f9;
+        --card: #ffffff;
+        --code-bg: #0e2a33;
+        --code-ink: #d7ecef;
+        --r-lg: 16px;
+        --r-md: 10px;
+        --r-sm: 6px;
+        --sh-sm: 0 1px 3px rgba(14, 42, 51, .06), 0 1px 2px rgba(14, 42, 51, .04);
+        --sh-md: 0 4px 16px rgba(14, 42, 51, .08);
+        --font: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        --mono: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--ink);
+        background:
+            radial-gradient(1200px 600px at 100% -10%, rgba(15, 176, 184, .10), transparent 60%),
+            radial-gradient(900px 500px at -10% 10%, rgba(255, 122, 89, .07), transparent 55%),
+            var(--bg);
+        line-height: 1.65;
+    }
+
+    .layout {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 32px;
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 0 28px 100px;
+    }
+
+    /* ---------- 侧栏目录 ---------- */
+    nav {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        max-height: 100vh;
+        overflow-y: auto;
+        padding: 28px 0;
+    }
+
+    .nav-brand {
+        font-weight: 800;
+        font-size: 15px;
+        color: var(--deep);
+        letter-spacing: .3px;
+        margin-bottom: 4px;
+    }
+
+    .nav-brand .fish { color: var(--primary); }
+
+    .nav-sub {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 18px;
+        font-family: var(--mono);
+    }
+
+    nav a {
+        display: block;
+        padding: 6px 12px;
+        margin: 2px 0;
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 13.5px;
+        border-radius: var(--r-sm);
+        border-left: 2px solid transparent;
+        transition: all .15s;
+    }
+
+    nav a:hover {
+        color: var(--primary-dark);
+        background: rgba(15, 176, 184, .07);
+        border-left-color: var(--primary);
+    }
+
+    nav a .idx {
+        display: inline-block;
+        width: 20px;
+        color: var(--primary);
+        font-family: var(--mono);
+        font-weight: 700;
+        font-size: 12px;
+    }
+
+    nav .nav-group {
+        margin-top: 16px;
+        margin-bottom: 4px;
+        padding-left: 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #9bb0b6;
+        font-weight: 700;
+    }
+
+    /* ---------- 主体 ---------- */
+    main { padding-top: 28px; min-width: 0; }
+
+    header.hero {
+        background: linear-gradient(135deg, var(--deep) 0%, var(--deep-2) 100%);
+        color: #eaf6f7;
+        border-radius: var(--r-lg);
+        padding: 34px 36px;
+        box-shadow: var(--sh-md);
+        margin-bottom: 28px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    header.hero::after {
+        content: "🐟";
+        position: absolute;
+        right: 28px;
+        bottom: -14px;
+        font-size: 90px;
+        opacity: .10;
+    }
+
+    header.hero h1 {
+        margin: 0 0 8px;
+        font-size: 26px;
+        letter-spacing: .5px;
+    }
+
+    header.hero .file {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--primary);
+        background: rgba(15, 176, 184, .14);
+        padding: 3px 10px;
+        border-radius: var(--r-sm);
+        display: inline-block;
+    }
+
+    header.hero p {
+        margin: 14px 0 0;
+        color: #b9d4d8;
+        font-size: 14.5px;
+        max-width: 640px;
+    }
+
+    h2 {
+        font-size: 21px;
+        color: var(--deep);
+        margin: 44px 0 4px;
+        padding-bottom: 8px;
+        scroll-margin-top: 20px;
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+    }
+
+    h2 .num {
+        font-family: var(--mono);
+        font-size: 15px;
+        color: #fff;
+        background: var(--primary);
+        border-radius: var(--r-sm);
+        padding: 2px 9px;
+        font-weight: 700;
+    }
+
+    h2 .key {
+        font-family: var(--mono);
+        font-size: 15px;
+        color: var(--accent);
+        font-weight: 600;
+    }
+
+    .section-hint {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 4px 0 16px;
+    }
+
+    .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--r-lg);
+        padding: 4px 24px 20px;
+        box-shadow: var(--sh-sm);
+        margin-bottom: 18px;
+    }
+
+    /* ---------- 表格 ---------- */
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0 4px;
+        font-size: 13.5px;
+    }
+
+    th {
+        text-align: left;
+        background: #eef6f7;
+        color: var(--deep);
+        font-weight: 700;
+        padding: 9px 12px;
+        border-bottom: 2px solid var(--line);
+        white-space: nowrap;
+    }
+
+    td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #eef2f3;
+        vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    tr:hover td { background: #f9fcfc; }
+
+    td.field code {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--primary-dark);
+        font-size: 13px;
+    }
+
+    td.type {
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--ai);
+        white-space: nowrap;
+    }
+
+    /* ---------- 徽章 ---------- */
+    .badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 20px;
+        white-space: nowrap;
+        letter-spacing: .3px;
+    }
+
+    .badge.req { background: rgba(224, 80, 58, .12); color: var(--danger); }
+    .badge.opt { background: rgba(91, 115, 123, .14); color: var(--muted); }
+    .badge.replay { background: rgba(15, 176, 184, .14); color: var(--primary-dark); }
+    .badge.both { background: rgba(124, 92, 255, .12); color: var(--ai); }
+    .badge.toggle { background: rgba(22, 163, 74, .12); color: var(--ok); }
+
+    .tag-row { margin: 12px 0 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ---------- 提示框 ---------- */
+    .note {
+        border-radius: var(--r-md);
+        padding: 12px 16px;
+        margin: 14px 0;
+        font-size: 13.5px;
+        border-left: 4px solid;
+    }
+
+    .note .nt {
+        font-weight: 700;
+        display: block;
+        margin-bottom: 3px;
+        font-size: 13px;
+    }
+
+    .note.warn { background: #fff8ee; border-color: var(--warn); }
+    .note.warn .nt { color: var(--warn); }
+    .note.limit { background: #fdf1ee; border-color: var(--danger); }
+    .note.limit .nt { color: var(--danger); }
+    .note.info { background: #eefafb; border-color: var(--primary); }
+    .note.info .nt { color: var(--primary-dark); }
+    .note.ok { background: #eefaf1; border-color: var(--ok); }
+    .note.ok .nt { color: var(--ok); }
+
+    .note ul { margin: 6px 0 0; padding-left: 20px; }
+    .note li { margin: 3px 0; }
+
+    /* ---------- 代码块 ---------- */
+    pre {
+        background: var(--code-bg);
+        color: var(--code-ink);
+        border-radius: var(--r-md);
+        padding: 16px 18px;
+        overflow-x: auto;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.6;
+        margin: 14px 0;
+    }
+
+    pre .c { color: #6b8a90; }        /* 注释 */
+    pre .k { color: #7fd3d8; }        /* 键 */
+    pre .s { color: #ffb59e; }        /* 字符串 */
+    pre .n { color: #c9a3ff; }        /* 数字/布尔 */
+
+    code.inline {
+        font-family: var(--mono);
+        background: rgba(15, 176, 184, .10);
+        color: var(--primary-dark);
+        padding: 1px 6px;
+        border-radius: var(--r-sm);
+        font-size: 12.5px;
+    }
+
+    /* ---------- 速查表 ---------- */
+    .cheat td:first-child { font-weight: 600; color: var(--deep); }
+    .cheat td code { font-family: var(--mono); color: var(--accent); font-weight: 700; }
+
+    /* ---------- 结构总览网格 ---------- */
+    .overview-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+        margin: 18px 0;
+    }
+
+    .ov-item {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--r-md);
+        padding: 14px 16px;
+        box-shadow: var(--sh-sm);
+        transition: transform .15s, box-shadow .15s;
+        text-decoration: none;
+        display: block;
+        color: inherit;
+    }
+
+    .ov-item:hover { transform: translateY(-2px); box-shadow: var(--sh-md); }
+
+    .ov-item .k {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--primary-dark);
+        font-size: 14px;
+    }
+
+    .ov-item .d { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+
+    footer {
+        text-align: center;
+        color: var(--muted);
+        font-size: 12.5px;
+        margin-top: 50px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+        nav { position: static; max-height: none; }
+    }
+</style>
+</head>
+<body>
+<div class="layout">
+
+    <!-- ============ 侧栏目录 ============ -->
+    <nav>
+        <div class="nav-brand"><span class="fish">🐟</span> 拦截器规则手册</div>
+        <div class="nav-sub">request-rules.json</div>
+
+        <a href="#overview"><span class="idx">§</span>顶层结构总览</a>
+        <a href="#concepts"><span class="idx">§</span>通用概念(必读)</a>
+        <a href="#cheat"><span class="idx">§</span>「我想做 X」速查</a>
+
+        <div class="nav-group">改写 / 拦截支路(仅回放端)</div>
+        <a href="#rules"><span class="idx">1</span>rules 请求体改写</a>
+        <a href="#resends"><span class="idx">2</span>resends 重发</a>
+        <a href="#responseRules"><span class="idx">3</span>responseRules 响应头改写</a>
+        <a href="#blocks"><span class="idx">4</span>blocks 硬阻断</a>
+        <a href="#dumps"><span class="idx">5</span>dumps 请求体落盘</a>
+        <a href="#bodyReplaces"><span class="idx">6</span>bodyReplaces 请求体替换</a>
+
+        <div class="nav-group">记录支路(两端)</div>
+        <a href="#record"><span class="idx">7</span>record 只记录不修改</a>
+
+        <div class="nav-group">附录</div>
+        <a href="#full-example"><span class="idx">§</span>完整示例</a>
+    </nav>
+
+    <!-- ============ 主体 ============ -->
+    <main>
+        <header class="hero">
+            <h1>拦截器规则配置手册</h1>
+            <span class="file">request-rules.json</span>
+            <p>项目根 /（打包态 userData）下的请求拦截配置。本手册整理出所有可配置字段、作用与限制。改动文件后约 1 秒内热更新生效,无需重启;回放跑到一半改也立即生效。</p>
+        </header>
+
+        <!-- ============ 总览 ============ -->
+        <h2 id="overview"><span class="num">§</span>顶层结构总览</h2>
+        <p class="section-hint">配置根对象共 8 个键。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 总开关统管。</p>
+
+        <div class="overview-grid">
+            <a class="ov-item" href="#concepts"><div class="k">enabled</div><div class="d">总开关,管所有改写/拦截支路(不含 record)</div></a>
+            <a class="ov-item" href="#rules"><div class="k">rules[]</div><div class="d">改写请求 body 顶层字段</div></a>
+            <a class="ov-item" href="#resends"><div class="k">resends[]</div><div class="d">命中后延时改参重发一个新请求</div></a>
+            <a class="ov-item" href="#responseRules"><div class="k">responseRules[]</div><div class="d">按条件改写响应头</div></a>
+            <a class="ov-item" href="#blocks"><div class="k">blocks[]</div><div class="d">硬阻断,命中即不发出</div></a>
+            <a class="ov-item" href="#dumps"><div class="k">dumps[]</div><div class="d">把请求体完整字节落成文件</div></a>
+            <a class="ov-item" href="#bodyReplaces"><div class="k">bodyReplaces[]</div><div class="d">用本地文件整体替换请求体</div></a>
+            <a class="ov-item" href="#record"><div class="k">record</div><div class="d">只记录不修改,独立开关</div></a>
+        </div>
+
+        <div class="note info">
+            <span class="nt">生效阶段(重要)</span>
+            所有改写/拦截类支路(<code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code>)现在<b>只在回放阶段生效</b>——录制时不拦截、不改写、不落盘,抓真实未改动流量。唯有 <code class="inline">record</code> 只记录支路在<b>录制端 + 回放端两端</b>都可用。
+        </div>
+
+        <div class="card">
+            <table>
+                <thead><tr><th>键</th><th>类型</th><th>必填</th><th>作用</th><th>缺省 / 空</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>总开关:false 时改写/重发/响应头/硬阻断/落盘/替换 六支路全部不生效</td><td>缺失视为 <code class="inline">false</code></td></tr>
+                    <tr><td class="field"><code>rules</code></td><td class="type">RequestRule[]</td><td><span class="badge opt">可选</span></td><td>请求体改写规则列表</td><td><code class="inline">[]</code></td></tr>
+                    <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应头改写规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>硬阻断规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>bodyReplaces</code></td><td class="type">BodyReplaceRule[]</td><td><span class="badge opt">可选</span></td><td>请求体整体替换规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>record</code></td><td class="type">TimelineRecordConfig</td><td><span class="badge opt">可选</span></td><td>只记录不修改支路(独立开关)</td><td>不记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ============ 通用概念 ============ -->
+        <h2 id="concepts"><span class="num">§</span>通用概念（先读这里，能省一半试错）</h2>
+
+        <div class="card">
+            <h3 style="color:var(--deep);font-size:16px;margin:18px 0 4px">① CDP glob 匹配（所有 urlPattern / triggerUrl）</h3>
+            <p class="section-hint">URL 匹配用 CDP glob 方言(不是正则、不是 Playwright glob),对整条 URL 全串匹配:</p>
+            <table>
+                <thead><tr><th>写法</th><th>含义</th><th>示例</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>*</code></td><td>匹配任意长度任意字符</td><td><code class="inline">*/api/search*</code> 命中含 <code class="inline">/api/search</code> 的任何 URL</td></tr>
+                    <tr><td class="field"><code>?</code></td><td>匹配单个字符</td><td><code class="inline">/item/?</code></td></tr>
+                    <tr><td>其它字符</td><td>字面量(正则元字符会被自动转义)</td><td><code class="inline">*upload.youtube.com*</code></td></tr>
+                </tbody>
+            </table>
+            <div class="note warn"><span class="nt">易踩坑</span>模式是对<b>完整 URL</b> 匹配。想匹配 <code class="inline">/api/x</code> 通常要写成 <code class="inline">*/api/x*</code>(前后各加 <code class="inline">*</code>),否则协议 / 域名 / 查询串会让它匹配不上。</div>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">② bodyType 嗅探优先级</h3>
+            <p class="section-hint"><code class="inline">rules</code> / <code class="inline">resends</code> 的 <code class="inline">bodyType</code> 缺省时,按此顺序判定:</p>
+            <p style="margin:8px 0"><b>规则显式 <code class="inline">bodyType</code></b> &nbsp;&gt;&nbsp; 请求 <b>Content-Type</b> 头 &nbsp;&gt;&nbsp; body 首字符是 <code class="inline">{</code> 判 <b>json</b> &nbsp;&gt;&nbsp; 兜底 <b>form</b></p>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">③ set / append / remove 语义（rules 与 resends 共用）</h3>
+            <div class="note info"><span class="nt">只作用于 body <b>顶层</b>字段</span>不支持嵌套点路径(如 <code class="inline">a.b.c</code>)。同一条规则内执行顺序固定:<b>set → append → remove</b>。</div>
+            <table>
+                <thead><tr><th>动作</th><th>json body</th><th>form body</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>set</code></td><td>整体覆盖字段值,<b>保留原始 JSON 类型</b>(数组 / 对象 / 数字照写照留)</td><td>转为字符串写入</td></tr>
+                    <tr><td class="field"><code>append</code></td><td>往数组字段追加元素并<b>去重</b>;字段不存在则新建数组、原为单值则包成数组。值写要追加的元素数组</td><td>追加为重复参数(<code class="inline">tags=a&amp;tags=b</code>)、同值去重</td></tr>
+                    <tr><td class="field"><code>remove</code></td><td colspan="2">删除列出的顶层字段名(字符串数组)</td></tr>
+                </tbody>
+            </table>
+            <div class="note warn"><span class="nt">数组值写法</span>数组值<b>直接写真 JSON 数组</b> <code class="inline">["x"]</code>,<b>不要</b>写成字符串 <code class="inline">"['x']"</code>(带引号 / 单引号非合法 JSON)。这是最常见的配置错误。</div>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">④ 为什么支路是分开的数组</h3>
+            <p class="section-hint">匹配引擎「首个命中即返回」。若把改写 / 重发 / 阻断混进同一个数组,会互抢首命中。因此 <code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code> <b>各自独立数组</b>,互不干扰,同一个 URL 可同时命中多个支路。</p>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑤ 防递归标记头</h3>
+            <p class="section-hint">重发的请求会带 <code class="inline">x-macro-resend: 1</code> 头。两端观察路径识别到它即整体跳过(不改写、不再触发重发),避免工具自己发的请求把自己再次触发。该标记头<b>不可被 setHeaders 覆盖、不可被 removeHeaders 删除</b>。</p>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑥ Windows 路径转义</h3>
+            <p class="section-hint">JSON 里反斜杠要转义:<code class="inline">"D:\\videos\\new.mp4"</code>。<code class="inline">replaceWithFile</code> 必须是<b>绝对路径</b>。</p>
+
+            <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑦ 归一化 = 静默丢弃非法项</h3>
+            <p class="section-hint">加载时逐条校验:缺 <code class="inline">urlPattern</code> 的规则、缺 <code class="inline">replaceWithFile</code> 的 bodyReplaces、缺 <code class="inline">triggerUrl</code> 的 responseTrigger 会被<b>整条丢弃</b>(不报错,只是不生效)。坏 JSON 则整份回退为空配置。配了没反应先检查这几处。</p>
+        </div>
+
+        <!-- ============ 速查 ============ -->
+        <h2 id="cheat"><span class="num">§</span>「我想做 X」→ 用哪个支路</h2>
+        <div class="card">
+            <table class="cheat">
+                <thead><tr><th>我想……</th><th>用</th><th>关键字段</th></tr></thead>
+                <tbody>
+                    <tr><td>改某接口 POST 请求参数(改分页 / 加字段 / 删字段)</td><td><code>rules</code></td><td>set / append / remove</td></tr>
+                    <tr><td>某请求命中后隔几秒再自动发一个(改参 / 换 token)</td><td><code>resends</code></td><td>delayMs / set / setHeaders</td></tr>
+                    <tr><td>等某个响应满足条件(如上传完成)后才重发</td><td><code>resends</code> + responseTrigger</td><td>triggerUrl / bodyContains</td></tr>
+                    <tr><td>重发时换整个 body 成一个本地文件(换视频)</td><td><code>resends</code></td><td>replaceWithFile</td></tr>
+                    <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
+                    <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method</td></tr>
+                    <tr><td>把上传接口的字节体存下来(抓视频原始字节)</td><td><code>dumps</code></td><td>urlPattern / extension</td></tr>
+                    <tr><td>拦截时把整个上传体换成本地另一个文件</td><td><code>bodyReplaces</code></td><td>replaceWithFile</td></tr>
+                    <tr><td>只想看有哪些请求 / 响应,不改任何东西</td><td><code>record</code></td><td>enabled / urlPattern</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ============ 1. rules ============ -->
+        <h2 id="rules"><span class="num">1</span><span class="key">rules[]</span>&nbsp;请求体改写</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的 <b>POST</b> 请求,就地改写其 body 顶层字段。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>bodyType</code></td><td class="type">"json" | "form"</td><td><span class="badge opt">可选</span></td><td>指定 body 类型</td><td>省略则自动嗅探(见通用概念②)</td></tr>
+                    <tr><td class="field"><code>set</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖顶层字段</td><td>仅顶层;数组值写真数组</td></tr>
+                    <tr><td class="field"><code>append</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td>往顶层数组字段追加去重</td><td>仅顶层</td></tr>
+                    <tr><td class="field"><code>remove</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除顶层字段</td><td>仅顶层</td></tr>
+                </tbody>
+            </table>
+            <div class="note limit"><span class="nt">限制</span>
+                <ul>
+                    <li>仅回放端;仅对 <b>POST</b> 请求生效。</li>
+                    <li>只改 body <b>顶层</b>字段,不支持嵌套点路径。</li>
+                    <li>未覆盖 <code class="inline">multipart/form-data</code>;非法 JSON 原样放行不改。</li>
+                    <li>要「就地替换整个 body 成一个文件」用 <a href="#bodyReplaces">bodyReplaces</a>,不是这里。</li>
+                </ul>
+            </div>
+<pre><span class="c">// 覆盖 pageSize、把 videoIds 整体设成数组、删 debugFlag</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/search*"</span>,
+  <span class="k">"bodyType"</span>: <span class="s">"json"</span>,
+  <span class="k">"set"</span>: { <span class="k">"pageSize"</span>: <span class="n">100</span>, <span class="k">"videoIds"</span>: [<span class="s">"B5IvLw_ihbU"</span>] },
+  <span class="k">"remove"</span>: [<span class="s">"debugFlag"</span>]
+}</pre>
+        </div>
+
+        <!-- ============ 2. resends ============ -->
+        <h2 id="resends"><span class="num">2</span><span class="key">resends[]</span>&nbsp;重发型</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求作为<b>触发器</b>,延时后取原 body 改参、主动<b>重新发起一个新请求</b>(不改原请求,原请求照常放行)。这是本模块唯一会「主动发 HTTP 请求」的支路。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+
+        <div class="card">
+            <h3 style="color:var(--deep);font-size:15px;margin:16px 0 4px">通用字段</h3>
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>触发观察的 URL(请求触发=命中即重发它;响应触发=要捕获并重发的请求)</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>delayMs</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>命中后首次重发延时(毫秒)。间隔 n 秒 = n×1000</td><td>缺省 0=立即;负数被忽略</td></tr>
+                    <tr><td class="field"><code>method</code></td><td class="type">"POST" | "GET"</td><td><span class="badge opt">可选</span></td><td>重发使用的方法</td><td>缺省 POST。<b>仅请求触发生效</b>;响应触发用捕获请求的原方法</td></tr>
+                    <tr><td class="field"><code>bodyType</code></td><td class="type">"json" | "form"</td><td><span class="badge opt">可选</span></td><td>body 类型</td><td>省略按触发请求嗅探</td></tr>
+                    <tr><td class="field"><code>set</code> / <code>append</code> / <code>remove</code></td><td class="type">object / object / string[]</td><td><span class="badge opt">可选</span></td><td>对重发副本改哪些参数(语义同 rules)</td><td>都不填=原样重发;设了 replaceWithFile 则全被忽略</td></tr>
+                    <tr><td class="field"><code>replaceWithFile</code></td><td class="type">string(绝对路径)</td><td><span class="badge opt">可选</span></td><td>整体用该文件完整字节作重发 body(能发 mp4 等任意二进制)</td><td>忽略 set/append/remove/bodyType;content-type 保留触发请求原值;读文件失败则跳过本次重发</td></tr>
+                    <tr><td class="field"><code>repeat</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>一次触发重发几次</td><td>缺省 1,<b>clamp 到 [1,100]</b></td></tr>
+                    <tr><td class="field"><code>intervalMs</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>repeat&gt;1 时相邻两次的间隔(毫秒)</td><td>缺省 0</td></tr>
+                    <tr><td class="field"><code>dedupeMs</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>去抖窗口:N 毫秒内同规则只发一次(防高频触发放大)</td><td>缺省 0=每次命中都重发</td></tr>
+                    <tr><td class="field"><code>setHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖重发请求头(换 token 等)</td><td>大小写不敏感覆盖;<code class="inline">x-macro-resend</code> 不可覆盖</td></tr>
+                    <tr><td class="field"><code>removeHeaders</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除重发请求头(可删继承自触发请求的头)</td><td>大小写不敏感;<code class="inline">x-macro-resend</code> 不可删</td></tr>
+                    <tr><td class="field"><code>responseTrigger</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td>设了则改由<b>响应</b>触发(见下表)</td><td>不设=请求侧命中即触发</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--deep);font-size:15px;margin:16px 0 4px"><code class="inline">responseTrigger</code> 子对象 —— 响应条件触发（捕获-重放模型）</h3>
+            <p class="section-hint">语义:<b>捕获</b>命中顶层 <code class="inline">urlPattern</code> 的请求(记下 url/method/头/体),当 <code class="inline">triggerUrl</code> 的响应满足以下条件(全部 AND)时,<b>重发捕获的那个请求</b>。即「监听 triggerUrl 的响应 → 重发 urlPattern 捕获的请求」。</p>
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>triggerUrl</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>监听哪个响应作触发闸门(CDP glob 匹配响应 URL)</td><td><b>缺失则整条 resends 规则被丢弃</b></td></tr>
+                    <tr><td class="field"><code>status</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>响应状态码需等于此值</td><td>如 200</td></tr>
+                    <tr><td class="field"><code>headers</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>响应头需全部相等(AND)</td><td>头名大小写不敏感,值精确相等</td></tr>
+                    <tr><td class="field"><code>bodyJson</code></td><td class="type">object(点路径→值)</td><td><span class="badge opt">可选</span></td><td>响应体 JSON 按点路径取值,全部相等(AND)</td><td><code class="inline">JSON.parse</code> 后 <code class="inline">a.b.c</code> 逐层取,<code class="inline">String()</code> 后精确比;解析失败/路径缺失/读不到体=不命中</td></tr>
+                    <tr><td class="field"><code>bodyContains</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>响应体<b>原文子串</b>需全部出现(AND)</td><td>不解析 JSON、不依赖路径,适配深层嵌套/异构数组;<b>大小写敏感</b>;中文若被 <code class="inline">\u</code> 转义会失配,优先用 ASCII 标记</td></tr>
+                </tbody>
+            </table>
+            <div class="note info"><span class="nt">三组条件都可选</span>status / headers / bodyJson / bodyContains 都不给,则该响应恒满足条件(命中即触发)。只要有 bodyJson 或 bodyContains 才会异步读响应体(status/headers 先筛)。</div>
+        </div>
+
+        <div class="note limit"><span class="nt">resends 限制</span>
+            <ul>
+                <li>仅回放端。重发本身是<b>页面内 fetch</b>(带页面 cookie/登录态,DevTools Network 可见),需<b>当前有活动页且宏此刻仍在跑</b>(响应触发场景常配 <code class="inline">pause</code> 步保活),否则重发被跳过。</li>
+                <li>跨域重发受页面 <b>CSP / CORS</b> 限制。</li>
+                <li>响应触发:<code class="inline">urlPattern</code> 请求须<b>先于</b> <code class="inline">triggerUrl</code> 响应被捕获,否则跳过+日志;捕获只取最近一次。</li>
+                <li>捕获<b>上传型(File/Blob)</b>请求的 body 会为空(被动读 Blob 返回 null),此类要重发完整字节须配 <code class="inline">replaceWithFile</code>(url/头仍能捕获)。</li>
+                <li>响应体读取走 Playwright 网络层,<b>不受页面 CORS 限制</b>(能读跨域响应体);但重发的 fetch 仍受 CORS 限。</li>
+                <li>触发限于 POST/GET;超大文件重发内存开销比 bodyReplaces 大,超大上传优先用 bodyReplaces。</li>
+            </ul>
+        </div>
+        <div class="card">
+<pre><span class="c">// 响应触发 + bodyContains 免路径匹配(YouTube 上传完成后重发 createvideo)</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*v1/upload/createvideo*"</span>,        <span class="c">// 捕获这个请求</span>
+  <span class="k">"responseTrigger"</span>: {
+    <span class="k">"triggerUrl"</span>: <span class="s">"*/upload/feedback*"</span>,          <span class="c">// 监听这个响应</span>
+    <span class="k">"status"</span>: <span class="n">200</span>,
+    <span class="k">"bodyContains"</span>: [<span class="s">"uploadFeedbackItemContinuation"</span>, <span class="s">"\"fractionCompleted\":1"</span>]
+  },
+  <span class="k">"delayMs"</span>: <span class="n">800</span>,
+  <span class="k">"repeat"</span>: <span class="n">1</span>
+}</pre>
+        </div>
+
+        <!-- ============ 3. responseRules ============ -->
+        <h2 id="responseRules"><span class="num">3</span><span class="key">responseRules[]</span>&nbsp;响应头条件改写</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的响应,当其响应头满足 <code class="inline">when</code> 条件时,改写响应头。<b>条件读的是响应头、动作改的也是响应头。</b></p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配响应对应的请求 URL</td><td>与 method 无关,GET 也能改;缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>这些响应头需全部相等才改(AND)</td><td>头名大小写不敏感;<b>缺省=无条件总是改</b></td></tr>
+                    <tr><td class="field"><code>setHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖响应头</td><td>大小写不敏感覆盖,不产生重复键</td></tr>
+                    <tr><td class="field"><code>removeHeaders</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除响应头</td><td>大小写不敏感</td></tr>
+                </tbody>
+            </table>
+            <div class="note limit"><span class="nt">限制</span>命中的请求由浏览器直连改为 Node 侧 <code class="inline">route.fetch()</code> 代发(有开销,只作用命中 URL,其余请求零成本);多个合法重复头(如多个 <code class="inline">set-cookie</code>)中不在名单内的会被保留。</div>
+<pre><span class="c">// 响应头 xx=1 时,把 cc 设为 1 并删掉 x-drop 头</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/data*"</span>,
+  <span class="k">"when"</span>: { <span class="k">"xx"</span>: <span class="s">"1"</span> },
+  <span class="k">"setHeaders"</span>: { <span class="k">"cc"</span>: <span class="s">"1"</span> },
+  <span class="k">"removeHeaders"</span>: [<span class="s">"x-drop"</span>]
+}</pre>
+        </div>
+
+        <!-- ============ 4. blocks ============ -->
+        <h2 id="blocks"><span class="num">4</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断）</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面的 fetch/XHR 收到网络错误)。这是本模块唯一「不放行」的分支。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只拦指定 HTTP 方法(如 POST/GET)</td><td>大小写不敏感;<b>缺省=拦该 URL 所有方法</b></td></tr>
+                </tbody>
+            </table>
+<pre><span class="c">// 屏蔽埋点上报;下例只拦 POST,GET 照常放行</span>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/track*"</span> }
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/report*"</span>, <span class="k">"method"</span>: <span class="s">"POST"</span> }</pre>
+        </div>
+
+        <!-- ============ 5. dumps ============ -->
+        <h2 id="dumps"><span class="num">5</span><span class="key">dumps[]</span>&nbsp;请求体落盘</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,把其<b>完整二进制请求体</b>(从第一字节到最后一字节)写成一个文件到 <code class="inline">dumps/</code> 目录。被动观察、不改原请求。用于抓上传型接口的字节体(如把视频上传体存成 mp4)。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只落指定方法(如 PUT/POST)</td><td>大小写不敏感;<b>缺省=落所有方法</b>(上传常是 PUT/POST)</td></tr>
+                    <tr><td class="field"><code>extension</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>输出文件后缀</td><td>可含或不含前导点(<code class="inline">mp4</code> 或 <code class="inline">.bin</code>);<b>缺省 mp4</b></td></tr>
+                </tbody>
+            </table>
+            <div class="note info"><span class="nt">走 CDP Fetch,能抓 File/Blob 上传体</span>用底层 CDP <code class="inline">postDataEntries</code> 逐字节重组,能抓到 Playwright 高层 API 拿不到的 File/Blob 上传体。每命中一个请求落一个文件,文件名 <code class="inline">dump-&lt;毫秒戳&gt;-&lt;序号&gt;.&lt;后缀&gt;</code>。</div>
+            <div class="note limit"><span class="nt">限制</span>分块 / resumable 上传会落多个文件需自行拼接;个别未缓冲的流式上传可能拿不到则静默跳过。</div>
+        </div>
+
+        <!-- ============ 6. bodyReplaces ============ -->
+        <h2 id="bodyReplaces"><span class="num">6</span><span class="key">bodyReplaces[]</span>&nbsp;请求体整体替换</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,在拦截点把其<b>整个</b>请求体替换成本地文件的完整字节,再放行发出。与 dump 是一对(dump 读、这个写)。走 CDP,能替换 File/Blob 上传体(如把上传的视频换成本地另一个 mp4)。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只替换指定方法(如 PUT/POST)</td><td>大小写不敏感;缺省=替换所有方法</td></tr>
+                    <tr><td class="field"><code>replaceWithFile</code></td><td class="type">string(绝对路径)</td><td><span class="badge req">必填</span></td><td>用其完整字节整体替换请求体</td><td><b>缺失整条丢弃</b>;读文件失败则原样放行不替换;Windows 路径反斜杠转义</td></tr>
+                </tbody>
+            </table>
+            <div class="note info"><span class="nt">Content-Length 自动重算</span>替换成不同大小的文件,网络栈会自动重算 <code class="inline">Content-Length</code>,无需手动处理。</div>
+<pre><span class="c">// 把 YouTube 上传(PUT)的请求体整个换成本地另一个 mp4 再发出</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*upload.youtube.com*"</span>,
+  <span class="k">"method"</span>: <span class="s">"PUT"</span>,
+  <span class="k">"replaceWithFile"</span>: <span class="s">"D:\\videos\\replacement.mp4"</span>
+}</pre>
+        </div>
+
+        <!-- ============ 7. record ============ -->
+        <h2 id="record"><span class="num">7</span><span class="key">record</span>&nbsp;只记录不修改</h2>
+        <p class="section-hint">拦截所有请求(不限 method)+ 响应,写入 <code class="inline">timelines/timeline-*.jsonl</code> 供事后分析。<b>不改写任何请求。</b></p>
+        <div class="tag-row"><span class="badge both">录制端 + 回放端</span><span class="badge toggle">独立开关,与 enabled 无关</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>true 即开启记录</td><td><b>与顶层 enabled 无关</b>,即便改写关闭也照记</td></tr>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只记录命中的 URL</td><td><b>缺省 / <code class="inline">*</code> = 记录所有</b></td></tr>
+                    <tr><td class="field"><code>includeBody</code></td><td class="type">boolean</td><td><span class="badge opt">可选</span></td><td>是否记录完整请求 body</td><td>缺省 true(禁止截断);false 则不记 body</td></tr>
+                </tbody>
+            </table>
+            <div class="note limit"><span class="nt">限制</span>响应只记 <code class="inline">status</code> / 耗时 / <code class="inline">mimeType</code>,<b>不记响应体</b>;流式 / SSE 若不发 <code class="inline">loadingFinished</code> 则无响应行。文件名 <code class="inline">timeline-&lt;record|replay&gt;-&lt;毫秒戳&gt;.jsonl</code>,每行一条 JSON,含 <code class="inline">url/method/headers/请求body/status/耗时</code>。</div>
+            <div class="note ok"><span class="nt">与 enabled 各自独立</span>可只开 record(<code class="inline">enabled:false</code>)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)。</div>
+        </div>
+
+        <!-- ============ 完整示例 ============ -->
+        <h2 id="full-example"><span class="num">§</span>完整示例（可整份拷贝改用）</h2>
+        <p class="section-hint">完整带注释的示例见项目 <code class="inline">examples/request-rules.example.json</code>。下面是一份最小可用骨架:</p>
+        <div class="card">
+<pre>{
+  <span class="k">"enabled"</span>: <span class="n">true</span>,
+
+  <span class="k">"rules"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*/api/search*"</span>, <span class="k">"bodyType"</span>: <span class="s">"json"</span>,
+      <span class="k">"set"</span>: { <span class="k">"pageSize"</span>: <span class="n">100</span> } }
+  ],
+
+  <span class="k">"resends"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*/api/refresh*"</span>, <span class="k">"delayMs"</span>: <span class="n">3000</span>,
+      <span class="k">"set"</span>: { <span class="k">"page"</span>: <span class="n">2</span> }, <span class="k">"repeat"</span>: <span class="n">1</span> }
+  ],
+
+  <span class="k">"responseRules"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*/api/open*"</span>,
+      <span class="k">"setHeaders"</span>: { <span class="k">"access-control-allow-origin"</span>: <span class="s">"*"</span> } }
+  ],
+
+  <span class="k">"blocks"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*/api/track*"</span> }
+  ],
+
+  <span class="k">"dumps"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*upload.youtube.com*"</span>, <span class="k">"method"</span>: <span class="s">"PUT"</span>, <span class="k">"extension"</span>: <span class="s">"mp4"</span> }
+  ],
+
+  <span class="k">"bodyReplaces"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*upload.youtube.com*"</span>,
+      <span class="k">"replaceWithFile"</span>: <span class="s">"D:\\videos\\new.mp4"</span> }
+  ],
+
+  <span class="k">"record"</span>: { <span class="k">"enabled"</span>: <span class="n">false</span>, <span class="k">"urlPattern"</span>: <span class="s">"*"</span>, <span class="k">"includeBody"</span>: <span class="n">true</span> }
+}</pre>
+            <div class="note warn"><span class="nt">配了没反应?排查清单</span>
+                <ul>
+                    <li>顶层 <code class="inline">enabled</code> 是否为 <code class="inline">true</code>?(record 除外)</li>
+                    <li><code class="inline">urlPattern</code> 前后是否各加了 <code class="inline">*</code>?(对完整 URL 匹配)</li>
+                    <li>数组值是不是写成了字符串 <code class="inline">"['x']"</code>?应写真数组 <code class="inline">["x"]</code>。</li>
+                    <li>是否在<b>录制阶段</b>期待改写生效?现只在<b>回放阶段</b>生效(record 除外)。</li>
+                    <li>bodyReplaces 缺 <code class="inline">replaceWithFile</code> / responseTrigger 缺 <code class="inline">triggerUrl</code> → 整条被静默丢弃。</li>
+                    <li>JSON 是否合法?坏 JSON 会让整份配置回退为空。</li>
+                </ul>
+            </div>
+        </div>
+
+        <footer>
+            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-20
+        </footer>
+    </main>
+</div>
+</body>
+</html>
