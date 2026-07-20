@@ -556,6 +556,8 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     const resendActive = requestRules.enabled && (requestRules.resends?.length ?? 0) > 0;
     const responseRuleActive =
         requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
+    const requestHeaderActive =
+        requestRules.enabled && (requestRules.requestHeaderRules?.length ?? 0) > 0;
     const blockActive = requestRules.enabled && (requestRules.blocks?.length ?? 0) > 0;
     const dumpActive = requestRules.enabled && (requestRules.dumps?.length ?? 0) > 0;
     const replaceActive = requestRules.enabled && (requestRules.bodyReplaces?.length ?? 0) > 0;
@@ -564,6 +566,7 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         recordActive ||
         resendActive ||
         responseRuleActive ||
+        requestHeaderActive ||
         blockActive ||
         dumpActive ||
         replaceActive
@@ -578,6 +581,11 @@ async function buildSessionOptions(): Promise<SessionOptions> {
         if (responseRuleActive) {
             logInfo(
                 `回放将按 ${requestRules.responseRules!.length} 条响应头规则在满足条件时改写响应头。`
+            );
+        }
+        if (requestHeaderActive) {
+            logInfo(
+                `回放将按 ${requestRules.requestHeaderRules!.length} 条请求头规则在满足条件时改写请求头。`
             );
         }
         if (blockActive) {

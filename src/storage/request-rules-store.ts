@@ -6,6 +6,7 @@ import type {
     ResendRule,
     ResendResponseTrigger,
     ResponseHeaderRule,
+    RequestHeaderRule,
     BlockRule,
     DumpRule,
     BodyReplaceRule,
@@ -75,6 +76,18 @@ function templateConfig(): RequestRulesConfig {
                 urlPattern: '*/api/example*',
                 when: { xx: '1' },
                 setHeaders: { cc: '1' },
+                removeHeaders: [],
+            },
+        ],
+        // requestHeaderRules:「请求头条件改写」支路(受 enabled 总开关管,仅回放端)。命中 urlPattern 的
+        // 请求,当其**原始请求头**满足 when 条件时,在发出前按 setHeaders 设置/覆盖、removeHeaders 删除请求头。
+        // 对称于 responseRules 但改的是请求侧;与 rules(改 body)、resends[].setHeaders(改重发副本头)不同。
+        // 注:cookie/host 由浏览器管理,无法经此覆盖/删除(改 cookie 用登录态注入)。示例=注入 Authorization。
+        requestHeaderRules: [
+            {
+                urlPattern: '*/api/example*',
+                when: { 'x-flag': '1' },
+                setHeaders: { authorization: 'Bearer 替换成你要的 token' },
                 removeHeaders: [],
             },
         ],
@@ -260,6 +273,30 @@ function normalizeResponseHeaderRule(raw: unknown): ResponseHeaderRule | null {
     return rule;
 }
 
+/** 校验并归一化单条请求头改写规则;非法返回 null(过滤掉)。校验与响应头版一致 */
+function normalizeRequestHeaderRule(raw: unknown): RequestHeaderRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    const rule: RequestHeaderRule = { urlPattern: r.urlPattern };
+    const when = normalizeStringMap(r.when);
+    if (when) {
+        rule.when = when;
+    }
+    const setHeaders = normalizeStringMap(r.setHeaders);
+    if (setHeaders) {
+        rule.setHeaders = setHeaders;
+    }
+    if (Array.isArray(r.removeHeaders)) {
+        rule.removeHeaders = r.removeHeaders.filter((x): x is string => typeof x === 'string');
+    }
+    return rule;
+}
+
 /** 校验并归一化单条真拦截规则;非法返回 null(过滤掉) */
 function normalizeBlockRule(raw: unknown): BlockRule | null {
     if (!raw || typeof raw !== 'object') {
@@ -365,6 +402,11 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
                   .map(normalizeResponseHeaderRule)
                   .filter((x): x is ResponseHeaderRule => x !== null)
             : [];
+        const requestHeaderRules = Array.isArray(raw.requestHeaderRules)
+            ? raw.requestHeaderRules
+                  .map(normalizeRequestHeaderRule)
+                  .filter((x): x is RequestHeaderRule => x !== null)
+            : [];
         const blocks = Array.isArray(raw.blocks)
             ? raw.blocks.map(normalizeBlockRule).filter((x): x is BlockRule => x !== null)
             : [];
@@ -381,6 +423,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             rules,
             ...(resends.length ? { resends } : {}),
             ...(responseRules.length ? { responseRules } : {}),
+            ...(requestHeaderRules.length ? { requestHeaderRules } : {}),
             ...(blocks.length ? { blocks } : {}),
             ...(dumps.length ? { dumps } : {}),
             ...(bodyReplaces.length ? { bodyReplaces } : {}),

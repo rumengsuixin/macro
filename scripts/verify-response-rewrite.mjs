@@ -10,6 +10,8 @@ const {
     responseConditionMet,
     rewriteResponseHeaderRecord,
     rewriteResponseHeaderEntries,
+    requestConditionMet,
+    rewriteRequestHeaderRecord,
 } = require('../dist/core/request-rewrite.js');
 
 let failed = 0;
@@ -108,6 +110,55 @@ assert(
     rewriteResponseHeaderEntries([{ name: 'a', value: '1' }], { urlPattern: '*' }) === null,
     '无 setHeaders/removeHeaders → null'
 );
+
+console.log('7) requestConditionMet —— 请求头 when 判断(与响应头版对称:AND、大小写不敏感、缺省恒真)');
+assert(requestConditionMet({ 'x-flag': '1' }, { urlPattern: '*', when: { 'x-flag': '1' } }), 'when 单条件相等 → true');
+assert(!requestConditionMet({ 'x-flag': '2' }, { urlPattern: '*', when: { 'x-flag': '1' } }), 'when 值不等 → false');
+assert(requestConditionMet({ 'X-Flag': '1' }, { urlPattern: '*', when: { 'x-flag': '1' } }), 'when 头名大小写不敏感');
+assert(requestConditionMet({ any: 'x' }, { urlPattern: '*' }), 'when 缺省 → 恒真');
+
+console.log('8) rewriteRequestHeaderRecord —— set/remove/保留/条件门槛 + content-length 剥离');
+{
+    const out = rewriteRequestHeaderRecord(
+        { authorization: 'old', 'x-orig': 'keep' },
+        { urlPattern: '*', when: { 'x-orig': 'keep' }, setHeaders: { authorization: 'new' }, removeHeaders: ['x-drop'] }
+    );
+    assert(out !== null && out.authorization === 'new', 'set 覆盖 authorization=new');
+    assert(out['x-orig'] === 'keep', '未涉及的头保留');
+}
+{
+    // set 大小写不同的同名头 → 只剩一个键
+    const out = rewriteRequestHeaderRecord(
+        { 'X-Token': 'a' },
+        { urlPattern: '*', setHeaders: { 'x-token': 'b' } }
+    );
+    const keys = Object.keys(out).filter((k) => k.toLowerCase() === 'x-token');
+    assert(keys.length === 1 && out[keys[0]] === 'b', 'set 同名头(大小写)只剩一个键、值被覆盖');
+}
+{
+    const out = rewriteRequestHeaderRecord(
+        { 'X-Drop': 'yes', keep: '1' },
+        { urlPattern: '*', removeHeaders: ['x-drop'] }
+    );
+    assert(out !== null && !('X-Drop' in out), 'remove 大小写不敏感删掉 X-Drop');
+    assert(out.keep === '1', '未涉及的头保留');
+}
+{
+    // 关键:content-length 无论是否在名单里都被剥离(body 可能被 rules 改长,交网络栈重算)
+    const out = rewriteRequestHeaderRecord(
+        { 'Content-Length': '10', authorization: 'x' },
+        { urlPattern: '*', setHeaders: { authorization: 'y' } }
+    );
+    assert(
+        out !== null && !Object.keys(out).some((k) => k.toLowerCase() === 'content-length'),
+        'content-length 被剥离(即便不在 set/remove 名单里)'
+    );
+}
+assert(
+    rewriteRequestHeaderRecord({ 'x-orig': 'no' }, { urlPattern: '*', when: { 'x-orig': 'keep' }, setHeaders: { a: '1' } }) === null,
+    'when 不满足 → null(不改)'
+);
+assert(rewriteRequestHeaderRecord({ a: '1' }, { urlPattern: '*' }) === null, '无 setHeaders/removeHeaders → null');
 
 if (failed > 0) {
     console.error(`\n自检失败:${failed} 项未通过。`);

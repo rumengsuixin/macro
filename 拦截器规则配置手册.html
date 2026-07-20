@@ -391,12 +391,13 @@
         <a href="#rules"><span class="idx">1</span>rules 请求体改写</a>
         <a href="#resends"><span class="idx">2</span>resends 重发</a>
         <a href="#responseRules"><span class="idx">3</span>responseRules 响应头改写</a>
-        <a href="#blocks"><span class="idx">4</span>blocks 硬阻断</a>
-        <a href="#dumps"><span class="idx">5</span>dumps 请求体落盘</a>
-        <a href="#bodyReplaces"><span class="idx">6</span>bodyReplaces 请求体替换</a>
+        <a href="#requestHeaderRules"><span class="idx">4</span>requestHeaderRules 请求头改写</a>
+        <a href="#blocks"><span class="idx">5</span>blocks 硬阻断</a>
+        <a href="#dumps"><span class="idx">6</span>dumps 请求体落盘</a>
+        <a href="#bodyReplaces"><span class="idx">7</span>bodyReplaces 请求体替换</a>
 
         <div class="nav-group">记录支路(两端)</div>
-        <a href="#record"><span class="idx">7</span>record 只记录不修改</a>
+        <a href="#record"><span class="idx">8</span>record 只记录不修改</a>
 
         <div class="nav-group">附录</div>
         <a href="#full-example"><span class="idx">§</span>完整示例</a>
@@ -419,6 +420,7 @@
             <a class="ov-item" href="#rules"><div class="k">rules[]</div><div class="d">改写请求 body 顶层字段</div></a>
             <a class="ov-item" href="#resends"><div class="k">resends[]</div><div class="d">命中后延时改参重发一个新请求</div></a>
             <a class="ov-item" href="#responseRules"><div class="k">responseRules[]</div><div class="d">按条件改写响应头</div></a>
+            <a class="ov-item" href="#requestHeaderRules"><div class="k">requestHeaderRules[]</div><div class="d">按条件改写原始请求的请求头</div></a>
             <a class="ov-item" href="#blocks"><div class="k">blocks[]</div><div class="d">硬阻断,命中即不发出</div></a>
             <a class="ov-item" href="#dumps"><div class="k">dumps[]</div><div class="d">把请求体完整字节落成文件</div></a>
             <a class="ov-item" href="#bodyReplaces"><div class="k">bodyReplaces[]</div><div class="d">用本地文件整体替换请求体</div></a>
@@ -427,7 +429,7 @@
 
         <div class="note info">
             <span class="nt">生效阶段(重要)</span>
-            所有改写/拦截类支路(<code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code>)现在<b>只在回放阶段生效</b>——录制时不拦截、不改写、不落盘,抓真实未改动流量。唯有 <code class="inline">record</code> 只记录支路在<b>录制端 + 回放端两端</b>都可用。
+            所有改写/拦截类支路(<code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">requestHeaderRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code>)现在<b>只在回放阶段生效</b>——录制时不拦截、不改写、不落盘,抓真实未改动流量。唯有 <code class="inline">record</code> 只记录支路在<b>录制端 + 回放端两端</b>都可用。
         </div>
 
         <div class="card">
@@ -438,6 +440,7 @@
                     <tr><td class="field"><code>rules</code></td><td class="type">RequestRule[]</td><td><span class="badge opt">可选</span></td><td>请求体改写规则列表</td><td><code class="inline">[]</code></td></tr>
                     <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应头改写规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>requestHeaderRules</code></td><td class="type">RequestHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>请求头改写规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>硬阻断规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>bodyReplaces</code></td><td class="type">BodyReplaceRule[]</td><td><span class="badge opt">可选</span></td><td>请求体整体替换规则列表</td><td>无</td></tr>
@@ -502,6 +505,7 @@
                     <tr><td>等某个响应满足条件(如上传完成)后才重发</td><td><code>resends</code> + responseTrigger</td><td>triggerUrl / bodyContains</td></tr>
                     <tr><td>重发时换整个 body 成一个本地文件(换视频)</td><td><code>resends</code></td><td>replaceWithFile</td></tr>
                     <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
+                    <tr><td>改某请求的请求头(换 Authorization / 删探针头)</td><td><code>requestHeaderRules</code></td><td>when / setHeaders / removeHeaders</td></tr>
                     <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method</td></tr>
                     <tr><td>把上传接口的字节体存下来(抓视频原始字节)</td><td><code>dumps</code></td><td>urlPattern / extension</td></tr>
                     <tr><td>拦截时把整个上传体换成本地另一个文件</td><td><code>bodyReplaces</code></td><td>replaceWithFile</td></tr>
@@ -632,8 +636,39 @@
 }</pre>
         </div>
 
-        <!-- ============ 4. blocks ============ -->
-        <h2 id="blocks"><span class="num">4</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断）</h2>
+        <!-- ============ 4. requestHeaderRules ============ -->
+        <h2 id="requestHeaderRules"><span class="num">4</span><span class="key">requestHeaderRules[]</span>&nbsp;请求头条件改写</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,当其<b>原始请求头</b>满足 <code class="inline">when</code> 条件时,在发出前改写请求头。对称于 <code class="inline">responseRules</code>,但改的是<b>请求侧</b>。典型用途:注入/替换 Authorization、改 X-Requested-With、删探针头。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>与 method 无关,GET 也能改;缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>这些<b>请求头</b>需全部相等才改(AND)</td><td>头名大小写不敏感;<b>缺省=无条件总是改</b>;读的是改写前原始请求头,不含 cookie</td></tr>
+                    <tr><td class="field"><code>setHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖请求头</td><td>大小写不敏感覆盖,不产生重复键</td></tr>
+                    <tr><td class="field"><code>removeHeaders</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除请求头</td><td>大小写不敏感;cookie/host 无法删</td></tr>
+                </tbody>
+            </table>
+            <div class="note limit"><span class="nt">限制</span>
+                <ul>
+                    <li>仅回放端。改的是<b>原始在途请求本身</b>的头(区别于 <a href="#resends">resends</a> 的 <code class="inline">setHeaders</code>——那改的是<b>重发副本</b>的头)。</li>
+                    <li><b>cookie / host 改不了</b>:由浏览器管理,<code class="inline">route.continue</code> 无法覆盖/删除;<code class="inline">request.headers()</code> 本就不含 cookie,浏览器会自动补回(不误删登录态)。改 cookie 用登录态注入 / 持久 profile。</li>
+                    <li><b>content-length 会被自动剥离</b>:同一请求的 body 可能被 <code class="inline">rules</code> 一并改写,交网络栈按真实 body 重算,避免长度不符。</li>
+                    <li>勿用 <code class="inline">removeHeaders</code> 清空全部头。</li>
+                </ul>
+            </div>
+<pre><span class="c">// 请求头 x-flag=1 时,换 Authorization、删继承的 x-trace;不满足则原样放行</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/order*"</span>,
+  <span class="k">"when"</span>: { <span class="k">"x-flag"</span>: <span class="s">"1"</span> },
+  <span class="k">"setHeaders"</span>: { <span class="k">"authorization"</span>: <span class="s">"Bearer NEW_TOKEN"</span> },
+  <span class="k">"removeHeaders"</span>: [<span class="s">"x-trace"</span>]
+}</pre>
+        </div>
+
+        <!-- ============ 5. blocks ============ -->
+        <h2 id="blocks"><span class="num">5</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断）</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面的 fetch/XHR 收到网络错误)。这是本模块唯一「不放行」的分支。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -649,8 +684,8 @@
 { <span class="k">"urlPattern"</span>: <span class="s">"*/api/report*"</span>, <span class="k">"method"</span>: <span class="s">"POST"</span> }</pre>
         </div>
 
-        <!-- ============ 5. dumps ============ -->
-        <h2 id="dumps"><span class="num">5</span><span class="key">dumps[]</span>&nbsp;请求体落盘</h2>
+        <!-- ============ 6. dumps ============ -->
+        <h2 id="dumps"><span class="num">6</span><span class="key">dumps[]</span>&nbsp;请求体落盘</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,把其<b>完整二进制请求体</b>(从第一字节到最后一字节)写成一个文件到 <code class="inline">dumps/</code> 目录。被动观察、不改原请求。用于抓上传型接口的字节体(如把视频上传体存成 mp4)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -666,8 +701,8 @@
             <div class="note limit"><span class="nt">限制</span>分块 / resumable 上传会落多个文件需自行拼接;个别未缓冲的流式上传可能拿不到则静默跳过。</div>
         </div>
 
-        <!-- ============ 6. bodyReplaces ============ -->
-        <h2 id="bodyReplaces"><span class="num">6</span><span class="key">bodyReplaces[]</span>&nbsp;请求体整体替换</h2>
+        <!-- ============ 7. bodyReplaces ============ -->
+        <h2 id="bodyReplaces"><span class="num">7</span><span class="key">bodyReplaces[]</span>&nbsp;请求体整体替换</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,在拦截点把其<b>整个</b>请求体替换成本地文件的完整字节,再放行发出。与 dump 是一对(dump 读、这个写)。走 CDP,能替换 File/Blob 上传体(如把上传的视频换成本地另一个 mp4)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -688,8 +723,8 @@
 }</pre>
         </div>
 
-        <!-- ============ 7. record ============ -->
-        <h2 id="record"><span class="num">7</span><span class="key">record</span>&nbsp;只记录不修改</h2>
+        <!-- ============ 8. record ============ -->
+        <h2 id="record"><span class="num">8</span><span class="key">record</span>&nbsp;只记录不修改</h2>
         <p class="section-hint">拦截所有请求(不限 method)+ 响应,写入 <code class="inline">timelines/timeline-*.jsonl</code> 供事后分析。<b>不改写任何请求。</b></p>
         <div class="tag-row"><span class="badge both">录制端 + 回放端</span><span class="badge toggle">独立开关,与 enabled 无关</span></div>
         <div class="card">
@@ -725,6 +760,11 @@
   <span class="k">"responseRules"</span>: [
     { <span class="k">"urlPattern"</span>: <span class="s">"*/api/open*"</span>,
       <span class="k">"setHeaders"</span>: { <span class="k">"access-control-allow-origin"</span>: <span class="s">"*"</span> } }
+  ],
+
+  <span class="k">"requestHeaderRules"</span>: [
+    { <span class="k">"urlPattern"</span>: <span class="s">"*/api/order*"</span>, <span class="k">"when"</span>: { <span class="k">"x-flag"</span>: <span class="s">"1"</span> },
+      <span class="k">"setHeaders"</span>: { <span class="k">"authorization"</span>: <span class="s">"Bearer NEW_TOKEN"</span> } }
   ],
 
   <span class="k">"blocks"</span>: [

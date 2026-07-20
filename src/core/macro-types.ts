@@ -442,6 +442,26 @@ export interface ResponseHeaderRule {
 }
 
 /**
+ * 「请求头条件改写」规则:命中 urlPattern 的请求,当其**原始请求头**满足 when 条件时,
+ * 在请求发出前按 setHeaders / removeHeaders 改写请求头。对称于 responseRules[],但介入点在
+ * 请求侧(回放端 route.continue({headers}) / route.fetch({headers}))。
+ * 与 rules[](改请求 body)、resends[].setHeaders(改**重发副本**的头)语义不同:本支路改的是
+ * **原始在途请求本身**的头。与其它支路物理分开存 requestHeaderRules[](matchRule 首命中即返回)。
+ * 受 RequestRulesConfig.enabled 总开关统管。**仅回放端生效**。
+ * 注:cookie / host 由浏览器管理,route.continue 无法覆盖,对其 set/remove 无效(改 cookie 用 addCookies)。
+ */
+export interface RequestHeaderRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 条件:这些**请求头**需**全部相等**才改(AND,头名大小写不敏感);缺省=无条件总是改 */
+    when?: Record<string, string>;
+    /** 设置/覆盖的请求头(如 Authorization);同名头大小写不敏感覆盖,不产生重复键 */
+    setHeaders?: Record<string, string>;
+    /** 删除的请求头名(大小写不敏感;cookie/host 无法删,由浏览器管理) */
+    removeHeaders?: string[];
+}
+
+/**
  * 「真拦截(硬阻断)」规则:命中 urlPattern(可选限定 method)的请求**直接阻断、不让其发出**——
  * 回放端 Playwright route.abort()(页面的 fetch/XHR 收到网络错误)。与 rules[]/resends[]/responseRules[]
  * 物理分开存 blocks[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
@@ -510,6 +530,8 @@ export interface RequestRulesConfig {
     resends?: ResendRule[];
     /** 响应头条件改写规则列表(命中且满足 when 条件则改响应头;受 enabled 总开关管);缺省视为无 */
     responseRules?: ResponseHeaderRule[];
+    /** 请求头条件改写规则列表(命中且满足 when 则改原始请求头;受 enabled 总开关管;仅回放端);缺省视为无 */
+    requestHeaderRules?: RequestHeaderRule[];
     /** 真拦截(硬阻断)规则列表(命中即 route.abort 阻断、不发出;受 enabled 总开关管);缺省视为无 */
     blocks?: BlockRule[];
     /** 请求体落盘规则列表(命中即把完整二进制请求体写成文件;受 enabled 总开关管;仅回放端);缺省视为无 */

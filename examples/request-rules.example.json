@@ -33,6 +33,12 @@
         "responseRules[].when": "条件对象:这些响应头需全部相等才改(AND,头名大小写不敏感)。如 {\"xx\":\"1\"} 表示响应头 xx=1 时才改。缺省/不写=无条件总是改",
         "responseRules[].setHeaders": "设置/覆盖的响应头(如 {\"cc\":\"1\"});同名头大小写不敏感覆盖,不产生重复键",
         "responseRules[].removeHeaders": "删除的响应头名数组(大小写不敏感)",
+        "requestHeaderRules[]": "「请求头条件改写」支路(受 enabled 总开关管,仅回放端,与 rules/resends/responseRules 物理分开):命中 urlPattern 的请求,当其**原始请求头**满足 when 条件时,在发出前改写请求头。**条件读的是请求头、动作改的也是请求头**。与 rules(改 body)、resends[].setHeaders(改**重发副本**的头)不同——本支路改的是**原始在途请求本身**的头。回放端走 route.continue({headers}) / route.fetch({headers})",
+        "requestHeaderRules[].urlPattern": "CDP glob 匹配请求 URL(同 rules;与 method 无关,GET 也能改)",
+        "requestHeaderRules[].when": "条件对象:这些**请求头**需全部相等才改(AND,头名大小写不敏感)。缺省/不写=无条件总是改",
+        "requestHeaderRules[].setHeaders": "设置/覆盖的请求头(如换 Authorization);同名头大小写不敏感覆盖,不产生重复键",
+        "requestHeaderRules[].removeHeaders": "删除的请求头名数组(大小写不敏感)。注:cookie/host 由浏览器管理,无法经此删除/覆盖",
+        "_请求头改写说明": "content-length 会被自动剥离(body 可能被 rules 一并改写,交网络栈按真实 body 重算);cookie 不在此支路可改范围(改 cookie 用登录态/持久 profile);when 读的是页面实际发出的原始请求头(不含 cookie)",
         "blocks[]": "「真拦截(硬阻断)」支路(受 enabled 总开关管,与 rules/resends/responseRules 物理分开):命中 urlPattern 的请求**直接阻断、不发出**(回放端 route.abort(),页面的 fetch/XHR 收到网络错误)。这是本模块唯一「不放行」的分支",
         "blocks[].urlPattern": "CDP glob 匹配请求 URL(同 rules;与 method 无关,默认拦所有方法)",
         "blocks[].method": "可选,只拦指定 HTTP 方法(大小写不敏感,如 POST / GET);缺省=拦该 URL 的所有方法",
@@ -141,6 +147,20 @@
             "_注": "无条件(不写 when):命中该 URL 的响应一律加上一个 CORS 头",
             "urlPattern": "*/api/open*",
             "setHeaders": { "access-control-allow-origin": "*" }
+        }
+    ],
+    "requestHeaderRules": [
+        {
+            "_注": "请求头 x-flag=1 时,给命中请求换 Authorization 头、删掉继承的 x-trace;不满足 x-flag=1 则原样放行",
+            "urlPattern": "*/api/order*",
+            "when": { "x-flag": "1" },
+            "setHeaders": { "authorization": "Bearer NEW_TOKEN" },
+            "removeHeaders": ["x-trace"]
+        },
+        {
+            "_注": "无条件(不写 when):给命中请求统一加一个 X-Requested-With 头",
+            "urlPattern": "*/api/open*",
+            "setHeaders": { "x-requested-with": "XMLHttpRequest" }
         }
     ],
     "blocks": [
