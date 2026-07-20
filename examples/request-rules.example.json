@@ -154,6 +154,16 @@
             "setUrl": "https://host/api/v2/{{rid}}/commit?token={{token}}",
             "delayMs": 300,
             "repeat": 1
+        },
+        {
+            "_注": "响应触发 + when 表达式:仅在真实浏览器响应(hop==0)触发,任何工具自身重发引发的响应(hop≥1)一律不触发 → 连环从源头切断,不再依赖 maxResendHops 兜底。when 与静态条件 AND;上下文 status/hop/body/text + header()/reqHeader()/match()/contains()",
+            "urlPattern": "*/api/finalize*",
+            "responseTrigger": {
+                "triggerUrl": "*/api/status*",
+                "when": "hop == 0 && status == 200 && body.data.state == 'done'"
+            },
+            "delayMs": 300,
+            "repeat": 1
         }
     ],
     "responseRules": [

@@ -51,6 +51,7 @@ import {
     explainResponseTriggerMiss,
     extractResendVars,
     renderResendActions,
+    checkExprSyntax,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
@@ -934,6 +935,22 @@ export class MacroRunner {
         const all = cfg.resends ?? [];
         this.resendRules = all.filter((r) => !r.responseTrigger);
         this.responseResendRules = all.filter((r) => !!r.responseTrigger);
+        // 加载期语法体检:带 when 的规则若表达式语法错,一次性中文告警(该规则将永不命中,避免静默失效)
+        for (const rr of this.responseResendRules) {
+            const w = rr.responseTrigger?.when;
+            if (w && w.trim()) {
+                const err = checkExprSyntax(w);
+                if (err) {
+                    const sig = `when-syntax:${w}`;
+                    if (!this.resendMissWarned.has(sig)) {
+                        this.resendMissWarned.add(sig);
+                        logInfo(
+                            `回放请求重发器(响应触发):规则 [${rr.urlPattern}] 的 when 表达式语法错误,将永不命中(请修正):${err}`
+                        );
+                    }
+                }
+            }
+        }
         const want = cfg.enabled && this.resendRules.length > 0;
         const respWant = cfg.enabled && this.responseResendRules.length > 0;
         const prevAny = this.resendWant || this.resendResponseWant;
@@ -1016,10 +1033,17 @@ export class MacroRunner {
                         bodyText = null; // 读不到(竞态/中断)→ 有 body 条件的规则将不命中
                     }
                 }
-                if (!responseTriggerMet(trigger, status, headers, bodyText, reqHeaders)) {
+                if (!responseTriggerMet(trigger, status, headers, bodyText, reqHeaders, triggerHop)) {
                     // 诊断:triggerUrl 命中但条件没过 → 说清为什么(缺哪个子串/实际片段/仅空白差异/请求头不符),
                     // 按失败模式去重限流,避免轮询期刷屏。
-                    const miss = explainResponseTriggerMiss(trigger, status, headers, bodyText, reqHeaders);
+                    const miss = explainResponseTriggerMiss(
+                        trigger,
+                        status,
+                        headers,
+                        bodyText,
+                        reqHeaders,
+                        triggerHop
+                    );
                     if (miss && !this.resendMissWarned.has(miss.signature)) {
                         this.resendMissWarned.add(miss.signature);
                         logInfo(

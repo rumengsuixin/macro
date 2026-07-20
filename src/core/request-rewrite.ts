@@ -10,6 +10,10 @@ import type {
     ResendRule,
     ResendResponseTrigger,
 } from './macro-types';
+import { tryEvalTriggerWhen, checkExprSyntax, type ExprContext } from './expr-eval';
+
+// 再导出引擎表面:让 runner 与自检脚本仍从单一入口 request-rewrite 取(与现有 import 风格一致)
+export { tryEvalTriggerWhen, checkExprSyntax };
 
 /** 把 CDP glob(`*` 任意串、`?` 单字符、`\` 转义)编译为整串匹配的正则 */
 export function globToRegExp(glob: string): RegExp {
@@ -229,8 +233,40 @@ export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
         (!!trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) ||
         (!!trigger.bodyContains && trigger.bodyContains.length > 0) ||
         (!!trigger.extract &&
-            Object.values(trigger.extract).some((s) => s.fromBody !== undefined))
+            Object.values(trigger.extract).some((s) => s.fromBody !== undefined)) ||
+        // when 表达式引用了 body / text 也需读体(保守:字面量里出现也算,多读一次可接受,读体已按响应 memo)
+        (!!trigger.when && /\b(body|text)\b/.test(trigger.when))
     );
+}
+
+/**
+ * 为「响应触发 when 表达式」构造求值上下文:body 只 JSON.parse 一次(失败 → undefined),
+ * header()/reqHeader() 注入 headerValue 闭包(大小写不敏感)。供 responseTriggerMet 与
+ * explainResponseTriggerMiss 共用,保证两者对同一响应看到完全一致的上下文。
+ */
+function buildTriggerExprContext(
+    status: number,
+    headers: Record<string, string>,
+    requestHeaders: Record<string, string>,
+    bodyText: string | null,
+    hop: number
+): ExprContext {
+    let body: unknown;
+    if (bodyText) {
+        try {
+            body = JSON.parse(bodyText);
+        } catch {
+            body = undefined; // 非合法 JSON → body 为 undefined,用户用 !body / body && … 安全短路
+        }
+    }
+    return {
+        status,
+        hop,
+        body,
+        text: bodyText,
+        header: (n) => headerValue(headers, n),
+        reqHeader: (n) => headerValue(requestHeaders, n),
+    };
 }
 
 /**
@@ -247,7 +283,8 @@ export function responseTriggerMet(
     status: number,
     headers: Record<string, string>,
     bodyText: string | null,
-    requestHeaders: Record<string, string> = {}
+    requestHeaders: Record<string, string> = {},
+    hop = 0
 ): boolean {
     if (trigger.status !== undefined && status !== trigger.status) {
         return false;
@@ -287,6 +324,15 @@ export function responseTriggerMet(
             }
         }
     }
+    // when:JS 风格布尔表达式,放在所有静态条件之后(与它们 AND);空 → 无条件。
+    // 失败即安全:解析失败 / 求值异常 / 结果为假一律不命中(绝不因表达式坏了误开连环)。
+    if (trigger.when && trigger.when.trim()) {
+        const ctx = buildTriggerExprContext(status, headers, requestHeaders, bodyText, hop);
+        const r = tryEvalTriggerWhen(trigger.when, ctx);
+        if (!r.ok || !r.value) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -311,7 +357,8 @@ export function explainResponseTriggerMiss(
     status: number,
     headers: Record<string, string>,
     bodyText: string | null,
-    requestHeaders: Record<string, string> = {}
+    requestHeaders: Record<string, string> = {},
+    hop = 0
 ): { signature: string; message: string } | null {
     const parts: string[] = [];
     const sig: string[] = [];
@@ -398,6 +445,23 @@ export function explainResponseTriggerMiss(
                     }
                 }
             }
+        }
+    }
+
+    if (trigger.when && trigger.when.trim()) {
+        const ctx = buildTriggerExprContext(status, headers, requestHeaders, bodyText, hop);
+        const r = tryEvalTriggerWhen(trigger.when, ctx);
+        if (!r.ok && r.phase === 'parse') {
+            parts.push(`when 表达式语法错误:${trigger.when}(${r.message})`);
+            sig.push('when:syntax');
+        } else if (!r.ok) {
+            parts.push(`when 表达式求值异常:${trigger.when}(${r.message})`);
+            sig.push('when:eval');
+        } else if (!r.value) {
+            // 带上实际 status / hop(可观测「重发响应 hop=1 → hop==0 不满足 → 未再触发」);
+            // 但去重键只按表达式串,避免 hop 每变一次刷屏
+            parts.push(`when 条件不满足:${trigger.when}(status=${status}, hop=${hop})`);
+            sig.push(`when:false:${trigger.when}`);
         }
     }
 

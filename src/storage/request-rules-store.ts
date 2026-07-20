@@ -249,6 +249,11 @@ function normalizeResponseTrigger(raw: unknown): ResendResponseTrigger | null {
     if (extract) {
         out.extract = extract;
     }
+    // when:原样保留字符串(不在此解析);非法表达式不丢规则、不剥字段 —— 运行期解析失败会安全判不命中 +
+    // 显式诊断,比静默剥掉更安全(剥掉会悄悄放开连环)。
+    if (typeof t.when === 'string' && t.when.trim()) {
+        out.when = t.when;
+    }
     return out;
 }
 

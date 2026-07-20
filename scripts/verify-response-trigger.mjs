@@ -18,6 +18,8 @@ const {
     extractResendVars,
     renderTemplate,
     renderResendActions,
+    tryEvalTriggerWhen,
+    checkExprSyntax,
 } = require('../dist/core/request-rewrite.js');
 
 let failed = 0;
@@ -361,6 +363,158 @@ console.log('11) renderResendActions —— set/append/setHeaders/setUrl 深度�
     // vars 空 → 原样返回同一引用
     assert(renderResendActions(rr, {}) === rr, 'vars 空 → 直接返回原规则(同引用,不拷贝)');
 }
+
+// ── when 表达式引擎(expr-eval)自检 ──
+function headerValueCI(map, name) {
+    const lower = String(name).toLowerCase();
+    for (const [k, v] of Object.entries(map || {})) {
+        if (k.toLowerCase() === lower) {
+            return v;
+        }
+    }
+    return '';
+}
+function makeCtx({ status = 200, hop = 0, body, text = null, headers = {}, reqHeaders = {} } = {}) {
+    return {
+        status,
+        hop,
+        body,
+        text,
+        header: (n) => headerValueCI(headers, n),
+        reqHeader: (n) => headerValueCI(reqHeaders, n),
+    };
+}
+const evalResult = (expr, over) => tryEvalTriggerWhen(expr, makeCtx(over));
+const evalTrue = (expr, over) => {
+    const r = evalResult(expr, over);
+    return r.ok && !!r.value;
+};
+
+console.log('11) expr-eval —— 字面量 / 相等 / 关系 / 逻辑短路');
+assert(evalTrue('200 == 200'), '数字相等');
+assert(evalTrue(`'a' == 'a'`), '字符串相等');
+assert(evalTrue('true'), 'true 字面量');
+assert(!evalTrue('false'), 'false 字面量');
+assert(evalTrue('null == null'), 'null == null');
+assert(evalTrue('status === 200', { status: 200 }), 'status===200 严格真');
+assert(!evalTrue(`status === '200'`, { status: 200 }), `status==='200' 严格假(类型不同)`);
+assert(evalTrue(`status == '200'`, { status: 200 }), `status=='200' 松散真(String 对齐)`);
+assert(evalTrue('hop >= 1', { hop: 2 }), 'hop>=1 (hop=2)');
+assert(evalTrue('status < 300', { status: 200 }), 'status<300');
+assert(!evalTrue('status >= 400', { status: 200 }), 'status>=400 假');
+assert(!evalTrue(`status < 'abc'`, { status: 200 }), 'NaN 比较 → 假');
+assert(evalTrue('status == 200 && hop == 0', { status: 200, hop: 0 }), '&& 组合');
+assert(evalTrue('hop == 0 || hop == 1', { hop: 1 }), '|| 组合');
+assert(evalTrue('!(hop == 0)', { hop: 3 }), '一元 ! 取反');
+assert(evalTrue('-1 < 0'), '一元负号字面量');
+assert(evalTrue('body && body.x == 1', { body: { x: 1 } }), 'body 存在时 && 右侧');
+assert(!evalTrue('body && body.x == 1', { body: undefined }), 'body=undefined && 短路为假');
+assert(evalResult('body && body.x', { body: undefined }).ok, 'body=undefined 短路不抛错(ok:true)');
+
+console.log('12) expr-eval —— 成员 / 下标访问');
+const eb = { data: { state: 'done' }, arr: [1, 2], flag: false };
+assert(evalTrue(`body.data.state == 'done'`, { body: eb }), '点成员深取');
+assert(evalTrue('body.arr[0] == 1', { body: eb }), '数组下标');
+assert(evalTrue(`body['data']['state'] == 'done'`, { body: eb }), '方括号字符串键');
+assert(evalTrue('!body.data.missing', { body: eb }), '缺失叶子 → falsy');
+assert(evalTrue('body.arr.length == 2', { body: eb }), '数组 length 自有属性');
+assert(evalTrue('!body.flag', { body: eb }), 'body.flag=false → !false');
+
+console.log('13) expr-eval —— 内置函数 header / reqHeader / match / contains');
+const t13 = { headers: { 'x-ready': '1' }, reqHeaders: { 'x-phase': 'final' }, text: '{"state":"done"}' };
+assert(evalTrue(`header('X-Ready') == '1'`, t13), 'header 大小写不敏感');
+assert(evalTrue(`reqHeader('x-phase') == 'final'`, t13), 'reqHeader 取值');
+assert(evalTrue(`!header('nope')`, t13), '缺失头 → "" → falsy');
+assert(evalTrue(`contains(text, '"state":"done"')`, t13), 'contains 子串');
+assert(evalTrue(`match(text, 'done')`, t13), 'match 正则命中');
+assert(!evalTrue(`match(text, '^no')`, t13), 'match 正则不命中');
+
+console.log('14) expr-eval —— 空 / 纯空白 = 无条件通过');
+assert(tryEvalTriggerWhen('', makeCtx()).value === true, '空串 → true');
+assert(tryEvalTriggerWhen('   ', makeCtx()).value === true, '纯空白 → true');
+
+console.log('15) expr-eval —— 安全边界:原型逃逸 / 全局访问一律拒绝');
+const esc = { body: { x: 1, arr: [1, 2] } };
+assert(evalTrue('!body.constructor', esc), 'body.constructor → undefined');
+assert(evalTrue(`!body['constructor']`, esc), `body['constructor'] → undefined`);
+assert(evalTrue('!body.__proto__', esc), 'body.__proto__ → undefined');
+assert(evalTrue('!body.arr.map', esc), 'body.arr.map(数组继承方法) → undefined');
+assert(!evalResult('process', esc).ok, '裸 process → 未知标识符(ok:false)');
+assert(!evalResult('globalThis', esc).ok, '裸 globalThis → ok:false');
+assert(!evalResult('require', esc).ok, '裸 require → ok:false');
+assert(!evalResult('this', esc).ok, '裸 this → ok:false(非白名单标识符)');
+assert(!evalResult('foo()', esc).ok, '未知函数 foo() → ok:false');
+assert(!evalResult(`body.constructor('x')`, esc).ok, 'body.constructor(...) → 语法层拒绝(非裸标识符调用)');
+assert(!evalResult('(1)()', esc).ok, '(1)() → 语法层拒绝');
+
+console.log('16) checkExprSyntax —— 合法 → null,非法 → 中文错误');
+assert(checkExprSyntax('hop == 0') === null, '合法表达式 → null');
+assert(checkExprSyntax('') === null, '空 → null(无条件)');
+assert(typeof checkExprSyntax('status ==') === 'string', '缺右操作数 → 报错');
+assert(typeof checkExprSyntax('(1') === 'string', '括号未闭合 → 报错');
+assert(typeof checkExprSyntax('===') === 'string', '孤立算子 → 报错');
+assert(typeof checkExprSyntax(`'unterminated`) === 'string', '字符串未闭合 → 报错');
+assert(typeof checkExprSyntax('a = 1') === 'string', '禁赋值 = → 报错');
+assert(typeof checkExprSyntax('1 + 1') === 'string', '禁算术 + → 报错');
+
+console.log('17) responseTriggerMet + when —— hop 断链 / AND / 失败即安全');
+assert(responseTriggerMet({ when: 'hop == 0' }, 200, {}, null, {}, 0) === true, 'when hop==0 且 hop=0 → 命中');
+assert(responseTriggerMet({ when: 'hop == 0' }, 200, {}, null, {}, 1) === false, 'when hop==0 但 hop=1 → 不命中(断链)');
+assert(
+    responseTriggerMet({ status: 200, when: 'hop == 0' }, 200, {}, null, {}, 0) === true,
+    'status+when AND 全满足'
+);
+assert(
+    responseTriggerMet({ status: 200, when: 'hop == 0' }, 200, {}, null, {}, 1) === false,
+    'when 不满足 → 整体不命中'
+);
+assert(
+    responseTriggerMet({ status: 200, when: 'hop == 0' }, 500, {}, null, {}, 0) === false,
+    'status 先挂 → 不命中'
+);
+const doneBody = JSON.stringify({ data: { state: 'done' } });
+assert(
+    responseTriggerMet({ when: `body.data.state == 'done'` }, 200, {}, doneBody, {}, 0) === true,
+    'when 读体命中'
+);
+assert(
+    responseTriggerMet(
+        { when: `body.data.state == 'done'` },
+        200,
+        {},
+        JSON.stringify({ data: { state: 'pending' } }),
+        {},
+        0
+    ) === false,
+    'when 读体不命中'
+);
+assert(
+    responseTriggerMet({ when: `body.data.state == 'done'` }, 200, {}, null, {}, 0) === false,
+    'when 读体但 body=null → 安全不命中'
+);
+assert(responseTriggerMet({ when: 'status ==' }, 200, {}, null, {}, 0) === false, '语法错 when → 安全不命中');
+assert(responseTriggerMet({ when: 'process' }, 200, {}, null, {}, 0) === false, '逃逸 when → 安全不命中');
+assert(
+    responseTriggerMet({ when: 'hop == 0' }, 200, {}, null, {}) === true,
+    '不传 hop 参默认 0 → hop==0 命中(向后兼容)'
+);
+
+console.log('18) triggerNeedsBody + when —— 引用 body/text 才读体');
+assert(triggerNeedsBody({ when: 'hop == 0' }) === false, 'when 只用 hop → 不读体');
+assert(triggerNeedsBody({ when: 'body.x == 1' }) === true, 'when 用 body → 读体');
+assert(triggerNeedsBody({ when: `contains(text, 'x')` }) === true, 'when 用 text → 读体');
+assert(triggerNeedsBody({ when: `header('x') == '1'` }) === false, 'when 只用 header → 不读体');
+
+console.log('19) explainResponseTriggerMiss + when —— 三态诊断');
+const m1 = explainResponseTriggerMiss({ when: 'hop == 0' }, 200, {}, null, {}, 1);
+assert(m1 && /when 条件不满足/.test(m1.message) && /hop=1/.test(m1.message), 'when 假 → message 含原因与 hop');
+assert(m1 && m1.signature === 'when:false:hop == 0', 'when 假 → signature 按表达式串');
+const m2 = explainResponseTriggerMiss({ when: 'status ==' }, 200, {}, null, {}, 0);
+assert(m2 && /语法错误/.test(m2.message) && m2.signature === 'when:syntax', 'when 语法错 → 诊断 + when:syntax');
+const m3 = explainResponseTriggerMiss({ when: `match(text, '(')` }, 200, {}, '{}', {}, 0);
+assert(m3 && /求值异常/.test(m3.message) && m3.signature === 'when:eval', 'when 求值异常(非法正则) → when:eval');
+const m4 = explainResponseTriggerMiss({ when: 'hop == 0' }, 200, {}, null, {}, 0);
+assert(m4 === null, 'when 满足且无其它缺项 → 返回 null(其实命中)');
 
 if (failed > 0) {
     console.error(`\n自检失败:${failed} 项未通过。`);

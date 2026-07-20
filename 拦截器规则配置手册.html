@@ -589,9 +589,10 @@
                     <tr><td class="field"><code>bodyJson</code></td><td class="type">object(点路径→值)</td><td><span class="badge opt">可选</span></td><td>响应体 JSON 按点路径取值,全部相等(AND)</td><td><code class="inline">JSON.parse</code> 后 <code class="inline">a.b.c</code> 逐层取,<code class="inline">String()</code> 后精确比;解析失败/路径缺失/读不到体=不命中</td></tr>
                     <tr><td class="field"><code>bodyContains</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>响应体<b>原文子串</b>需全部出现(AND)</td><td>不解析 JSON、不依赖路径,适配深层嵌套/异构数组;<b>大小写敏感</b>;中文若被 <code class="inline">\u</code> 转义会失配,优先用 ASCII 标记</td></tr>
                     <tr><td class="field"><code>extract</code></td><td class="type">object(变量名→取值源)</td><td><span class="badge opt">可选</span></td><td><b>从触发响应提取命名变量</b>,供本规则 <code class="inline">set</code>/<code class="inline">append</code>/<code class="inline">setHeaders</code>/<code class="inline">setUrl</code> 用 <code class="inline">{{name}}</code> 占位注入重发(如把响应里的新 token 写进重发请求头、或把新 id 拼进重发 URL)</td><td>每个源二选一:<code class="inline">fromBody</code>(响应体 JSON 点路径,复用 bodyJson 的取值方式;命中对象/数组→JSON.stringify)或 <code class="inline">fromHeader</code>(响应头名,大小写不敏感);取不到用 <code class="inline">default</code>(缺省空串)。有 <code class="inline">fromBody</code> 会异步读响应体</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td><b>JS 风格布尔表达式</b>,与上面各静态条件 <b>AND</b>;空=无条件。表达静态字段做不到的判断——不等 / 正则 / OR / <b>跳数 hop</b></td><td>上下文:<code class="inline">status</code>·<code class="inline">hop</code>(真实响应=0 / 重发=1,2…)·<code class="inline">body</code>(JSON.parse 后,失败=undefined)·<code class="inline">text</code>(原文);函数 <code class="inline">header('名')</code>·<code class="inline">reqHeader('名')</code>·<code class="inline">match(str,正则,flags?)</code>·<code class="inline">contains(a,b)</code>。<code class="inline">==</code>/<code class="inline">!=</code> 松散(String 对齐 bodyJson)、<code class="inline">===</code> 严格、<code class="inline">&gt; &lt; &gt;= &lt;=</code> 数值;判缺失用 <code class="inline">!body.x</code>。<b>禁原型逃逸 / 全局访问;解析失败 / 求值异常一律判不命中(失败即安全)</b>;引用 body / text 才读体</td></tr>
                 </tbody>
             </table>
-            <div class="note info"><span class="nt">各组条件都可选</span>status / headers / requestHeaders / bodyJson / bodyContains 都不给,则该响应恒满足条件(命中即触发)。只要有 bodyJson / bodyContains、或 extract 里有 fromBody 源,才会异步读响应体(status / headers / requestHeaders 先筛,均同步)。</div>
+            <div class="note info"><span class="nt">各组条件都可选</span>status / headers / requestHeaders / bodyJson / bodyContains / when 都不给,则该响应恒满足条件(命中即触发);给了则全部 <b>AND</b>。只要有 bodyJson / bodyContains、extract 里有 fromBody 源、或 when 引用了 body/text,才会异步读响应体(status / headers / requestHeaders / 只用 hop 的 when 先筛,均同步)。</div>
             <div class="note info"><span class="nt">extract → 占位符注入</span>触发命中后,<code class="inline">extract</code> 从触发响应取值得到命名变量;在动作字段 <code class="inline">set</code>/<code class="inline">append</code>(body 参数)/<code class="inline">setHeaders</code>(请求头)/<code class="inline">setUrl</code>(重发 URL)的值里写 <code class="inline">{{变量名}}</code> 即被替换为提取值(<code class="inline">set</code>/<code class="inline">append</code> 支持嵌套对象/数组的字符串叶子)。占位符仅在规则的动作值里生效,不影响真实数据;未知变量渲染为空串。<b>请求头仅支持 set 注入(setHeaders),无 append;<code class="inline">setUrl</code> 是整条 URL 模板,渲染后为空则回退原 URL。</b></div>
         </div>
 
@@ -647,6 +648,18 @@
   <span class="k">"setHeaders"</span>: { <span class="k">"authorization"</span>: <span class="s">"Bearer {{token}}"</span>, <span class="k">"x-sid"</span>: <span class="s">"{{sid}}"</span> },  <span class="c">// 注入请求头</span>
   <span class="k">"set"</span>: { <span class="k">"session_id"</span>: <span class="s">"{{sid}}"</span> },       <span class="c">// 注入请求体参数</span>
   <span class="k">"setUrl"</span>: <span class="s">"https://host/api/v2/{{rid}}/commit?token={{token}}"</span>  <span class="c">// 整体覆盖重发 URL,注入提取值</span>
+}</pre>
+        </div>
+        <div class="card">
+<pre><span class="c">// 响应触发 + when 表达式:hop==0 只在真实响应触发,从根切断多规则相互连环重发(不靠 maxResendHops 兜底)</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/finalize*"</span>,               <span class="c">// 捕获这个请求</span>
+  <span class="k">"responseTrigger"</span>: {
+    <span class="k">"triggerUrl"</span>: <span class="s">"*/api/status*"</span>,             <span class="c">// 监听这个响应</span>
+    <span class="k">"when"</span>: <span class="s">"hop == 0 &amp;&amp; status == 200 &amp;&amp; body.data.state == 'done'"</span>  <span class="c">// 与静态条件 AND;hop==0 断连环</span>
+  },
+  <span class="k">"delayMs"</span>: <span class="n">300</span>,
+  <span class="k">"repeat"</span>: <span class="n">1</span>
 }</pre>
         </div>
 

@@ -392,6 +392,18 @@ export interface ResendResponseTrigger {
      * 取值在触发命中后、复用已读到的响应体/响应头进行;取不到用各源的 default(缺省空串)。仅回放端生效。
      */
     extract?: Record<string, ResendVarSource>;
+    /**
+     * 可选:**JS 风格布尔表达式**,与上面各静态条件 **AND**(它们都通过后再判 when);空 / 不给 = 无条件。
+     * 用于表达静态字段做不到的判断——不等 / 正则 / OR / 跳数(hop)。**核心用例**:`when: "hop == 0"`
+     * 只在真实浏览器响应触发,任何工具自身重发引发的响应(hop≥1)一律不触发 → 连环从源头切断,不再依赖 maxResendHops 兜底。
+     * 上下文变量:`status`(数字)、`hop`(触发响应对应请求的重发跳数,真实=0/重发=1,2,…)、
+     * `body`(响应体 JSON.parse 后对象,失败=undefined)、`text`(响应体原文);内置函数:`header('名')`、
+     * `reqHeader('名')`(大小写不敏感,缺失='')、`match(str,正则,flags?)`、`contains(a,b)`。
+     * 相等:`==`/`!=` 松散(严格或 String() 相等,对齐 bodyJson)、`===`/`!==` 严格、`> < >= <=` 数值比较。
+     * 判缺失用 `!body.x`(无 undefined 字面量)。受限求值器,禁原型逃逸 / 全局访问;
+     * 解析失败 / 求值异常一律判**不命中**(失败即安全)。仅回放端生效。
+     */
+    when?: string;
 }
 
 /**
