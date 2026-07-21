@@ -211,13 +211,28 @@ export interface ListDetailExtractConfig {
     detailFields: ExtractField[];
 }
 
-/** 列表逐项动作:遍历列表项,逐项点击其中按钮(常用于每点一次触发一次文件下载) */
+/**
+ * list-action 单个动作:一次点击。
+ * scope 缺省 'item'(相对当前列表项查找);'page' 为全局页面查找,
+ * 用于「逻辑属于该项、但按钮选择器挂在页面别处」的场景。
+ */
+export interface ListAction {
+    selector: string;
+    scope?: 'item' | 'page';
+}
+
+/** 列表逐项动作:遍历列表项,逐项按序执行动作(常用于每点一次触发一次文件下载) */
 export interface ListActionExtractConfig {
     mode: 'list-action';
     /** 列表项容器选择器 */
     listSelector: string;
-    /** 列表项内要点击的按钮选择器;留空则点列表项本身 */
-    actionSelector: string;
+    /**
+     * 每项要依次执行的动作序列(向后兼容多种写法):
+     *  - string ''                 → 无动作,点列表项本身(保留旧语义)
+     *  - string 'sel'              → 单个项内动作(等价 [{ selector:'sel', scope:'item' }])
+     *  - Array<string | ListAction> → 逐个执行,字符串项视为 scope:'item'
+     */
+    actionSelector: string | Array<string | ListAction>;
     /** 每次点击后等待下载开始的超时(毫秒);省略沿用全局默认 */
     actionTimeout?: number;
 }

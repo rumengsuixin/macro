@@ -352,11 +352,16 @@ function buildModeHint(
     if (mode === 'list-action') {
         return [
             '【目标模式前提】请输出 mode="list-action" 的「列表逐项动作」规则:',
-            '结构为 { "mode": "list-action", "listSelector": "...", "actionSelector": "..." }。',
+            '结构为 { "mode": "list-action", "listSelector": "...", "actionSelector": ... }。',
             'listSelector 是页面上重复出现的列表项容器选择器;',
-            'actionSelector 是【每个列表项内部】要点击的按钮选择器(通常是下载/操作按钮,相对列表项查找)。',
-            '只输出这两个选择器,不要 fields、不要详情结构、不要其它字段。',
-            '适用场景:列表每一项都有一个按钮需要逐项点击(如每点一次触发一次文件下载)。',
+            'actionSelector 是每项要依次执行的点击动作,可为:',
+            '  · 单个字符串(相对列表项查找的按钮选择器,如 "button.download");',
+            '  · 或字符串/对象数组表示多个动作依次点击,如',
+            '    ["a.expand", "button.download"] 或 [{"selector":"button.dl","scope":"item"},{"selector":"#global-confirm","scope":"page"}]。',
+            '每个动作可带 scope:"item"(缺省,相对列表项查找)或 "page"(全局页面查找,用于按钮挂在页面别处)。',
+            '通常一个下载按钮用单字符串即可;仅当每项需要多步点击时才用数组。',
+            '只输出 listSelector 与 actionSelector,不要 fields、不要详情结构、不要其它字段。',
+            '适用场景:列表每一项都有按钮需要逐项点击(如每点一次触发一次文件下载)。',
         ].join('\n');
     }
     if (mode === 'single') {

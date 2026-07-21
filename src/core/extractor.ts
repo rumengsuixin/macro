@@ -6,6 +6,7 @@ import type {
     ListExtractConfig,
     ListDetailExtractConfig,
     ListActionExtractConfig,
+    ListAction,
     ExtractField,
     ExtractRow,
 } from './macro-types';
@@ -165,22 +166,49 @@ function clip(text: string): string {
 }
 
 /**
- * 诊断 list-action 某项「未找到可点击的按钮」的原因(全只读,绝不点击/改页面)。
- * 依次输出:①项内 button 概览(总数 + 各 class/文本)②选择器分段探测(第一处归零层级)
+ * 把 list-action 的 actionSelector(字符串 / 字符串或对象数组)归一化为动作数组。
+ * 兼容旧格式:空串 → 空数组(点列表项本身);单字符串 → 单个项内动作;
+ * 数组内字符串项视为 scope:'item',对象项补默认 scope。过滤空 selector。
+ */
+function normalizeActions(actionSelector: ListActionExtractConfig['actionSelector']): ListAction[] {
+    const raw = Array.isArray(actionSelector) ? actionSelector : [actionSelector];
+    const actions: ListAction[] = [];
+    for (const entry of raw) {
+        if (typeof entry === 'string') {
+            const selector = entry.trim();
+            if (selector) {
+                actions.push({ selector, scope: 'item' });
+            }
+        } else if (entry && typeof entry === 'object' && typeof entry.selector === 'string') {
+            const selector = entry.selector.trim();
+            if (selector) {
+                actions.push({ selector, scope: entry.scope === 'page' ? 'page' : 'item' });
+            }
+        }
+    }
+    return actions;
+}
+
+/**
+ * 诊断 list-action 某个动作「未找到可点击的目标」的原因(全只读,绝不点击/改页面)。
+ * 依次输出:①范围内 button 概览(总数 + 各 class/文本)②选择器分段探测(第一处归零层级)
  * ③结构性伪类剥离重测。全程 try/catch,诊断本身出错也不影响回放。
+ * root 可为列表项 Locator(scope=item)或全页根 Locator(scope=page);label 用于日志区分动作。
  */
 async function diagnoseMissingTarget(
-    item: Locator,
+    root: Locator,
     actionSelector: string | undefined,
     p: number,
-    i: number
+    i: number,
+    label = ''
 ): Promise<void> {
-    const tag = `第 ${p} 页第 ${i + 1} 项诊断`;
-    // ① 项内按钮概览:让用户直接看到"正确的按钮长什么样"
+    const item = root;
+    const tag = `第 ${p} 页第 ${i + 1} 项${label ? ` ${label}` : ''}诊断`;
+    // ① 范围内按钮概览:让用户直接看到"正确的按钮长什么样"(item 根=项内,:root 根=全页)
     try {
         const buttons = item.locator('button');
         const btnCount = await buttons.count();
-        logInfo(`${tag}:项内共有 ${btnCount} 个 <button>。`);
+        logInfo(`${tag}:范围内共有 ${btnCount} 个 <button>。`);
         const show = Math.min(btnCount, DIAG_BUTTON_MAX);
         for (let b = 0; b < show; b += 1) {
             const btn = buttons.nth(b);
@@ -197,7 +225,7 @@ async function diagnoseMissingTarget(
             logInfo(`${tag}:……还有 ${btnCount - show} 个 button 未列出。`);
         }
     } catch (err) {
-        logInfo(`${tag}:统计项内 button 失败(${err instanceof Error ? err.message : String(err)})。`);
+        logInfo(`${tag}:统计范围内 button 失败(${err instanceof Error ? err.message : String(err)})。`);
     }
 
     if (!actionSelector) {
@@ -257,54 +285,75 @@ async function extractListAction(
     downloads?: DownloadManager
 ): Promise<ExtractRow[]> {
     const actionTimeout = config.actionTimeout ?? 30000;
+    // 动作序列归一化:空 → 点列表项本身(旧语义);单/多动作各自带 scope(项内/全局)
+    const actions = normalizeActions(config.actionSelector);
     let clicked = 0;
+    // 执行一次点击并(可选)等这次下载开始;超时只告警不阻断(晚到的下载仍被全局 handler 保存)
+    const clickOnce = async (target: Locator, label: string): Promise<void> => {
+        // 下载等待须在点击前注册,确保等待者先于 download 事件就位,不漏接快下载(修注册竞态)
+        const waitPromise = downloads ? downloads.waitForNext(actionTimeout) : null;
+        // 动作点击用专属较短超时(actionTimeout),坏选择器在此超时内快速暴露而非静默等满全局 60s
+        await target.click({ timeout: actionTimeout });
+        clicked += 1;
+        if (waitPromise) {
+            const saved = await waitPromise;
+            if (!saved) {
+                logError(
+                    `${label} 点击后 ${actionTimeout} 毫秒内未捕获到下载` +
+                        `(若为非下载动作可忽略;晚到的下载仍会被保存)。`
+                );
+            }
+        }
+    };
     await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
         const items = page.locator(config.listSelector);
         const count = await items.count();
-        logInfo(`第 ${p}/${totalPages} 页发现 ${count} 个列表项,开始逐项点击……`);
+        logInfo(
+            `第 ${p}/${totalPages} 页发现 ${count} 个列表项,每项 ${actions.length || 1} 个动作,开始逐项执行……`
+        );
         for (let i = 0; i < count; i += 1) {
             const item = items.nth(i);
-            // 动作选择器留空时,直接点列表项本身
-            const target = config.actionSelector
-                ? item.locator(config.actionSelector).first()
-                : item;
-            // 逐项进度日志:让 UI 实时可见、能定位卡在第几项(此前循环内零日志,易被误判卡死)
-            logInfo(
-                `第 ${p} 页 ${i + 1}/${count} 项:点击 ${config.actionSelector || '列表项本身'}……`
-            );
-            try {
-                if ((await target.count()) === 0) {
-                    logError(`第 ${p} 页第 ${i + 1} 项未找到可点击的按钮,跳过。`);
-                    // 补一组只读诊断,帮助判断未命中的具体原因(哪一段断了/伪类元凶/项内实际按钮)
-                    await diagnoseMissingTarget(item, config.actionSelector, p, i);
-                    continue;
+            // 无动作:保留旧语义,直接点列表项本身
+            if (actions.length === 0) {
+                const label = `第 ${p} 页第 ${i + 1} 项`;
+                logInfo(`第 ${p} 页 ${i + 1}/${count} 项:点击 列表项本身……`);
+                try {
+                    await clickOnce(item, label);
+                } catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    logError(`${label} 点击失败:${message},继续下一项。`);
                 }
-                // 下载等待须在点击前注册,确保等待者先于 download 事件就位,不漏接快下载(修注册竞态)
-                const waitPromise = downloads ? downloads.waitForNext(actionTimeout) : null;
-                // 动作点击用专属较短超时(actionTimeout),坏选择器在此超时内快速暴露而非静默等满全局 60s
-                await target.click({ timeout: actionTimeout });
-                clicked += 1;
-                // 等这次下载开始再继续;无下载管理器或超时则不阻塞下一项
-                if (waitPromise) {
-                    logInfo(
-                        `第 ${p} 页第 ${i + 1} 项已点击,等待下载开始(最多 ${actionTimeout} 毫秒)……`
-                    );
-                    const saved = await waitPromise;
-                    if (!saved) {
-                        logError(
-                            `第 ${p} 页第 ${i + 1} 项点击后 ${actionTimeout} 毫秒内未捕获到下载` +
-                                `(若为非下载动作可忽略;晚到的下载仍会被保存)。`
-                        );
+                continue;
+            }
+            // 逐个执行动作:每个动作按 scope 选择项内 / 全局根
+            for (let a = 0; a < actions.length; a += 1) {
+                const action = actions[a];
+                const usePage = action.scope === 'page';
+                // page 根用 :root Locator 承载,使全局查找与只读诊断都能统一走 Locator API
+                const root: Locator = usePage ? page.locator(':root') : item;
+                const target = root.locator(action.selector).first();
+                const scopeLabel = usePage ? '全局' : '项内';
+                const actLabel = actions.length > 1 ? `动作${a + 1}/${actions.length}[${scopeLabel}]` : `[${scopeLabel}]`;
+                const label = `第 ${p} 页第 ${i + 1} 项 ${actLabel}`;
+                // 逐项进度日志:让 UI 实时可见、能定位卡在第几项/第几个动作
+                logInfo(`第 ${p} 页 ${i + 1}/${count} 项 ${actLabel}:点击 ${action.selector}……`);
+                try {
+                    if ((await target.count()) === 0) {
+                        logError(`${label} 未找到可点击目标,跳过该动作。`);
+                        // 补一组只读诊断,帮助判断未命中的具体原因(哪一段断了/伪类元凶/范围内实际按钮)
+                        await diagnoseMissingTarget(root, action.selector, p, i, actLabel);
+                        continue;
                     }
+                    await clickOnce(target, label);
+                } catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    logError(`${label} 点击失败:${message},继续。`);
                 }
-            } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                logError(`第 ${p} 页第 ${i + 1} 项点击失败:${message},继续下一项。`);
             }
         }
     });
     logInfo(
-        `列表逐项动作完成:共点击 ${clicked} 项,捕获保存下载 ${downloads ? downloads.count() : 0} 个。`
+        `列表逐项动作完成:共执行点击 ${clicked} 次,捕获保存下载 ${downloads ? downloads.count() : 0} 个。`
     );
     return [];
 }

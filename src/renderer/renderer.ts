@@ -232,6 +232,12 @@ const aiImportBtn = byId<HTMLButtonElement>('ai-import');
 const aiStatusEl = byId<HTMLSpanElement>('ai-status');
 const aiDetailLinkRow = byId<HTMLDivElement>('ai-detail-link-row');
 const aiDetailLinkFieldSel = byId<HTMLSelectElement>('ai-detail-link-field');
+// list-action 专属可视化配置区
+const aiListActionRow = byId<HTMLDivElement>('ai-list-action-row');
+const laListSelectorInput = byId<HTMLInputElement>('la-list-selector');
+const laPickListBtn = byId<HTMLButtonElement>('la-pick-list');
+const laActionsBox = byId<HTMLDivElement>('la-actions');
+const laAddActionBtn = byId<HTMLButtonElement>('la-add-action');
 const appEl = document.querySelector('.app') as HTMLDivElement;
 const pickHint = byId<HTMLDivElement>('pick-hint');
 const pickCancelBtn = byId<HTMLButtonElement>('pick-cancel');
@@ -1692,10 +1698,162 @@ function refreshAiModeOptions(): void {
     refreshDetailLinkFieldOptions();
 }
 
-// 用户手动编辑「提取规则」框时,实时联动 list-detail 选项可用性与详情入口字段下拉
-extractInput.addEventListener('input', refreshAiModeOptions);
-// 切换目标模式时刷新详情入口字段下拉的显隐与选项
-aiModeSel.addEventListener('change', refreshDetailLinkFieldOptions);
+// ===== list-action 专属可视化配置区(与「提取规则」JSON 双向同步) =====
+
+/** 从「提取规则」JSON 解析出 list-action 现状(listSelector + 归一化动作);非 list-action 返回 null */
+function parseListActionRules(): { listSelector: string; actions: NormalizedAction[] } | null {
+    try {
+        const raw = extractInput.value.trim();
+        if (!raw) {
+            return null;
+        }
+        const cfg = JSON.parse(raw);
+        if (!cfg || cfg.mode !== 'list-action') {
+            return null;
+        }
+        const listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector : '';
+        return { listSelector, actions: normalizeActionSelector(cfg.actionSelector) };
+    } catch {
+        return null;
+    }
+}
+
+/** 渲染一行动作编辑控件(选择器输入 + scope 下拉 + 🎯点选 + ✖删除) */
+function renderActionRow(action: NormalizedAction): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'la-row la-action-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'la-action-selector';
+    input.placeholder = '要点击的按钮选择器,如 button.download';
+    input.value = action.selector;
+    input.addEventListener('input', syncListActionToJson);
+
+    const scopeSel = document.createElement('select');
+    scopeSel.className = 'la-action-scope';
+    for (const [val, text] of [['item', '项内'], ['page', '全局']] as const) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        scopeSel.appendChild(opt);
+    }
+    scopeSel.value = action.scope;
+    scopeSel.addEventListener('change', syncListActionToJson);
+
+    const pickBtn = document.createElement('button');
+    pickBtn.className = 'la-pick';
+    pickBtn.textContent = '🎯 点选';
+    pickBtn.title = '在页面上点选此动作的目标元素';
+    pickBtn.addEventListener('click', () => {
+        requestPick((selector) => {
+            input.value = selector;
+            syncListActionToJson();
+        });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'la-del';
+    delBtn.textContent = '✖';
+    delBtn.title = '删除此动作';
+    delBtn.addEventListener('click', () => {
+        row.remove();
+        syncListActionToJson();
+    });
+
+    row.append(input, scopeSel, pickBtn, delBtn);
+    return row;
+}
+
+/** 用动作数组重建动作行列表 */
+function renderActionRows(actions: NormalizedAction[]): void {
+    laActionsBox.innerHTML = '';
+    for (const a of actions) {
+        laActionsBox.appendChild(renderActionRow(a));
+    }
+}
+
+/** 读取可视化区当前所有动作行(过滤空 selector 行) */
+function collectActionRows(): NormalizedAction[] {
+    const rows = Array.from(laActionsBox.querySelectorAll('.la-action-row'));
+    const actions: NormalizedAction[] = [];
+    for (const row of rows) {
+        const sel = (row.querySelector('.la-action-selector') as HTMLInputElement | null)?.value.trim() ?? '';
+        const scope = (row.querySelector('.la-action-scope') as HTMLSelectElement | null)?.value === 'page' ? 'page' : 'item';
+        if (sel) {
+            actions.push({ selector: sel, scope });
+        }
+    }
+    return actions;
+}
+
+/**
+ * 把可视化区当前状态序列化写回「提取规则」JSON(JSON 仍是唯一真相源)。
+ * 直接 .value= 赋值不触发 input 事件,天然避免「回写→回填」死循环。
+ * 序列化取简形:无动作→空串(点列表项本身);单个项内动作→字符串;其余→数组(带 scope 用对象)。
+ */
+function syncListActionToJson(): void {
+    const listSelector = laListSelectorInput.value.trim();
+    const actions = collectActionRows();
+    let actionSelector: string | Array<string | { selector: string; scope: 'item' | 'page' }>;
+    if (actions.length === 0) {
+        actionSelector = '';
+    } else if (actions.length === 1 && actions[0].scope === 'item') {
+        actionSelector = actions[0].selector;
+    } else {
+        actionSelector = actions.map((a) =>
+            a.scope === 'item' ? a.selector : { selector: a.selector, scope: a.scope }
+        );
+    }
+    extractInput.value = JSON.stringify({ mode: 'list-action', listSelector, actionSelector }, null, 4);
+    // 联动依赖 JSON 的其它 UI(如 list-detail 选项可用性);不在此回填编辑器,避免打断正在输入的行
+    refreshAiModeOptions();
+}
+
+/**
+ * 显隐 + 回填 list-action 可视化配置区。
+ * 仅 ai-mode=list-action 时显示;显示时若 JSON 已是 list-action 规则则回填,
+ * 否则(且编辑区尚空时)初始化一行空动作。JSON 解析失败但已有行→保留现状(用户可能正手改 JSON)。
+ */
+function refreshListActionEditor(): void {
+    const isListAction = aiModeSel.value === 'list-action';
+    aiListActionRow.style.display = isListAction ? '' : 'none';
+    if (!isListAction) {
+        return;
+    }
+    const parsed = parseListActionRules();
+    if (parsed) {
+        laListSelectorInput.value = parsed.listSelector;
+        renderActionRows(parsed.actions.length ? parsed.actions : [{ selector: '', scope: 'item' }]);
+    } else if (laActionsBox.childElementCount === 0) {
+        laListSelectorInput.value = '';
+        renderActionRows([{ selector: '', scope: 'item' }]);
+    }
+}
+
+// 列表项选择器输入 / 点选
+laListSelectorInput.addEventListener('input', syncListActionToJson);
+laPickListBtn.addEventListener('click', () => {
+    requestPick((selector) => {
+        laListSelectorInput.value = selector;
+        syncListActionToJson();
+    });
+});
+// 新增一个空动作行
+laAddActionBtn.addEventListener('click', () => {
+    laActionsBox.appendChild(renderActionRow({ selector: '', scope: 'item' }));
+});
+
+// 用户手动编辑「提取规则」框时,实时联动 list-detail 选项可用性 + 回填 list-action 编辑器
+extractInput.addEventListener('input', () => {
+    refreshAiModeOptions();
+    refreshListActionEditor();
+});
+// 切换目标模式时刷新详情入口字段下拉与 list-action 编辑器的显隐/回填
+aiModeSel.addEventListener('change', () => {
+    refreshDetailLinkFieldOptions();
+    refreshListActionEditor();
+});
 
 // ===== 按钮事件 =====
 openBtn.addEventListener('click', () => {
@@ -2410,6 +2568,38 @@ function setAiBusy(busy: boolean): void {
     aiStatusEl.classList.toggle('ai-loading', busy);
 }
 
+/** list-action 动作归一化形态(渲染进程侧,纯数据) */
+interface NormalizedAction {
+    selector: string;
+    scope: 'item' | 'page';
+}
+
+/**
+ * 把 actionSelector(字符串 / 字符串或对象数组)归一化为动作数组。
+ * 空串→空数组(点列表项本身);字符串→项内动作;对象补默认 scope;过滤空 selector。
+ * 与 core/extractor.ts 的 normalizeActions 同语义(此处为渲染进程免依赖 playwright 的轻量副本)。
+ */
+function normalizeActionSelector(
+    actionSelector: string | Array<string | { selector?: string; scope?: string }> | undefined
+): NormalizedAction[] {
+    const raw = Array.isArray(actionSelector) ? actionSelector : [actionSelector];
+    const actions: NormalizedAction[] = [];
+    for (const entry of raw) {
+        if (typeof entry === 'string') {
+            const selector = entry.trim();
+            if (selector) {
+                actions.push({ selector, scope: 'item' });
+            }
+        } else if (entry && typeof entry === 'object' && typeof entry.selector === 'string') {
+            const selector = entry.selector.trim();
+            if (selector) {
+                actions.push({ selector, scope: entry.scope === 'page' ? 'page' : 'item' });
+            }
+        }
+    }
+    return actions;
+}
+
 /** 单个选择器在录制 webview 内的实测结果 */
 interface SelectorCheckResult {
     /** 展示用标签(如 listSelector / actionSelector / 字段「标题」) */
@@ -2433,7 +2623,7 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
     const cfg = rules as {
         mode?: string;
         listSelector?: string;
-        actionSelector?: string;
+        actionSelector?: string | Array<string | { selector?: string; scope?: string }>;
         detailLinkField?: string;
         fields?: Array<{ name?: string; selector?: string }>;
         detailFields?: Array<{ name?: string; selector?: string }>;
@@ -2465,13 +2655,14 @@ async function verifySelectors(rules: unknown): Promise<SelectorCheckResult[]> {
                 checks.push({ key: `字段「${f.name ?? sel}」`, selector: sel, scope: fieldScope });
             }
         });
-        // 动作按钮:留空=点列表项本身,跳过
-        if (
-            mode === 'list-action' &&
-            typeof cfg.actionSelector === 'string' &&
-            cfg.actionSelector.trim()
-        ) {
-            checks.push({ key: 'actionSelector', selector: cfg.actionSelector.trim(), scope: 'item' });
+        // 动作按钮:归一化为动作序列,逐个按各自 scope(项内/全局)校验;留空=点列表项本身,跳过
+        if (mode === 'list-action') {
+            const actions = normalizeActionSelector(cfg.actionSelector);
+            actions.forEach((a, idx) => {
+                const scopeLabel = a.scope === 'page' ? '全局' : '项内';
+                const key = actions.length > 1 ? `动作${idx + 1}[${scopeLabel}]` : `actionSelector[${scopeLabel}]`;
+                checks.push({ key, selector: a.selector, scope: a.scope });
+            });
         }
     }
 
@@ -3268,6 +3459,7 @@ aiGenerateBtn.addEventListener('click', async () => {
         if (lastRules) {
             extractInput.value = JSON.stringify(lastRules, null, 4);
             refreshAiModeOptions();
+            refreshListActionEditor();
         }
         // list-detail:本次在详情页只校验 detailFields;详情入口字段在回放(列表页)时按其
         // selector 取 href 生效,此处无列表页可测,故只作 info 说明,不再误报「取不到 href」。

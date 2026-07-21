@@ -992,6 +992,87 @@
             box-shadow: 0 0 0 3px rgba(139, 92, 246, .18);
         }
 
+        /* list-action 专属可视化配置区(随「列表逐条操作」模式显示) */
+        #ai-list-action-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 8px;
+            border: 1px dashed var(--border-strong);
+            border-radius: var(--r-sm);
+            background: var(--surface-3);
+        }
+
+        .la-row {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .la-row label {
+            color: var(--text-soft);
+            white-space: nowrap;
+            font-weight: 600;
+        }
+
+        .la-row input {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-sm);
+            background: #fff;
+            color: var(--text);
+            font-family: inherit;
+        }
+
+        .la-row select {
+            padding: 6px 6px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-sm);
+            background: #fff;
+            color: var(--text);
+        }
+
+        .la-row input:focus,
+        .la-row select:focus {
+            outline: none;
+            border-color: var(--ai);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, .18);
+        }
+
+        .la-actions-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 7px;
+            color: var(--text-soft);
+            font-weight: 600;
+        }
+
+        .la-pick,
+        #la-add-action,
+        .la-del {
+            background: var(--surface-3);
+            color: var(--text-soft);
+            box-shadow: none;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-sm);
+            padding: 5px 8px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .la-pick:hover,
+        #la-add-action:hover,
+        .la-del:hover {
+            background: var(--border);
+        }
+
+        .la-del {
+            color: var(--danger, #dc2626);
+        }
+
         #ai-requirement {
             width: 100%;
             height: 56px;
@@ -1873,6 +1954,19 @@
                             <label>进详情页的链接字段</label>
                             <select id="ai-detail-link-field"></select>
                             <span class="hint">选一个能点进详情页的字段(用它的链接进入详情页)</span>
+                        </div>
+                        <div id="ai-list-action-row" style="display: none">
+                            <div class="la-row">
+                                <label>列表项选择器</label>
+                                <input type="text" id="la-list-selector" placeholder="重复出现的列表项容器,如 .list .row" />
+                                <button class="la-pick" id="la-pick-list" title="在页面上点选列表项容器">🎯 点选</button>
+                            </div>
+                            <div class="la-actions-head">
+                                <span>逐项执行的动作(按顺序点击,可多个)</span>
+                                <button id="la-add-action" title="新增一个动作">➕ 添加动作</button>
+                            </div>
+                            <div id="la-actions"></div>
+                            <div class="hint" style="padding: 4px 0 0">项内=相对每个列表项查找;全局=在整页查找(按钮挂在页面别处时用)。此区与下方「提取规则」JSON 实时同步。</div>
                         </div>
                     </div>
                 </div>
