@@ -115,6 +115,20 @@ function createWindow(): void {
                 recordingWebContents = null;
             }
         });
+        // F12 开/关录制页 DevTools:webview 获焦时按键只到达 guest 页,宿主 document 收不到,
+        // 故在 guest webContents 层用 before-input-event 拦 F12,保证浏览录制页时也能唤起调试器。
+        // 分离窗口(detach)展示——webview 面板与右侧栏共宽较窄,内嵌会挤;detach 独立窗口更好用。
+        guestContents.on('before-input-event', (_e, input) => {
+            if (input.type === 'keyDown' && input.key === 'F12') {
+                if (guestContents.isDevToolsOpened()) {
+                    guestContents.closeDevTools();
+                    logInfo('已关闭录制页 DevTools。');
+                } else {
+                    guestContents.openDevTools({ mode: 'detach' });
+                    logInfo('已打开录制页 DevTools(F12 再次可关闭)。');
+                }
+            }
+        });
         guestContents.setWindowOpenHandler(({ url }) => {
             if (url && url !== 'about:blank') {
                 void guestContents.loadURL(url);
