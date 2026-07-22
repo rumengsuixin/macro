@@ -129,27 +129,27 @@ const REGISTRATIONS: Array<{ type: string; label: string; description: string }>
     {
         type: 'bank-integrate-domestic',
         label: '国内银行流水整合',
-        description: '把一批 {公司}-{银行}.xls/xlsx/csv 国内银行流水交给 xlsxIntgration 整合成汇总 xlsx',
+        description: '接受 .xls/.xlsx/.csv;文件名须为「公司-银行.xlsx」(如「甲公司-招行.xlsx」)。整合一批国内银行流水成汇总 xlsx。',
     },
     {
         type: 'bank-integrate-overseas',
         label: '海外银行流水整合',
-        description: '把 {公司}-{银行}-{币种} 海外银行流水(xls/xlsx/csv,华美银行支持 pdf)整合成汇总 xlsx',
+        description: '接受 .xls/.xlsx/.csv,华美银行额外支持 .pdf;文件名须为「公司-银行-币种」(如「甲公司-华美-USD.xlsx」)。整合海外银行流水成汇总 xlsx。',
     },
     {
         type: 'bank-integrate-order-match',
         label: '游戏订单匹配对账',
-        description: '把 admin 订单 + Adyen/华为/Google/苹果 平台文件匹配对账,产出订单匹配结果 xlsx',
+        description: '接受 .xls/.xlsx/.csv;需 admin 订单文件 + Adyen/华为/Google/苹果 各平台文件,匹配对账产出订单匹配结果 xlsx。',
     },
     {
         type: 'bank-integrate-payout',
         label: '代付订单对账',
-        description: '把 admin 主表 + IBF/SUPERPAY/Wangupay/话费卡/EPIN 平台文件对账,产出代付对账结果 xlsx',
+        description: '接受 .xls/.xlsx/.csv;需 admin 主表 + IBF/SUPERPAY/Wangupay/话费卡/EPIN 平台文件(EPIN 需成对),对账产出代付结果 xlsx。',
     },
     {
         type: 'bank-integrate-collection-payout',
         label: '代收代付对账',
-        description: '把 admin 收款/兑换主表 + betcat/Cashnewpay 平台文件对账,产出代收代付对账结果 xlsx',
+        description: '接受 .xls/.xlsx/.csv;需 admin 收款/兑换主表 + betcat/Cashnewpay 平台文件,对账产出代收代付结果 xlsx。',
     },
 ];
 

@@ -412,10 +412,11 @@ function registerIpc(): void {
         return listPostProcessors();
     });
 
-    // 直接运行某插件:弹文件多选(zip/csv/xls/xlsx,默认定位 downloads/),对所选文件直接跑后处理,不回放宏
+    // 直接运行某插件:弹文件多选(zip/csv/xls/xlsx,默认定位 downloads/),对所选文件直接跑后处理,不回放宏。
+    // outputDir:独立工具板块「选择输出目录」传入的产物落地目录(空/失效则回退默认 exports);附加处理板块传 undefined。
     ipcMain.handle(
         'run-plugin',
-        async (_e, type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> => {
+        async (_e, type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> => {
             ensureDirs();
             // 「直接运行」通道服务两类:附加处理(合并)与独立工具(银行整合/对账,代号2 需 pdf),
             // 故文案中性化、过滤器取并集(补 pdf),保留「所有文件」兜底。
@@ -433,11 +434,24 @@ function registerIpc(): void {
                 return { canceled: true };
             }
             const files = pick.filePaths;
-            logInfo(`直接运行插件 ${type}:已选 ${files.length} 个文件。`);
+            // 解析有效输出目录:把 renderer 传值当不可信输入——非空且确为已存在目录才用,否则回退默认 exports
+            let effectiveExports = exportsDir;
+            if (outputDir && outputDir.trim()) {
+                try {
+                    if (fs.statSync(outputDir).isDirectory()) {
+                        effectiveExports = outputDir;
+                    } else {
+                        logInfo(`指定输出目录不是目录,回退默认导出目录:${outputDir}`);
+                    }
+                } catch {
+                    logInfo(`指定输出目录不存在,回退默认导出目录:${outputDir}`);
+                }
+            }
+            logInfo(`直接运行插件 ${type}:已选 ${files.length} 个文件,输出目录 → ${effectiveExports}。`);
             const results = await runPostProcessors([{ type }], {
                 downloads: files,
                 downloadDir: path.dirname(files[0]),
-                exportsDir,
+                exportsDir: effectiveExports,
                 stamp: timestamp(),
                 dataRoot,
                 bankTemplatePath,
@@ -449,6 +463,41 @@ function registerIpc(): void {
             return { results };
         }
     );
+
+    // 弹目录对话框选择独立工具输出目录,返回所选路径或 null(取消)
+    ipcMain.handle('choose-output-dir', async (): Promise<string | null> => {
+        ensureDirs();
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择整合/对账结果输出目录',
+            defaultPath: exportsDir,
+            properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        return result.filePaths[0];
+    });
+
+    // 用系统文件管理器打开独立工具输出目录(空/失效则打开默认 exports)
+    ipcMain.handle('open-output-dir', async (_e, dir?: string): Promise<string> => {
+        ensureDirs();
+        let target = exportsDir;
+        if (dir && dir.trim()) {
+            try {
+                if (fs.statSync(dir).isDirectory()) {
+                    target = dir;
+                }
+            } catch {
+                /* 失效则回退默认 exports */
+            }
+        }
+        return shell.openPath(target);
+    });
+
+    // 只读返回默认导出目录绝对路径,供渲染进程未设自定义目录时显示真实路径
+    ipcMain.handle('get-exports-dir', (): string => {
+        return exportsDir;
+    });
 
     // 列出 AI 配置档(供渲染进程下拉选择)
     ipcMain.handle('ai-list-profiles', async () => {

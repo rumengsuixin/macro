@@ -637,6 +637,7 @@
         .collapsible.collapsed > .browser-body,
         .collapsible.collapsed > .ai-body,
         .collapsible.collapsed > .plugin-body,
+        .collapsible.collapsed > .tool-actions,
         .collapsible.collapsed > #steps-toolbar,
         .collapsible.collapsed > #steps {
             display: none;
@@ -780,6 +781,37 @@
         }
 
         .tool-panel .plugin-run-now:hover {
+            background: var(--accent-strong);
+        }
+
+        /* 独立工具输出目录操作栏(全板块共用一个目录,形态对齐宏库操作栏) */
+        .tool-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px 0;
+        }
+
+        .tool-actions .tool-dir {
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            direction: rtl;
+            text-align: left;
+        }
+
+        .tool-actions button {
+            padding: 5px 12px;
+            font-size: 12px;
+            white-space: nowrap;
+            background: var(--accent);
+        }
+
+        .tool-actions button:hover {
             background: var(--accent-strong);
         }
 
@@ -2030,6 +2062,11 @@
                 </div>
                 <div class="panel collapsible tool-panel" id="tool-panel">
                     <div class="panel-title" id="tool-title">🧰 独立工具(选文件直接运行,与录制的宏无关)</div>
+                    <div class="tool-actions">
+                        <span class="tool-dir" id="tool-out-dir" title="">默认导出目录(exports/)</span>
+                        <button id="tool-choose-dir" title="指定整合/对账结果的输出目录(5 个工具共用)">📁 选择输出目录</button>
+                        <button id="tool-open-dir" title="用系统文件管理器打开输出目录">📂 打开输出目录</button>
+                    </div>
                     <div class="plugin-body" id="tool-list">
                         <span class="hint">正在加载工具…</span>
                     </div>

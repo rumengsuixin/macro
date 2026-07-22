@@ -128,7 +128,10 @@ interface ElectronAPI {
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[]): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
-    runPlugin(type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
+    runPlugin(type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
+    chooseOutputDir(): Promise<string | null>;
+    openOutputDir(dir: string): Promise<string>;
+    getExportsDir(): Promise<string>;
     onLog(cb: (msg: LogMessage) => void): void;
     onMacroPaused(cb: (info: PauseEvent) => void): void;
     resumeMacro(runId: number): void;
@@ -2439,6 +2442,58 @@ toolTitle.addEventListener('click', () => {
     toolPanel.classList.toggle('collapsed');
 });
 
+// 独立工具输出目录(全板块 5 工具共用一个;存 localStorage 作 UI 偏好,空=默认 exports)
+const toolOutDirEl = byId<HTMLSpanElement>('tool-out-dir');
+const toolChooseDirBtn = byId<HTMLButtonElement>('tool-choose-dir');
+const toolOpenDirBtn = byId<HTMLButtonElement>('tool-open-dir');
+const TOOL_OUTPUT_DIR_KEY = 'toolOutputDir';
+
+/** 取当前配置的独立工具输出目录(空=用默认 exports) */
+function getToolOutputDir(): string {
+    try {
+        return localStorage.getItem(TOOL_OUTPUT_DIR_KEY) || '';
+    } catch {
+        return '';
+    }
+}
+
+/** 刷新输出目录显示:有自定义值显示该路径,否则取主进程默认 exports 绝对路径显示 */
+async function refreshToolOutputDir(): Promise<void> {
+    const dir = getToolOutputDir();
+    if (dir) {
+        toolOutDirEl.textContent = dir;
+        toolOutDirEl.title = dir;
+        return;
+    }
+    try {
+        const def = await window.electronAPI.getExportsDir();
+        toolOutDirEl.textContent = def || '默认导出目录(exports/)';
+        toolOutDirEl.title = def ? '未设置,产物落到默认导出目录:' + def : '';
+    } catch {
+        toolOutDirEl.textContent = '默认导出目录(exports/)';
+    }
+}
+
+toolChooseDirBtn.addEventListener('click', async () => {
+    const dir = await window.electronAPI.chooseOutputDir();
+    if (!dir) {
+        return; // 取消
+    }
+    try {
+        localStorage.setItem(TOOL_OUTPUT_DIR_KEY, dir);
+    } catch {
+        /* localStorage 不可用时忽略,当次仍生效 */
+    }
+    void refreshToolOutputDir();
+    logLocal('已设置独立工具输出目录:' + dir);
+});
+
+toolOpenDirBtn.addEventListener('click', () => {
+    void window.electronAPI.openOutputDir(getToolOutputDir());
+});
+
+void refreshToolOutputDir();
+
 /**
  * 渲染一行插件到指定容器(行 + 其后兄弟描述节点)。
  * @param withCheckbox 为真=附加处理板块(复选框 + 直接运行);为假=独立工具板块(只有「运行」按钮)
@@ -2475,7 +2530,11 @@ function renderPluginRow(
     runNow.title = withCheckbox
         ? '不跑宏,直接选文件处理'
         : '选文件直接运行,产出整合/对账结果(与录制的宏无关)';
-    runNow.addEventListener('click', () => void runPluginDirect(p.type, p.label));
+    // 独立工具行(withCheckbox=false)透传板块共用的输出目录(点击时读 localStorage,选目录后无需重渲染即生效);
+    // 附加处理行传 undefined,产物仍落默认 exports。
+    runNow.addEventListener('click', () =>
+        void runPluginDirect(p.type, p.label, withCheckbox ? undefined : getToolOutputDir())
+    );
     row.appendChild(runNow);
     const desc = document.createElement('div');
     desc.className = 'plugin-desc';
@@ -2517,12 +2576,12 @@ async function loadPlugins(): Promise<void> {
     }
 }
 
-/** 直接运行某插件/工具:弹文件选择(主进程),对所选文件直接处理,不跑宏 */
-async function runPluginDirect(type: string, label: string): Promise<void> {
+/** 直接运行某插件/工具:弹文件选择(主进程),对所选文件直接处理,不跑宏;outputDir=独立工具指定的输出目录 */
+async function runPluginDirect(type: string, label: string, outputDir?: string): Promise<void> {
     setBusy(true);
     logLocal(`直接运行「${label}」:请选择要处理的文件(可多选 zip/csv/xls/xlsx/pdf)……`);
     try {
-        const res = await window.electronAPI.runPlugin(type);
+        const res = await window.electronAPI.runPlugin(type, outputDir);
         if (res.canceled) {
             logLocal('已取消直接运行。');
         } else {

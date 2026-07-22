@@ -56,9 +56,18 @@ const api = {
     /** 列出可用后处理器插件(驱动可选插件列表) */
     listPlugins: (): Promise<PostProcessorManifest[]> => ipcRenderer.invoke('list-plugins'),
 
-    /** 直接运行某插件(弹文件夹选择,对其内文件直接处理,不跑宏) */
-    runPlugin: (type: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> =>
-        ipcRenderer.invoke('run-plugin', type),
+    /** 直接运行某插件(弹文件选择,对所选文件直接处理,不跑宏);outputDir=独立工具指定的输出目录(可选) */
+    runPlugin: (type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }> =>
+        ipcRenderer.invoke('run-plugin', type, outputDir),
+
+    /** 弹目录框选择独立工具输出目录,返回路径或 null(取消) */
+    chooseOutputDir: (): Promise<string | null> => ipcRenderer.invoke('choose-output-dir'),
+
+    /** 用系统文件管理器打开独立工具输出目录(空/失效则打开默认 exports) */
+    openOutputDir: (dir: string): Promise<string> => ipcRenderer.invoke('open-output-dir', dir),
+
+    /** 只读取默认导出目录绝对路径(未设自定义目录时显示用) */
+    getExportsDir: (): Promise<string> => ipcRenderer.invoke('get-exports-dir'),
 
     /** 列出 AI 配置档 */
     aiListProfiles: (): Promise<AiProfilesInfo> => ipcRenderer.invoke('ai-list-profiles'),
