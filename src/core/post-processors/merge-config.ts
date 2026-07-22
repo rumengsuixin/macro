@@ -49,14 +49,20 @@ export interface MergeOpts {
 
 /** merge-config.json 结构 */
 export interface MergeConfig {
+    /** 输出文件名模板(占位符 {stamp}/{date};缺省 merged-{stamp}.xlsx) */
+    output: { fileName: string };
     /** 全局缺省 + addSourceColumn(是否追加「来源文件」列) */
     defaults: MergeOpts & { addSourceColumn: boolean };
     /** 匹配规则,按顺序取首条命中 */
     rules: MergeRule[];
 }
 
-/** 内置默认:等价于历史行为(首表、行1 表头、不裁列、不加来源列、无派生列) */
+/** 输出名缺省模板(= 历史行为 merged-<时间戳>.xlsx) */
+const DEFAULT_OUTPUT_NAME = 'merged-{stamp}.xlsx';
+
+/** 内置默认:等价于历史行为(首表、行1 表头、不裁列、不加来源列、无派生列、缺省输出名) */
 export const DEFAULT_CONFIG: MergeConfig = {
+    output: { fileName: DEFAULT_OUTPUT_NAME },
     defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
     rules: [],
 };
@@ -64,6 +70,7 @@ export const DEFAULT_CONFIG: MergeConfig = {
 /** 首次生成的文档化模板(含 Binance payout 结构规则 + 从文件名提日期的派生列示例) */
 function templateConfig(): MergeConfig {
     return {
+        output: { fileName: DEFAULT_OUTPUT_NAME },
         defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
         rules: [
             {
@@ -207,6 +214,9 @@ export function loadMergeConfig(filePath: string): MergeConfig {
             return tpl;
         }
         const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<MergeConfig>;
+        const o = (raw.output ?? {}) as Record<string, unknown>;
+        const fileName =
+            typeof o.fileName === 'string' && o.fileName.trim() ? o.fileName : DEFAULT_OUTPUT_NAME;
         const d = (raw.defaults ?? {}) as Record<string, unknown>;
         const defaults = {
             sheet: normSheet(d.sheet),
@@ -218,7 +228,7 @@ export function loadMergeConfig(filePath: string): MergeConfig {
         const rules = Array.isArray(raw.rules)
             ? raw.rules.map(normRule).filter((x): x is MergeRule => x !== null)
             : [];
-        return { defaults, rules };
+        return { output: { fileName }, defaults, rules };
     } catch {
         return DEFAULT_CONFIG;
     }
@@ -274,4 +284,30 @@ export function deriveColumnValue(col: DerivedColumn, fileName: string): string 
     } catch {
         return '';
     }
+}
+
+/**
+ * 解析合并产物文件名:模板 config.output.fileName 替换占位符 {stamp}/{date} → 消毒 → 保证 .xlsx。
+ * {stamp}=传入 stamp(YYYYMMDD-HHMMSS);{date}=从 stamp 前 8 位派生的 YYYY-MM-DD(不合规则整段回退)。
+ * 消毒:去掉路径分隔符与 Windows 非法字符(防目录穿越/非法名);空 → 缺省名。
+ * @param stamp 运行时间戳(主进程传入,core 不调时间 API)
+ */
+export function resolveOutputFileName(config: MergeConfig, stamp: string): string {
+    const dm = /^(\d{4})(\d{2})(\d{2})/.exec(stamp);
+    const date = dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : stamp;
+    const template =
+        typeof config.output?.fileName === 'string' && config.output.fileName.trim()
+            ? config.output.fileName
+            : DEFAULT_OUTPUT_NAME;
+    let name = template.replace(/\{stamp\}/g, stamp).replace(/\{date\}/g, date);
+    // 消毒:路径分隔符与 <>:"|?* 及控制字符 → '_'(防写到 exportsDir 之外 / 非法文件名)
+    // eslint-disable-next-line no-control-regex
+    name = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_').trim();
+    if (!name) {
+        name = `merged-${stamp}.xlsx`;
+    }
+    if (!/\.xlsx$/i.test(name)) {
+        name += '.xlsx';
+    }
+    return name;
 }

@@ -8,6 +8,7 @@
 //   ⑤ 派生列 addColumns:两个带日期文件名的普通表 → 从文件名提日期作「日期」首列、逐文件不同值
 //   ⑥ 对照:无 addColumns → 无「日期」列(证明由配置驱动)
 //   ⑦ 结构+派生列复合:Binance 结构文件 + 文件名带日期,专属规则须排在通用 payout 规则前 → 净表且带日期首列
+//   ⑧⑨⑩ 输出文件名可配:output.fileName 占位符({date}) / 缺省 merged-{stamp} / 非法路径消毒防穿越
 // 用法:npm run build && node scripts/verify-merge-config.mjs
 import { createRequire } from 'node:module';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
@@ -120,8 +121,9 @@ function buildPlainXls(header, dataRows, sheetName) {
  * 跑一个多文件合并场景,返回 { headers, rows(对象数组), output }。
  * files: [{ name, buf }]。用于验证派生列(逐文件不同取值)。
  */
-async function runMultiCase(name, files, configObj) {
+async function runMultiCase(name, files, configObj, stampArg) {
     caseNo += 1;
+    const stamp = stampArg ?? `case${caseNo}`;
     const dataRoot = path.join(tmpRoot, `case${caseNo}`);
     const downloadDir = path.join(dataRoot, 'downloads');
     const exportsDir = path.join(dataRoot, 'exports');
@@ -139,7 +141,7 @@ async function runMultiCase(name, files, configObj) {
         downloads,
         downloadDir,
         exportsDir,
-        stamp: `case${caseNo}`,
+        stamp,
         dataRoot,
     });
     const r = results[0];
@@ -160,7 +162,7 @@ async function runMultiCase(name, files, configObj) {
     console.log(`\n----- 场景:${name} -----`);
     console.log('message =', r.message);
     console.log('表头 =', JSON.stringify(headers));
-    return { headers, rows, output: r.output };
+    return { headers, rows, output: r.output, exportsDir };
 }
 
 // ① 默认:显式写 rules:[](headerRow 缺省 1)→ 应乱
@@ -260,6 +262,29 @@ check(
 check(
     c7.rows.length === 1 && c7.rows[0]['日期'] === '2026-07-01',
     '⑦ 复合规则:数据带正确日期 2026-07-01',
+);
+
+// ⑧⑨⑩ 输出文件名可配(占位符 / 缺省 / 消毒防穿越)。用真实感的 stamp 测 {date} 派生
+const plain = buildPlainXls(['a', 'b'], [['1', '2']], 'S');
+const plainFile = [{ name: 'x.xls', buf: plain }];
+const emptyCfg = (extra) => ({
+    ...extra,
+    defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
+    rules: [],
+});
+
+const c8 = await runMultiCase('自定义输出名+{date}', plainFile, emptyCfg({ output: { fileName: 'USDT汇总-{date}.xlsx' } }), '20260722-170435');
+check(path.basename(c8.output) === 'USDT汇总-2026-07-22.xlsx', `⑧ 自定义名+{date} → USDT汇总-2026-07-22.xlsx(实际 ${path.basename(c8.output)})`);
+
+const c9 = await runMultiCase('缺省输出名', plainFile, emptyCfg({}), '20260722-170435');
+check(path.basename(c9.output) === 'merged-20260722-170435.xlsx', `⑨ 无 output 配置 → merged-20260722-170435.xlsx(实际 ${path.basename(c9.output)})`);
+
+const c10 = await runMultiCase('消毒防穿越', plainFile, emptyCfg({ output: { fileName: '../evil-{stamp}.xlsx' } }), '20260722-170435');
+const b10 = path.basename(c10.output);
+// 安全性核心 = 产物是 exportsDir 的直接子文件(分隔符被消毒 → 无法穿越到父目录);文件名内残留的 '.' 无害
+check(
+    path.dirname(c10.output) === c10.exportsDir && !/[/\\]/.test(b10),
+    `⑩ 非法路径被消毒、产物落在 exports 内(实际 dir=${path.dirname(c10.output) === c10.exportsDir ? 'exports' : c10.output} name=${b10})`,
 );
 
 // 清理

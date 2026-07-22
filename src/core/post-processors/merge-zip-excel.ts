@@ -17,6 +17,7 @@ import {
     loadMergeConfig,
     resolveMergeOpts,
     deriveColumnValue,
+    resolveOutputFileName,
     DEFAULT_CONFIG,
     type MergeConfig,
 } from './merge-config';
@@ -198,7 +199,7 @@ const handler: PostProcessHandler = async (
         return { type: spec.type, message: '本次下载中没有可合并的表格(csv/xls/xlsx)。' };
     }
 
-    const output = path.join(ctx.exportsDir, `merged-${ctx.stamp}.xlsx`);
+    const output = path.join(ctx.exportsDir, resolveOutputFileName(config, ctx.stamp));
     await exportToExcel(allRows, output);
     const fileName = path.basename(output);
     return {
@@ -213,7 +214,7 @@ registerPostProcessor(
         type: 'merge-zip-excel',
         label: '批量下载表格合并',
         description:
-            '把下载的表格堆叠为一张总表:支持 zip 内表格 或 直接下载的单个表格(csv/xls/xlsx)。带标题块/说明面板的模板可用 merge-config.json 指定表头行/裁列/工作表(按文件名或工作表名匹配)。产出 exports/merged-*.xlsx',
+            '把下载的表格堆叠为一张总表:支持 zip 内表格 或 直接下载的单个表格(csv/xls/xlsx)。带标题块/说明面板的模板可用 merge-config.json 指定表头行/裁列/工作表(按文件名或工作表名匹配),并可配派生列与输出文件名。产出于 exports/(文件名由 merge-config 的 output.fileName 控,缺省 merged-*.xlsx)',
     },
     handler
 );
