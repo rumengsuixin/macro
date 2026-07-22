@@ -1783,10 +1783,111 @@ function parseListActionRules(): {
     }
 }
 
-/** 渲染一行动作编辑控件(选择器输入 + scope 下拉 + 🎯点选 + ✖删除) */
+/**
+ * 渲染动作级 gate 子编辑器(可折叠):onFilterFail + waitFor + 组合方式 + 条件/变量(复用 renderConditionRow/renderVarRow)。
+ * 各控件带专属类名(.la-gate-*),收集时按本动作行子树查找,不与全局行筛选串扰。
+ */
+function renderGateEditor(action: NormalizedAction): HTMLDetailsElement {
+    const details = document.createElement('details');
+    details.className = 'la-gate';
+    const hasGate = !!(action.filter && action.filter.conditions.some((c) => c.trim()));
+    details.open = hasGate;
+
+    const summary = document.createElement('summary');
+    summary.textContent = '🔍 动作级筛选(gate,可选)';
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'la-gate-body';
+
+    // 第一行:不满足处置 + 等待选择器
+    const opts = document.createElement('div');
+    opts.className = 'la-gate-opts';
+    const onfailSel = document.createElement('select');
+    onfailSel.className = 'la-gate-onfail';
+    for (const [val, text] of [['abort', '不满足→中止本行剩余动作'], ['skip', '不满足→仅跳过本动作']] as const) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        onfailSel.appendChild(opt);
+    }
+    onfailSel.value = action.onFilterFail === 'skip' ? 'skip' : 'abort';
+    onfailSel.addEventListener('change', syncListActionToJson);
+    const waitInput = document.createElement('input');
+    waitInput.type = 'text';
+    waitInput.className = 'la-gate-waitfor';
+    waitInput.placeholder = '等待出现(可选),如 .modal(等弹窗渲染后再判定)';
+    waitInput.value = action.waitFor ?? '';
+    waitInput.addEventListener('input', syncListActionToJson);
+    // 「等待出现」选择器也支持 🎯 点选(常用于点选弹窗容器)
+    const waitPick = document.createElement('button');
+    waitPick.className = 'la-pick';
+    waitPick.textContent = '🎯';
+    waitPick.title = '在页面上点选「等待出现」的元素(如弹窗容器)';
+    waitPick.addEventListener('click', () => {
+        requestPick((selector) => {
+            waitInput.value = selector;
+            syncListActionToJson();
+        });
+    });
+    opts.append(onfailSel, waitInput, waitPick);
+
+    // 组合方式(AND/OR)
+    const matchRow = document.createElement('div');
+    matchRow.className = 'la-gate-matchrow';
+    const matchLabel = document.createElement('span');
+    matchLabel.textContent = '满足';
+    const matchSel = document.createElement('select');
+    matchSel.className = 'la-gate-match';
+    for (const [val, text] of [['all', '全部条件(AND)'], ['any', '任一条件(OR)']] as const) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        matchSel.appendChild(opt);
+    }
+    matchSel.value = action.filter?.match === 'any' ? 'any' : 'all';
+    matchSel.addEventListener('change', syncListActionToJson);
+    const matchTail = document.createElement('span');
+    matchTail.textContent = '时才执行本动作';
+    matchRow.append(matchLabel, matchSel, matchTail);
+
+    // 条件列表 + 新增按钮
+    const condBox = document.createElement('div');
+    condBox.className = 'la-gate-conditions';
+    for (const c of action.filter?.conditions ?? []) {
+        condBox.appendChild(renderConditionRow(c));
+    }
+    const addCond = document.createElement('button');
+    addCond.className = 'la-add';
+    addCond.textContent = '＋ 条件';
+    addCond.addEventListener('click', () => condBox.appendChild(renderConditionRow('')));
+
+    // 变量列表 + 新增按钮(弹窗内取值用 scope=全局)
+    const varBox = document.createElement('div');
+    varBox.className = 'la-gate-vars';
+    for (const v of action.filter?.vars ?? []) {
+        varBox.appendChild(renderVarRow(v));
+    }
+    const addVar = document.createElement('button');
+    addVar.className = 'la-add';
+    addVar.textContent = '＋ 变量';
+    addVar.addEventListener('click', () =>
+        varBox.appendChild(renderVarRow({ name: '', selector: '', scope: 'page', source: 'text', attr: '' }))
+    );
+
+    body.append(opts, matchRow, condBox, addCond, varBox, addVar);
+    details.appendChild(body);
+    return details;
+}
+
+/** 渲染一行动作编辑控件(选择器输入 + scope 下拉 + 🎯点选 + 🧹收尾勾选 + ✖删除 + 动作级 gate 折叠区) */
 function renderActionRow(action: NormalizedAction): HTMLDivElement {
     const row = document.createElement('div');
     row.className = 'la-row la-action-row';
+
+    // 第一行:选择器 + scope + 点选 + 收尾勾选 + 删除
+    const head = document.createElement('div');
+    head.className = 'la-action-head';
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -1817,6 +1918,16 @@ function renderActionRow(action: NormalizedAction): HTMLDivElement {
         });
     });
 
+    // 🧹 收尾勾选:标记该动作为本行收尾动作(总会在末尾执行、忽略自身 gate),对标录制「标记翻页操作」
+    const finallyLabel = document.createElement('label');
+    finallyLabel.className = 'la-action-finally-label';
+    finallyLabel.title = '标记为收尾动作:每行总会在末尾执行一次(即使前面中止),常用于关闭弹窗';
+    const finallyChk = document.createElement('input');
+    finallyChk.type = 'checkbox';
+    finallyChk.className = 'la-action-finally';
+    finallyChk.checked = action.isFinally ?? false;
+    finallyLabel.append(finallyChk, document.createTextNode('🧹 收尾'));
+
     const delBtn = document.createElement('button');
     delBtn.className = 'la-del';
     delBtn.textContent = '✖';
@@ -1826,7 +1937,20 @@ function renderActionRow(action: NormalizedAction): HTMLDivElement {
         syncListActionToJson();
     });
 
-    row.append(input, scopeSel, pickBtn, delBtn);
+    head.append(input, scopeSel, pickBtn, finallyLabel, delBtn);
+
+    // 动作级 gate 折叠区(收尾动作忽略 gate,勾选收尾时隐藏)
+    const gate = renderGateEditor(action);
+    const syncFinallyUi = (): void => {
+        gate.style.display = finallyChk.checked ? 'none' : '';
+    };
+    syncFinallyUi();
+    finallyChk.addEventListener('change', () => {
+        syncFinallyUi();
+        syncListActionToJson();
+    });
+
+    row.append(head, gate);
     return row;
 }
 
@@ -1838,16 +1962,67 @@ function renderActionRows(actions: NormalizedAction[]): void {
     }
 }
 
-/** 读取可视化区当前所有动作行(过滤空 selector 行) */
-function collectActionRows(): NormalizedAction[] {
+/** 序列化用的单个动作形态:纯字符串(项内、无 gate/收尾)或带各字段的对象 */
+type ActionOut =
+    | string
+    | {
+          selector: string;
+          scope?: 'page';
+          waitFor?: string;
+          filter?: FilterOut;
+          onFilterFail?: 'skip';
+          finally?: true;
+      };
+
+/**
+ * 读取可视化区当前所有动作行(过滤空 selector 行),直接产出 JSON 就绪形态。
+ * 取简形:项内、无 gate/收尾/waitFor → 裸字符串;否则对象(仅写非缺省字段,减少 JSON 噪音)。
+ * 收尾动作忽略 gate,只序列化 selector/scope/finally。
+ */
+function collectActionRows(): ActionOut[] {
     const rows = Array.from(laActionsBox.querySelectorAll('.la-action-row'));
-    const actions: NormalizedAction[] = [];
+    const actions: ActionOut[] = [];
     for (const row of rows) {
         const sel = (row.querySelector('.la-action-selector') as HTMLInputElement | null)?.value.trim() ?? '';
-        const scope = (row.querySelector('.la-action-scope') as HTMLSelectElement | null)?.value === 'page' ? 'page' : 'item';
-        if (sel) {
-            actions.push({ selector: sel, scope });
+        if (!sel) {
+            continue;
         }
+        const scope = (row.querySelector('.la-action-scope') as HTMLSelectElement | null)?.value === 'page' ? 'page' : 'item';
+        const isFinally = (row.querySelector('.la-action-finally') as HTMLInputElement | null)?.checked ?? false;
+        // 收尾动作:忽略 gate/waitFor,只保留 selector/scope/finally
+        if (isFinally) {
+            const out: ActionOut = { selector: sel, finally: true };
+            if (scope === 'page') {
+                out.scope = 'page';
+            }
+            actions.push(out);
+            continue;
+        }
+        const waitFor = (row.querySelector('.la-gate-waitfor') as HTMLInputElement | null)?.value.trim() ?? '';
+        const condBox = row.querySelector('.la-gate-conditions');
+        const varBox = row.querySelector('.la-gate-vars');
+        const match = (row.querySelector('.la-gate-match') as HTMLSelectElement | null)?.value === 'any' ? 'any' : 'all';
+        const gate = condBox && varBox ? collectFilterIn(condBox, varBox, match) : undefined;
+        const onFail = (row.querySelector('.la-gate-onfail') as HTMLSelectElement | null)?.value === 'skip' ? 'skip' : 'abort';
+        // 项内 + 无 gate + 无 waitFor → 裸字符串简形
+        if (scope === 'item' && !waitFor && !gate) {
+            actions.push(sel);
+            continue;
+        }
+        const out: ActionOut = { selector: sel };
+        if (scope === 'page') {
+            out.scope = 'page';
+        }
+        if (waitFor) {
+            out.waitFor = waitFor;
+        }
+        if (gate) {
+            out.filter = gate;
+            if (onFail === 'skip') {
+                out.onFilterFail = 'skip';
+            }
+        }
+        actions.push(out);
     }
     return actions;
 }
@@ -1989,10 +2164,13 @@ interface FilterOut {
     conditions: string[];
 }
 
-/** 读取可视化区当前筛选状态;无非空条件→undefined(不写入 JSON,视为不筛选) */
-function collectFilter(): FilterOut | undefined {
+/**
+ * 从指定的条件容器 / 变量容器 / 组合方式读取筛选状态并序列化;无非空条件→undefined(不写入 JSON)。
+ * 容器化以便全局行筛选与每个动作的 gate 复用同一套收集逻辑,各查各自子树互不串扰。
+ */
+function collectFilterIn(condBox: Element, varBox: Element, match: 'all' | 'any'): FilterOut | undefined {
     const conditions: string[] = [];
-    for (const row of Array.from(laConditionsBox.querySelectorAll('.la-cond-row'))) {
+    for (const row of Array.from(condBox.querySelectorAll('.la-cond-row'))) {
         const v = (row.querySelector('.la-cond-input') as HTMLInputElement | null)?.value.trim() ?? '';
         if (v) {
             conditions.push(v);
@@ -2003,7 +2181,7 @@ function collectFilter(): FilterOut | undefined {
         return undefined;
     }
     const vars: FilterOut['vars'] = [];
-    for (const row of Array.from(laVarsBox.querySelectorAll('.la-var-row'))) {
+    for (const row of Array.from(varBox.querySelectorAll('.la-var-row'))) {
         const name = (row.querySelector('.la-var-name') as HTMLInputElement | null)?.value.trim() ?? '';
         if (!name) {
             continue;
@@ -2024,12 +2202,16 @@ function collectFilter(): FilterOut | undefined {
         }
         vars.push(out);
     }
-    const match = laFilterMatch.value === 'any' ? 'any' : 'all';
     const filter: FilterOut = { match, conditions };
     if (vars.length) {
         filter.vars = vars;
     }
     return filter;
+}
+
+/** 读取全局行筛选(顶层 filter);无非空条件→undefined */
+function collectFilter(): FilterOut | undefined {
+    return collectFilterIn(laConditionsBox, laVarsBox, laFilterMatch.value === 'any' ? 'any' : 'all');
 }
 
 /** 读取当前 JSON 里已有的 actionTimeout(可视化区不编辑它,重建 JSON 时保留) */
@@ -2053,15 +2235,14 @@ function readExistingActionTimeout(): number | undefined {
 function syncListActionToJson(): void {
     const listSelector = laListSelectorInput.value.trim();
     const actions = collectActionRows();
-    let actionSelector: string | Array<string | { selector: string; scope: 'item' | 'page' }>;
+    // collectActionRows 已按简形/对象逐条决定;此处仅处理整体塌缩:无动作→空串;单个裸字符串→字符串
+    let actionSelector: string | ActionOut[];
     if (actions.length === 0) {
         actionSelector = '';
-    } else if (actions.length === 1 && actions[0].scope === 'item') {
-        actionSelector = actions[0].selector;
+    } else if (actions.length === 1 && typeof actions[0] === 'string') {
+        actionSelector = actions[0];
     } else {
-        actionSelector = actions.map((a) =>
-            a.scope === 'item' ? a.selector : { selector: a.selector, scope: a.scope }
-        );
+        actionSelector = actions;
     }
     const obj: Record<string, unknown> = { mode: 'list-action', listSelector, actionSelector };
     // 保留 JSON 里手填的 actionTimeout(可视化区不编辑它,重建时勿丢——须在覆盖 extractInput 前读旧值)
@@ -2930,19 +3111,36 @@ function setAiBusy(busy: boolean): void {
     aiStatusEl.classList.toggle('ai-loading', busy);
 }
 
-/** list-action 动作归一化形态(渲染进程侧,纯数据) */
+/**
+ * list-action 动作归一化形态(渲染进程侧,纯数据)。
+ * filter/onFilterFail/waitFor 为动作级 gate;isFinally 为收尾标记(总会在末尾执行)。
+ */
 interface NormalizedAction {
     selector: string;
     scope: 'item' | 'page';
+    /** 动作级前置筛选(gate);null/缺省=无 */
+    filter?: FilterState | null;
+    /** gate 不满足时处置,缺省 abort */
+    onFilterFail?: 'skip' | 'abort';
+    /** 求值/点击前先等此选择器可见 */
+    waitFor?: string;
+    /** 是否为收尾动作(总会在末尾执行、忽略自身 gate) */
+    isFinally?: boolean;
 }
 
 /**
  * 把 actionSelector(字符串 / 字符串或对象数组)归一化为动作数组。
- * 空串→空数组(点列表项本身);字符串→项内动作;对象补默认 scope;过滤空 selector。
+ * 空串→空数组(点列表项本身);字符串→项内动作;对象补默认 scope + 动作级 gate/收尾标记;过滤空 selector。
  * 与 core/extractor.ts 的 normalizeActions 同语义(此处为渲染进程免依赖 playwright 的轻量副本)。
  */
 function normalizeActionSelector(
-    actionSelector: string | Array<string | { selector?: string; scope?: string }> | undefined
+    actionSelector:
+        | string
+        | Array<
+              | string
+              | { selector?: string; scope?: string; filter?: unknown; onFilterFail?: string; waitFor?: string; finally?: boolean }
+          >
+        | undefined
 ): NormalizedAction[] {
     const raw = Array.isArray(actionSelector) ? actionSelector : [actionSelector];
     const actions: NormalizedAction[] = [];
@@ -2955,7 +3153,14 @@ function normalizeActionSelector(
         } else if (entry && typeof entry === 'object' && typeof entry.selector === 'string') {
             const selector = entry.selector.trim();
             if (selector) {
-                actions.push({ selector, scope: entry.scope === 'page' ? 'page' : 'item' });
+                actions.push({
+                    selector,
+                    scope: entry.scope === 'page' ? 'page' : 'item',
+                    filter: parseFilter(entry.filter),
+                    onFilterFail: entry.onFilterFail === 'skip' ? 'skip' : 'abort',
+                    waitFor: typeof entry.waitFor === 'string' ? entry.waitFor : '',
+                    isFinally: entry.finally === true,
+                });
             }
         }
     }

@@ -6,7 +6,6 @@ import type {
     ListExtractConfig,
     ListDetailExtractConfig,
     ListActionExtractConfig,
-    ListAction,
     ListActionFilter,
     ExtractField,
     FieldType,
@@ -169,23 +168,51 @@ function clip(text: string): string {
 }
 
 /**
+ * 归一化后的 list-action 动作(缺省已补全 + 动作级 gate / 收尾标记)。
+ * filter=null 表示无动作级筛选;isFinally=true 表示收尾动作(总会在末尾执行、忽略自身 gate)。
+ */
+interface NormalizedAction {
+    selector: string;
+    scope: 'item' | 'page';
+    filter: NormalizedFilter | null;
+    onFilterFail: 'skip' | 'abort';
+    waitFor: string;
+    isFinally: boolean;
+}
+
+/**
  * 把 list-action 的 actionSelector(字符串 / 字符串或对象数组)归一化为动作数组。
  * 兼容旧格式:空串 → 空数组(点列表项本身);单字符串 → 单个项内动作;
  * 数组内字符串项视为 scope:'item',对象项补默认 scope。过滤空 selector。
+ * 对象项另归一化:动作级 filter(复用 normalizeFilter)、onFilterFail(缺省 abort)、waitFor、finally 标记。
  */
-function normalizeActions(actionSelector: ListActionExtractConfig['actionSelector']): ListAction[] {
+function normalizeActions(actionSelector: ListActionExtractConfig['actionSelector']): NormalizedAction[] {
     const raw = Array.isArray(actionSelector) ? actionSelector : [actionSelector];
-    const actions: ListAction[] = [];
+    const actions: NormalizedAction[] = [];
     for (const entry of raw) {
         if (typeof entry === 'string') {
             const selector = entry.trim();
             if (selector) {
-                actions.push({ selector, scope: 'item' });
+                actions.push({
+                    selector,
+                    scope: 'item',
+                    filter: null,
+                    onFilterFail: 'abort',
+                    waitFor: '',
+                    isFinally: false,
+                });
             }
         } else if (entry && typeof entry === 'object' && typeof entry.selector === 'string') {
             const selector = entry.selector.trim();
             if (selector) {
-                actions.push({ selector, scope: entry.scope === 'page' ? 'page' : 'item' });
+                actions.push({
+                    selector,
+                    scope: entry.scope === 'page' ? 'page' : 'item',
+                    filter: normalizeFilter(entry.filter),
+                    onFilterFail: entry.onFilterFail === 'skip' ? 'skip' : 'abort',
+                    waitFor: typeof entry.waitFor === 'string' ? entry.waitFor.trim() : '',
+                    isFinally: entry.finally === true,
+                });
             }
         }
     }
@@ -288,8 +315,11 @@ async function extractListAction(
     downloads?: DownloadManager
 ): Promise<ExtractRow[]> {
     const actionTimeout = config.actionTimeout ?? 30000;
-    // 动作序列归一化:空 → 点列表项本身(旧语义);单/多动作各自带 scope(项内/全局)
+    // 动作序列归一化:空 → 点列表项本身(旧语义);单/多动作各自带 scope(项内/全局)+ 动作级 gate / 收尾标记
     const actions = normalizeActions(config.actionSelector);
+    // 拆分收尾动作(finally 标记)与主动作:收尾动作抽出,在每行主动作结束后总会执行(关弹窗)
+    const finallyActions = actions.filter((a) => a.isFinally);
+    const mainActions = actions.filter((a) => !a.isFinally);
     // 行级筛选归一化:null=无筛选(旧宏 / 无条件),否则每行先求筛选、不匹配整行跳过
     const filter = normalizeFilter(config.filter);
     // 筛选表达式求值失败的去重告警集(按条件文本 key),避免每行刷屏
@@ -303,11 +333,25 @@ async function extractListAction(
             }
         }
     }
+    // 动作级 gate 也做一次性语法体检(仅主动作;收尾动作忽略自身 gate)
+    for (let a = 0; a < mainActions.length; a += 1) {
+        const af = mainActions[a].filter;
+        if (!af) {
+            continue;
+        }
+        for (const cond of af.conditions) {
+            const err = checkExprSyntax(cond);
+            if (err) {
+                logError(`动作${a + 1} 筛选条件「${cond}」语法错误:${err};该条件将永不命中。`);
+            }
+        }
+    }
     let clicked = 0;
-    // 执行一次点击并(可选)等这次下载开始;超时只告警不阻断(晚到的下载仍被全局 handler 保存)
-    const clickOnce = async (target: Locator, label: string): Promise<void> => {
+    // 执行一次点击并(可选)等这次下载开始;超时只告警不阻断(晚到的下载仍被全局 handler 保存)。
+    // waitDownload=false 用于收尾等非下载点击,避免白等一个 actionTimeout + 误报「未捕获到下载」。
+    const clickOnce = async (target: Locator, label: string, waitDownload = true): Promise<void> => {
         // 下载等待须在点击前注册,确保等待者先于 download 事件就位,不漏接快下载(修注册竞态)
-        const waitPromise = downloads ? downloads.waitForNext(actionTimeout) : null;
+        const waitPromise = waitDownload && downloads ? downloads.waitForNext(actionTimeout) : null;
         // 动作点击用专属较短超时(actionTimeout),坏选择器在此超时内快速暴露而非静默等满全局 60s
         await target.click({ timeout: actionTimeout });
         clicked += 1;
@@ -338,7 +382,8 @@ async function extractListAction(
                 continue;
             }
             matched += 1;
-            // 无动作:保留旧语义,直接点列表项本身
+            // 无任何动作:保留旧语义,直接点列表项本身。判据用原始 actions 是否为空——
+            // 「只标了收尾、没有主动作」时不应误点列表项(此时 mainActions 空但仍要跑收尾)。
             if (actions.length === 0) {
                 const label = `第 ${p} 页第 ${i + 1} 项`;
                 logInfo(`第 ${p} 页 ${i + 1}/${count} 项:点击 列表项本身……`);
@@ -350,16 +395,34 @@ async function extractListAction(
                 }
                 continue;
             }
-            // 逐个执行动作:每个动作按 scope 选择项内 / 全局根
-            for (let a = 0; a < actions.length; a += 1) {
-                const action = actions[a];
+            // 逐个执行主动作(收尾动作已抽出,不在此循环):每个动作按 scope 选择项内 / 全局根
+            for (let a = 0; a < mainActions.length; a += 1) {
+                const action = mainActions[a];
                 const usePage = action.scope === 'page';
                 // page 根用 :root Locator 承载,使全局查找与只读诊断都能统一走 Locator API
                 const root: Locator = usePage ? page.locator(':root') : item;
-                const target = root.locator(action.selector).first();
                 const scopeLabel = usePage ? '全局' : '项内';
-                const actLabel = actions.length > 1 ? `动作${a + 1}/${actions.length}[${scopeLabel}]` : `[${scopeLabel}]`;
+                const actLabel = mainActions.length > 1 ? `动作${a + 1}/${mainActions.length}[${scopeLabel}]` : `[${scopeLabel}]`;
                 const label = `第 ${p} 页第 ${i + 1} 项 ${actLabel}`;
+                // ① 可选等待:等前序动作弹出的弹窗内容渲染完成再判定/点击(尤其 gate 用 exists 时)
+                if (action.waitFor) {
+                    try {
+                        await page.waitForSelector(action.waitFor, { state: 'visible', timeout: actionTimeout });
+                    } catch {
+                        logError(`${label} 等待 ${action.waitFor} 可见超时,仍继续判定/点击。`);
+                    }
+                }
+                // ② 动作级 gate:对实时页面 DOM 求值(此刻前序动作弹出的弹窗已在 DOM,scope:'page' 变量可读弹窗内值)
+                //    不满足按 onFilterFail 处置:skip=仅跳过本动作续后续;abort(缺省)=跳出本行剩余主动作(收尾照跑)
+                if (action.filter && !(await evalRowFilter(page, item, action.filter, warned))) {
+                    if (action.onFilterFail === 'skip') {
+                        logInfo(`第 ${p} 页 ${i + 1}/${count} 项 ${actLabel}:未匹配动作级筛选,跳过该动作。`);
+                        continue;
+                    }
+                    logInfo(`第 ${p} 页 ${i + 1}/${count} 项 ${actLabel}:未匹配动作级筛选,中止本行剩余动作。`);
+                    break;
+                }
+                const target = root.locator(action.selector).first();
                 // 逐项进度日志:让 UI 实时可见、能定位卡在第几项/第几个动作
                 logInfo(`第 ${p} 页 ${i + 1}/${count} 项 ${actLabel}:点击 ${action.selector}……`);
                 try {
@@ -373,6 +436,26 @@ async function extractListAction(
                 } catch (err) {
                     const message = err instanceof Error ? err.message : String(err);
                     logError(`${label} 点击失败:${message},继续。`);
+                }
+            }
+            // ③ 收尾动作:无论主动作正常跑完 / gate 中止 / 报错,已执行动作的行总会执行一次(关弹窗)。
+            //    收尾点击不等下载(waitDownload=false),避免每行白等一个 actionTimeout。
+            for (let f = 0; f < finallyActions.length; f += 1) {
+                const action = finallyActions[f];
+                const usePage = action.scope === 'page';
+                const root: Locator = usePage ? page.locator(':root') : item;
+                const target = root.locator(action.selector).first();
+                const label = `第 ${p} 页第 ${i + 1} 项 收尾${finallyActions.length > 1 ? f + 1 : ''}`;
+                try {
+                    if ((await target.count()) === 0) {
+                        logInfo(`${label}:未找到收尾目标(${action.selector}),跳过。`);
+                        continue;
+                    }
+                    logInfo(`${label}:执行收尾 ${action.selector}……`);
+                    await clickOnce(target, label, false);
+                } catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    logError(`${label} 收尾失败:${message},继续下一项。`);
                 }
             }
         }

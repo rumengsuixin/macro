@@ -158,7 +158,7 @@ npm start        # 直接用已编译产物启动(需先 build)
 
 ### 提取规则(extract)
 
-两种模式:
+四种模式(`mode`):`single`(整页单行)/ `list`(逐项采字段)/ `list-detail`(逐项进详情页采字段)/ `list-action`(逐项按序执行动作、不采数据,常用于逐项点按钮下载)。
 
 - **single**:整页单字段提取
   ```json
@@ -172,6 +172,28 @@ npm start        # 直接用已编译产物启动(需先 build)
       "fields": [
           { "name": "title", "selector": ".title", "type": "text" },
           { "name": "link", "selector": "a", "type": "attr", "attr": "href" }
+      ]
+  }
+  ```
+- **list-action**:遍历列表项,逐项按序执行动作(`actionSelector` 单字符串 / 多动作数组,每动作可带 `scope`:`item` 项内 / `page` 全局)。
+  - **行级筛选** `filter`(可选):仅匹配条件的行才执行动作。`vars` 声明命名变量(选择器 + `scope` + `source`),`conditions` 是布尔表达式数组(内置变量 `text`/`html`,函数 `contains(a,b)`/`match(str,pattern)`),多条按 `match`(`all`=AND / `any`=OR)组合;失败即安全。
+  - **动作级筛选**(gate):给某个动作对象挂 `filter`(结构同上),执行该动作**前**对**实时页面**求值——因在动作序列中途,前序动作弹出的**弹窗此刻已在 DOM**,用 `scope:"page"` 的变量即可读弹窗内的值。不满足时按 `onFilterFail` 处置:`abort`(缺省)中止本行剩余动作 / `skip` 仅跳过本动作。可选 `waitFor` 选择器,在判定/点击前先等弹窗渲染。
+  - **收尾动作** `finally`:给某个动作标 `"finally": true`,该动作总会在本行末尾执行一次(即使前面 gate 中止),忽略自身 gate,常用于**关闭弹窗**以免遮挡下一行点击。
+  ```json
+  {
+      "mode": "list-action",
+      "listSelector": ".item",
+      "actionSelector": [
+          ".open",
+          {
+              "selector": "#modal .download", "scope": "page", "waitFor": "#modal",
+              "onFilterFail": "abort",
+              "filter": {
+                  "vars": [ { "name": "type", "selector": "#modal .type", "scope": "page", "source": "text" } ],
+                  "conditions": [ "type == \"向多人转账\"" ]
+              }
+          },
+          { "selector": "#modal .close", "scope": "page", "finally": true }
       ]
   }
   ```

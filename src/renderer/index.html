@@ -1128,6 +1128,99 @@
             background: var(--border);
         }
 
+        /* 动作行改为纵向堆叠:第一行控件(head)+ 可折叠动作级 gate 子区 */
+        .la-action-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        .la-action-head {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        /* 🧹 收尾勾选:覆盖 .la-row input{flex:1} 以免复选框被拉伸变形 */
+        .la-action-finally-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--text-soft);
+        }
+
+        .la-action-finally-label input {
+            flex: 0 0 auto;
+            width: auto;
+            min-width: 0;
+            padding: 0;
+            margin: 0;
+            border: none;
+            background: transparent;
+        }
+
+        /* 动作级 gate 折叠区 */
+        .la-gate {
+            border: 1px dashed var(--border);
+            border-radius: var(--r-sm);
+            padding: 4px 8px;
+            background: var(--surface-1, #f3f4f6);
+        }
+
+        .la-gate>summary {
+            cursor: pointer;
+            color: var(--text-soft);
+            font-weight: 600;
+            font-size: 12px;
+            user-select: none;
+        }
+
+        .la-gate-body {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .la-gate-opts,
+        .la-gate-matchrow {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .la-gate-matchrow span {
+            color: var(--text-soft);
+            white-space: nowrap;
+        }
+
+        .la-gate-conditions,
+        .la-gate-vars {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .la-add {
+            align-self: flex-start;
+            background: var(--surface-3);
+            color: var(--text-soft);
+            box-shadow: none;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-sm);
+            padding: 4px 8px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .la-add:hover {
+            background: var(--border);
+        }
+
         /* 筛选区提示里的行内代码 */
         #ai-list-action-row .hint code {
             background: var(--surface-1, #f3f4f6);

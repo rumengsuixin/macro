@@ -219,6 +219,22 @@ export interface ListDetailExtractConfig {
 export interface ListAction {
     selector: string;
     scope?: 'item' | 'page';
+    /**
+     * 动作级前置筛选(gate,可选):执行本动作前对「实时页面 DOM」求值(结构同行级 filter)。
+     * 因在动作序列中途求值,前序动作弹出的弹窗此刻已在 DOM 中,用 scope:'page' 的变量即可读弹窗内的值。
+     * 不满足时按 onFilterFail 处置。行级 filter 与动作级 filter 可并存(先粗筛行、再精筛动作)。
+     */
+    filter?: ListActionFilter;
+    /** gate 不满足时的处置:'abort'(缺省)跳出本行剩余动作;'skip' 仅跳过本动作、继续后续 */
+    onFilterFail?: 'skip' | 'abort';
+    /** 求值/点击前先等此选择器可见(可选);用于等前序动作弹出的弹窗内容异步渲染完成再判定 */
+    waitFor?: string;
+    /**
+     * 标记为「收尾动作」(可选,非必配):被标记的动作从正常序列抽出,在本行动作序列结束后
+     * 总会执行一次(无论正常跑完 / abort 中止 / 某动作报错),且忽略自身 gate。专用于关闭弹窗,
+     * 避免残留弹窗遮挡下一行点击。对标录制板块「标记翻页操作」——在已有动作上打标,不新增特殊步骤。
+     */
+    finally?: boolean;
 }
 
 /**
