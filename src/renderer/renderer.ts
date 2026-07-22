@@ -238,6 +238,12 @@ const laListSelectorInput = byId<HTMLInputElement>('la-list-selector');
 const laPickListBtn = byId<HTMLButtonElement>('la-pick-list');
 const laActionsBox = byId<HTMLDivElement>('la-actions');
 const laAddActionBtn = byId<HTMLButtonElement>('la-add-action');
+// list-action 行筛选可视化子区
+const laFilterMatch = byId<HTMLSelectElement>('la-filter-match');
+const laConditionsBox = byId<HTMLDivElement>('la-conditions');
+const laVarsBox = byId<HTMLDivElement>('la-vars');
+const laAddConditionBtn = byId<HTMLButtonElement>('la-add-condition');
+const laAddVarBtn = byId<HTMLButtonElement>('la-add-var');
 const appEl = document.querySelector('.app') as HTMLDivElement;
 const pickHint = byId<HTMLDivElement>('pick-hint');
 const pickCancelBtn = byId<HTMLButtonElement>('pick-cancel');
@@ -1700,8 +1706,60 @@ function refreshAiModeOptions(): void {
 
 // ===== list-action 专属可视化配置区(与「提取规则」JSON 双向同步) =====
 
-/** 从「提取规则」JSON 解析出 list-action 现状(listSelector + 归一化动作);非 list-action 返回 null */
-function parseListActionRules(): { listSelector: string; actions: NormalizedAction[] } | null {
+/** 行筛选变量(渲染侧,纯数据) */
+interface FilterVarRow {
+    name: string;
+    selector: string;
+    scope: 'item' | 'page';
+    source: string; // text/html/attr/href/src/exists
+    attr: string;
+}
+/** 行筛选状态(渲染侧) */
+interface FilterState {
+    match: 'all' | 'any';
+    vars: FilterVarRow[];
+    conditions: string[];
+}
+
+/** 防御式解析 JSON 里的 filter 字段为渲染侧 FilterState;无效返回 null */
+function parseFilter(raw: unknown): FilterState | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const f = raw as { match?: unknown; vars?: unknown; conditions?: unknown };
+    const conditions = Array.isArray(f.conditions)
+        ? f.conditions.filter((c): c is string => typeof c === 'string')
+        : [];
+    const vars: FilterVarRow[] = [];
+    if (Array.isArray(f.vars)) {
+        for (const v of f.vars) {
+            if (v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string') {
+                const vv = v as {
+                    name: string;
+                    selector?: unknown;
+                    scope?: unknown;
+                    source?: unknown;
+                    attr?: unknown;
+                };
+                vars.push({
+                    name: vv.name,
+                    selector: typeof vv.selector === 'string' ? vv.selector : '',
+                    scope: vv.scope === 'page' ? 'page' : 'item',
+                    source: typeof vv.source === 'string' ? vv.source : 'text',
+                    attr: typeof vv.attr === 'string' ? vv.attr : '',
+                });
+            }
+        }
+    }
+    return { match: f.match === 'any' ? 'any' : 'all', vars, conditions };
+}
+
+/** 从「提取规则」JSON 解析出 list-action 现状(listSelector + 动作 + 行筛选);非 list-action 返回 null */
+function parseListActionRules(): {
+    listSelector: string;
+    actions: NormalizedAction[];
+    filter: FilterState | null;
+} | null {
     try {
         const raw = extractInput.value.trim();
         if (!raw) {
@@ -1712,7 +1770,11 @@ function parseListActionRules(): { listSelector: string; actions: NormalizedActi
             return null;
         }
         const listSelector = typeof cfg.listSelector === 'string' ? cfg.listSelector : '';
-        return { listSelector, actions: normalizeActionSelector(cfg.actionSelector) };
+        return {
+            listSelector,
+            actions: normalizeActionSelector(cfg.actionSelector),
+            filter: parseFilter(cfg.filter),
+        };
     } catch {
         return null;
     }
@@ -1787,6 +1849,199 @@ function collectActionRows(): NormalizedAction[] {
     return actions;
 }
 
+/** 渲染一行筛选条件(布尔表达式输入 + ✖删除) */
+function renderConditionRow(cond: string): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'la-row la-cond-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'la-cond-input';
+    input.placeholder = '布尔表达式,如 contains(text, "已完成")';
+    input.value = cond;
+    input.addEventListener('input', syncListActionToJson);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'la-del';
+    delBtn.textContent = '✖';
+    delBtn.title = '删除此条件';
+    delBtn.addEventListener('click', () => {
+        row.remove();
+        syncListActionToJson();
+    });
+
+    row.append(input, delBtn);
+    return row;
+}
+
+/** 渲染一行筛选变量(变量名 + 选择器 + scope + 取值方式 + 属性名 + 🎯点选 + ✖删除) */
+function renderVarRow(v: FilterVarRow): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'la-row la-var-row';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'la-var-name';
+    nameInput.placeholder = '变量名';
+    nameInput.style.flex = '0 0 84px';
+    nameInput.value = v.name;
+    nameInput.addEventListener('input', syncListActionToJson);
+
+    const selInput = document.createElement('input');
+    selInput.type = 'text';
+    selInput.className = 'la-var-selector';
+    selInput.placeholder = '取值选择器,如 .status(留空取整行)';
+    selInput.value = v.selector;
+    selInput.addEventListener('input', syncListActionToJson);
+
+    const scopeSel = document.createElement('select');
+    scopeSel.className = 'la-var-scope';
+    for (const [val, text] of [['item', '项内'], ['page', '全局']] as const) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        scopeSel.appendChild(opt);
+    }
+    scopeSel.value = v.scope;
+    scopeSel.addEventListener('change', syncListActionToJson);
+
+    const sourceSel = document.createElement('select');
+    sourceSel.className = 'la-var-source';
+    for (const [val, text] of [
+        ['text', '文本'],
+        ['html', 'HTML'],
+        ['attr', '属性'],
+        ['href', '链接'],
+        ['src', '资源'],
+        ['exists', '存在'],
+    ] as const) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        sourceSel.appendChild(opt);
+    }
+    sourceSel.value = v.source;
+
+    const attrInput = document.createElement('input');
+    attrInput.type = 'text';
+    attrInput.className = 'la-var-attr';
+    attrInput.placeholder = '属性名';
+    attrInput.style.flex = '0 0 76px';
+    attrInput.value = v.attr;
+    attrInput.addEventListener('input', syncListActionToJson);
+    // 属性名仅在取值方式为「属性」时才有意义,按需显隐
+    const syncAttrVisible = (): void => {
+        attrInput.style.display = sourceSel.value === 'attr' ? '' : 'none';
+    };
+    syncAttrVisible();
+    sourceSel.addEventListener('change', () => {
+        syncAttrVisible();
+        syncListActionToJson();
+    });
+
+    const pickBtn = document.createElement('button');
+    pickBtn.className = 'la-pick';
+    pickBtn.textContent = '🎯';
+    pickBtn.title = '在页面上点选此变量的取值元素';
+    pickBtn.addEventListener('click', () => {
+        requestPick((selector) => {
+            selInput.value = selector;
+            syncListActionToJson();
+        });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'la-del';
+    delBtn.textContent = '✖';
+    delBtn.title = '删除此变量';
+    delBtn.addEventListener('click', () => {
+        row.remove();
+        syncListActionToJson();
+    });
+
+    row.append(nameInput, selInput, scopeSel, sourceSel, attrInput, pickBtn, delBtn);
+    return row;
+}
+
+/** 用条件数组重建条件行列表 */
+function renderConditionRows(conditions: string[]): void {
+    laConditionsBox.innerHTML = '';
+    for (const c of conditions) {
+        laConditionsBox.appendChild(renderConditionRow(c));
+    }
+}
+
+/** 用变量数组重建变量行列表 */
+function renderVarRows(vars: FilterVarRow[]): void {
+    laVarsBox.innerHTML = '';
+    for (const v of vars) {
+        laVarsBox.appendChild(renderVarRow(v));
+    }
+}
+
+/** 序列化用的行筛选形态(未激活返回 undefined) */
+interface FilterOut {
+    match: 'all' | 'any';
+    vars?: Array<{ name: string; selector: string; scope: 'item' | 'page'; source: string; attr?: string }>;
+    conditions: string[];
+}
+
+/** 读取可视化区当前筛选状态;无非空条件→undefined(不写入 JSON,视为不筛选) */
+function collectFilter(): FilterOut | undefined {
+    const conditions: string[] = [];
+    for (const row of Array.from(laConditionsBox.querySelectorAll('.la-cond-row'))) {
+        const v = (row.querySelector('.la-cond-input') as HTMLInputElement | null)?.value.trim() ?? '';
+        if (v) {
+            conditions.push(v);
+        }
+    }
+    // 至少 1 条非空条件才算激活筛选
+    if (conditions.length === 0) {
+        return undefined;
+    }
+    const vars: FilterOut['vars'] = [];
+    for (const row of Array.from(laVarsBox.querySelectorAll('.la-var-row'))) {
+        const name = (row.querySelector('.la-var-name') as HTMLInputElement | null)?.value.trim() ?? '';
+        if (!name) {
+            continue;
+        }
+        const selector = (row.querySelector('.la-var-selector') as HTMLInputElement | null)?.value.trim() ?? '';
+        const scope = (row.querySelector('.la-var-scope') as HTMLSelectElement | null)?.value === 'page' ? 'page' : 'item';
+        const source = (row.querySelector('.la-var-source') as HTMLSelectElement | null)?.value ?? 'text';
+        const attr = (row.querySelector('.la-var-attr') as HTMLInputElement | null)?.value.trim() ?? '';
+        const out: { name: string; selector: string; scope: 'item' | 'page'; source: string; attr?: string } = {
+            name,
+            selector,
+            scope,
+            source,
+        };
+        // 仅取值方式为属性且填了属性名时才写 attr,减少 JSON 噪音
+        if (source === 'attr' && attr) {
+            out.attr = attr;
+        }
+        vars.push(out);
+    }
+    const match = laFilterMatch.value === 'any' ? 'any' : 'all';
+    const filter: FilterOut = { match, conditions };
+    if (vars.length) {
+        filter.vars = vars;
+    }
+    return filter;
+}
+
+/** 读取当前 JSON 里已有的 actionTimeout(可视化区不编辑它,重建 JSON 时保留) */
+function readExistingActionTimeout(): number | undefined {
+    try {
+        const cfg = JSON.parse(extractInput.value.trim() || '{}');
+        if (cfg && cfg.mode === 'list-action' && typeof cfg.actionTimeout === 'number') {
+            return cfg.actionTimeout;
+        }
+    } catch {
+        /* 忽略解析失败,视为无 actionTimeout */
+    }
+    return undefined;
+}
+
 /**
  * 把可视化区当前状态序列化写回「提取规则」JSON(JSON 仍是唯一真相源)。
  * 直接 .value= 赋值不触发 input 事件,天然避免「回写→回填」死循环。
@@ -1805,15 +2060,39 @@ function syncListActionToJson(): void {
             a.scope === 'item' ? a.selector : { selector: a.selector, scope: a.scope }
         );
     }
-    extractInput.value = JSON.stringify({ mode: 'list-action', listSelector, actionSelector }, null, 4);
+    const obj: Record<string, unknown> = { mode: 'list-action', listSelector, actionSelector };
+    // 保留 JSON 里手填的 actionTimeout(可视化区不编辑它,重建时勿丢——须在覆盖 extractInput 前读旧值)
+    const actionTimeout = readExistingActionTimeout();
+    if (actionTimeout !== undefined) {
+        obj.actionTimeout = actionTimeout;
+    }
+    // 行筛选:激活(≥1 条非空条件)才写入 filter,否则省略该键
+    const filter = collectFilter();
+    if (filter) {
+        obj.filter = filter;
+    }
+    extractInput.value = JSON.stringify(obj, null, 4);
     // 联动依赖 JSON 的其它 UI(如 list-detail 选项可用性);不在此回填编辑器,避免打断正在输入的行
     refreshAiModeOptions();
 }
 
+/** 回填筛选子区:有 filter 则渲染其条件/变量/组合方式,无则默认一行空条件、零变量 */
+function applyFilterToEditor(filter: FilterState | null): void {
+    if (filter) {
+        laFilterMatch.value = filter.match;
+        renderConditionRows(filter.conditions.length ? filter.conditions : ['']);
+        renderVarRows(filter.vars);
+    } else {
+        laFilterMatch.value = 'all';
+        renderConditionRows(['']);
+        renderVarRows([]);
+    }
+}
+
 /**
  * 显隐 + 回填 list-action 可视化配置区。
- * 仅 ai-mode=list-action 时显示;显示时若 JSON 已是 list-action 规则则回填,
- * 否则(且编辑区尚空时)初始化一行空动作。JSON 解析失败但已有行→保留现状(用户可能正手改 JSON)。
+ * 仅 ai-mode=list-action 时显示;显示时若 JSON 已是 list-action 规则则回填动作与筛选,
+ * 否则(且编辑区尚空时)初始化一行空动作 + 一行空条件。JSON 解析失败但已有行→保留现状(用户可能正手改 JSON)。
  */
 function refreshListActionEditor(): void {
     const isListAction = aiModeSel.value === 'list-action';
@@ -1825,9 +2104,11 @@ function refreshListActionEditor(): void {
     if (parsed) {
         laListSelectorInput.value = parsed.listSelector;
         renderActionRows(parsed.actions.length ? parsed.actions : [{ selector: '', scope: 'item' }]);
+        applyFilterToEditor(parsed.filter);
     } else if (laActionsBox.childElementCount === 0) {
         laListSelectorInput.value = '';
         renderActionRows([{ selector: '', scope: 'item' }]);
+        applyFilterToEditor(null);
     }
 }
 
@@ -1843,6 +2124,16 @@ laPickListBtn.addEventListener('click', () => {
 laAddActionBtn.addEventListener('click', () => {
     laActionsBox.appendChild(renderActionRow({ selector: '', scope: 'item' }));
 });
+// 新增一条空筛选条件(空行不写入 JSON,填内容后经 input 事件同步)
+laAddConditionBtn.addEventListener('click', () => {
+    laConditionsBox.appendChild(renderConditionRow(''));
+});
+// 新增一个空筛选变量
+laAddVarBtn.addEventListener('click', () => {
+    laVarsBox.appendChild(renderVarRow({ name: '', selector: '', scope: 'item', source: 'text', attr: '' }));
+});
+// 切换筛选条件的组合方式(AND/OR)
+laFilterMatch.addEventListener('change', syncListActionToJson);
 
 // 用户手动编辑「提取规则」框时,实时联动 list-detail 选项可用性 + 回填 list-action 编辑器
 extractInput.addEventListener('input', () => {

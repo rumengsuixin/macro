@@ -221,6 +221,39 @@ export interface ListAction {
     scope?: 'item' | 'page';
 }
 
+/**
+ * list-action 行筛选变量:从行内/整页选择器取一个命名值,供筛选表达式引用。
+ * 内置变量 text(本行 innerText)/html(本行 innerHTML)已自动注入,无需在此声明。
+ */
+export interface ListActionFilterVar {
+    /** 表达式里引用的变量名 */
+    name: string;
+    /** 取值选择器;留空取列表项本身 */
+    selector: string;
+    /** 相对列表项(item,缺省)还是整页(page)查找,与 ListAction.scope 同义 */
+    scope?: 'item' | 'page';
+    /** 取值方式:text(缺省)/html/attr/href/src;exists=元素 count()>0 布尔(与取值互斥) */
+    source?: FieldType | 'exists';
+    /** source=attr 时的属性名 */
+    attr?: string;
+}
+
+/**
+ * list-action 行级筛选:仅匹配条件的行才执行动作,不匹配的行整行跳过。
+ * 表达式为 when 引擎语法(同 responseTrigger.when):可用内置变量 text/html + vars 声明的变量,
+ * 内置函数 contains(a,b)/match(str,pattern[,flags])。注意:变量取值恒为字符串,
+ * 数值比较用 ==/</>(自动数值化),勿用 ===(严格比较跨类型恒 false)。
+ * 失败即安全:表达式 parse/eval 失败 → 该条件记 false(all 下跳过该行,any 下不贡献)。
+ */
+export interface ListActionFilter {
+    /** 多条件组合:all=全部满足(AND,缺省) / any=任一满足(OR) */
+    match?: 'all' | 'any';
+    /** 命名变量(可选);内置 text/html 已自动注入 */
+    vars?: ListActionFilterVar[];
+    /** 布尔表达式条件,多条按 match 组合;去空白后全空 → 不筛选 */
+    conditions?: string[];
+}
+
 /** 列表逐项动作:遍历列表项,逐项按序执行动作(常用于每点一次触发一次文件下载) */
 export interface ListActionExtractConfig {
     mode: 'list-action';
@@ -235,6 +268,8 @@ export interface ListActionExtractConfig {
     actionSelector: string | Array<string | ListAction>;
     /** 每次点击后等待下载开始的超时(毫秒);省略沿用全局默认 */
     actionTimeout?: number;
+    /** 行级筛选(可选):仅匹配条件的行执行动作;旧宏无此字段=不筛选,行为不变 */
+    filter?: ListActionFilter;
 }
 
 /** 提取配置 */

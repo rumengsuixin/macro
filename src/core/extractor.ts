@@ -7,11 +7,14 @@ import type {
     ListDetailExtractConfig,
     ListActionExtractConfig,
     ListAction,
+    ListActionFilter,
     ExtractField,
+    FieldType,
     ExtractRow,
 } from './macro-types';
 import type { DownloadManager } from './download-manager';
 import { logInfo, logError } from './logger';
+import { evalBoolExpr, checkExprSyntax } from './expr-eval';
 
 /** 翻页上下文:由回放引擎构造,提取流程在采完一页后驱动翻页 */
 export interface PaginationContext {
@@ -287,6 +290,19 @@ async function extractListAction(
     const actionTimeout = config.actionTimeout ?? 30000;
     // 动作序列归一化:空 → 点列表项本身(旧语义);单/多动作各自带 scope(项内/全局)
     const actions = normalizeActions(config.actionSelector);
+    // 行级筛选归一化:null=无筛选(旧宏 / 无条件),否则每行先求筛选、不匹配整行跳过
+    const filter = normalizeFilter(config.filter);
+    // 筛选表达式求值失败的去重告警集(按条件文本 key),避免每行刷屏
+    const warned = new Set<string>();
+    // 载入期一次性语法体检:非法表达式提前中文告警(该条件将永不命中 → 相关行不执行动作)
+    if (filter) {
+        for (const cond of filter.conditions) {
+            const err = checkExprSyntax(cond);
+            if (err) {
+                logError(`筛选条件「${cond}」语法错误:${err};该条件将永不命中,相关行不会执行动作。`);
+            }
+        }
+    }
     let clicked = 0;
     // 执行一次点击并(可选)等这次下载开始;超时只告警不阻断(晚到的下载仍被全局 handler 保存)
     const clickOnce = async (target: Locator, label: string): Promise<void> => {
@@ -311,8 +327,17 @@ async function extractListAction(
         logInfo(
             `第 ${p}/${totalPages} 页发现 ${count} 个列表项,每项 ${actions.length || 1} 个动作,开始逐项执行……`
         );
+        let matched = 0;
+        let skipped = 0;
         for (let i = 0; i < count; i += 1) {
             const item = items.nth(i);
+            // 行级筛选:先对该行求筛选条件,不匹配则整行跳过(不执行任何动作)
+            if (filter && !(await evalRowFilter(page, item, filter, warned))) {
+                skipped += 1;
+                logInfo(`第 ${p} 页 ${i + 1}/${count} 项:未匹配筛选条件,跳过。`);
+                continue;
+            }
+            matched += 1;
             // 无动作:保留旧语义,直接点列表项本身
             if (actions.length === 0) {
                 const label = `第 ${p} 页第 ${i + 1} 项`;
@@ -350,6 +375,9 @@ async function extractListAction(
                     logError(`${label} 点击失败:${message},继续。`);
                 }
             }
+        }
+        if (filter) {
+            logInfo(`第 ${p} 页筛选:命中 ${matched} 项,跳过 ${skipped} 项(共 ${count} 项)。`);
         }
     });
     logInfo(
@@ -469,4 +497,116 @@ async function extractFieldValue(locator: Locator, field: ExtractField): Promise
         default:
             return '';
     }
+}
+
+/** 归一化后的行筛选变量(缺省已补全) */
+interface NormalizedFilterVar {
+    name: string;
+    selector: string;
+    scope: 'item' | 'page';
+    source: FieldType | 'exists';
+    attr: string;
+}
+
+/** 归一化后的行筛选;仅当 ≥1 条非空条件时才产出,否则视为无筛选 */
+interface NormalizedFilter {
+    match: 'all' | 'any';
+    vars: NormalizedFilterVar[];
+    conditions: string[];
+}
+
+/**
+ * 归一化 list-action 行筛选:去空白、补默认(match=all / var scope=item / source=text)。
+ * 激活判据:conditions 去空后至少 1 条非空;否则返回 null(仅声明变量无意义 → 不筛选)。
+ */
+function normalizeFilter(filter?: ListActionFilter): NormalizedFilter | null {
+    if (!filter || typeof filter !== 'object') {
+        return null;
+    }
+    const conditions = Array.isArray(filter.conditions)
+        ? filter.conditions
+              .filter((c): c is string => typeof c === 'string' && c.trim() !== '')
+              .map((c) => c.trim())
+        : [];
+    // 至少 1 条非空条件才激活筛选(仅声明变量不生效)
+    if (conditions.length === 0) {
+        return null;
+    }
+    const vars: NormalizedFilterVar[] = [];
+    if (Array.isArray(filter.vars)) {
+        for (const v of filter.vars) {
+            if (!v || typeof v !== 'object' || typeof v.name !== 'string' || !v.name.trim()) {
+                continue;
+            }
+            vars.push({
+                name: v.name.trim(),
+                selector: typeof v.selector === 'string' ? v.selector.trim() : '',
+                scope: v.scope === 'page' ? 'page' : 'item',
+                source: v.source ?? 'text',
+                attr: typeof v.attr === 'string' ? v.attr : '',
+            });
+        }
+    }
+    return { match: filter.match === 'any' ? 'any' : 'all', vars, conditions };
+}
+
+/**
+ * 对单个列表项求行筛选:先注入内置变量 text(本行文本)/html(本行 HTML),
+ * 再叠加用户命名变量(各自 scope 取值;同名覆盖内置),组成求值上下文;
+ * 逐条布尔表达式求值后按 match(all=全真 / any=任一真)组合。
+ * 失败即安全:某条 parse/eval 失败 → 该条记 false(all 下跳过该行,any 下不贡献),
+ * 并按条件文本去重告警一次(warned),避免每行刷屏。
+ */
+async function evalRowFilter(
+    page: Page,
+    item: Locator,
+    filter: NormalizedFilter,
+    warned: Set<string>
+): Promise<boolean> {
+    const vars: Record<string, unknown> = {};
+    // 内置 text/html:最常见筛选(本行文本含关键词)无需声明变量,直接 contains(text, '...')
+    try {
+        vars.text = ((await item.innerText()) ?? '').trim();
+    } catch {
+        vars.text = '';
+    }
+    try {
+        vars.html = (await item.innerHTML()) ?? '';
+    } catch {
+        vars.html = '';
+    }
+    // 用户命名变量:各自 scope 取值(page 用 :root 承载整页,与动作逻辑一致);同名覆盖内置
+    for (const v of filter.vars) {
+        const root: Locator = v.scope === 'page' ? page.locator(':root') : item;
+        const loc = v.selector ? root.locator(v.selector).first() : root;
+        try {
+            if (v.source === 'exists') {
+                vars[v.name] = (await loc.count()) > 0;
+            } else {
+                vars[v.name] = await extractFieldValue(loc, {
+                    name: v.name,
+                    selector: v.selector,
+                    type: v.source,
+                    attr: v.attr,
+                });
+            }
+        } catch {
+            vars[v.name] = v.source === 'exists' ? false : '';
+        }
+    }
+    // 逐条求值:失败即安全(记 false),按条件文本去重告警
+    const results = filter.conditions.map((cond) => {
+        const r = evalBoolExpr(cond, vars);
+        if (!r.ok) {
+            if (!warned.has(cond)) {
+                warned.add(cond);
+                logError(
+                    `筛选条件「${cond}」${r.phase === 'parse' ? '语法错误' : '求值出错'}:${r.message};该条件按不满足处理。`
+                );
+            }
+            return false;
+        }
+        return Boolean(r.value);
+    });
+    return filter.match === 'any' ? results.some(Boolean) : results.every(Boolean);
 }

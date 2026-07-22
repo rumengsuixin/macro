@@ -1053,8 +1053,28 @@
             font-weight: 600;
         }
 
+        /* 筛选条件区标题行:与动作区之间用虚线分隔 */
+        .la-filter-head {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+            color: var(--text-soft);
+            font-weight: 600;
+            margin-top: 4px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border-strong);
+        }
+
+        .la-filter-head span {
+            flex: 1;
+            min-width: 0;
+        }
+
         .la-pick,
         #la-add-action,
+        #la-add-condition,
+        #la-add-var,
         .la-del {
             background: var(--surface-3);
             color: var(--text-soft);
@@ -1068,8 +1088,20 @@
 
         .la-pick:hover,
         #la-add-action:hover,
+        #la-add-condition:hover,
+        #la-add-var:hover,
         .la-del:hover {
             background: var(--border);
+        }
+
+        /* 筛选区提示里的行内代码 */
+        #ai-list-action-row .hint code {
+            background: var(--surface-1, #f3f4f6);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 0 3px;
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 0.92em;
         }
 
         .la-del {
@@ -1970,6 +2002,21 @@
                             </div>
                             <div id="la-actions"></div>
                             <div class="hint" style="padding: 4px 0 0">项内=相对每个列表项查找;全局=在整页查找(按钮挂在页面别处时用)。此区与下方「提取规则」JSON 实时同步。</div>
+                            <div class="la-filter-head">
+                                <span>筛选条件(可选):只对匹配的行执行动作</span>
+                                <select id="la-filter-match" title="多条条件之间的组合方式">
+                                    <option value="all">全部满足(AND)</option>
+                                    <option value="any">任一满足(OR)</option>
+                                </select>
+                                <button id="la-add-condition" title="新增一条筛选条件表达式">➕ 条件</button>
+                                <button id="la-add-var" title="新增一个取值变量(供表达式引用)">➕ 变量</button>
+                            </div>
+                            <div id="la-conditions"></div>
+                            <div id="la-vars"></div>
+                            <div class="hint" style="padding: 4px 0 0">
+                                表达式可用内置变量 <code>text</code>(本行文本)、<code>html</code>(本行 HTML)及下方自定义变量名;函数 <code>contains(a,b)</code>、<code>match(str,pattern)</code>。
+                                例:<code>contains(text, "已完成")</code>。数值比较用 <code>==</code>/<code>&lt;</code>/<code>&gt;</code>(勿用 <code>===</code>)。条件留空=不筛选,所有行都执行。
+                            </div>
                         </div>
                     </div>
                 </div>

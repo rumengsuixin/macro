@@ -487,10 +487,17 @@ function parseCached(expr: string): ParseResult {
 }
 
 /**
- * 解析(带缓存)+ 求值一句触发表达式;不抛异常,用判别联合返回。
- * 空 / 纯空白 → { ok:true, value:true }(无条件通过,与其余可选子条件「不给即满足」的 AND 语义一致)。
+ * 通用布尔表达式求值内核:解析(带缓存)+ 对任意命名变量 / 追加函数求值;不抛异常,用判别联合返回。
+ * 空 / 纯空白 → { ok:true, value:true }(无条件通过,与「不给即满足」的 AND 语义一致)。
+ * vars 为按名读取的变量表(引用未声明名字 → 求值期抛「未知标识符」,由调用方判不命中);
+ * extraFns 在 PURE_FNS(contains/match)之上追加上下文相关函数(如 header/reqHeader)。
+ * 复用同一受限内核,安全边界(禁原型逃逸 / 只白名单算子 / 只裸标识符调用)对所有调用方一致。
  */
-export function tryEvalTriggerWhen(expr: string, ctx: ExprContext): ExprEvalResult {
+export function evalBoolExpr(
+    expr: string,
+    vars: Record<string, unknown>,
+    extraFns?: Record<string, (...a: unknown[]) => unknown>
+): ExprEvalResult {
     if (!expr || !expr.trim()) {
         return { ok: true, value: true };
     }
@@ -498,22 +505,26 @@ export function tryEvalTriggerWhen(expr: string, ctx: ExprContext): ExprEvalResu
     if (!parsed.ok) {
         return { ok: false, phase: 'parse', message: parsed.message };
     }
-    const vars: Record<string, unknown> = {
-        status: ctx.status,
-        hop: ctx.hop,
-        body: ctx.body,
-        text: ctx.text,
-    };
-    const fns: Record<string, (...a: unknown[]) => unknown> = {
-        ...PURE_FNS,
-        header: (...a) => ctx.header(String(a[0])),
-        reqHeader: (...a) => ctx.reqHeader(String(a[0])),
-    };
     try {
-        return { ok: true, value: evalNode(parsed.ast, vars, fns) };
+        return { ok: true, value: evalNode(parsed.ast, vars, { ...PURE_FNS, ...(extraFns ?? {}) }) };
     } catch (e) {
         return { ok: false, phase: 'eval', message: e instanceof Error ? e.message : String(e) };
     }
+}
+
+/**
+ * 解析 + 求值一句「响应触发器 when」表达式;薄封装 evalBoolExpr,注入 status/hop/body/text 变量
+ * 与 header/reqHeader 函数。空 / 纯空白 → { ok:true, value:true }(无条件通过)。
+ */
+export function tryEvalTriggerWhen(expr: string, ctx: ExprContext): ExprEvalResult {
+    return evalBoolExpr(
+        expr,
+        { status: ctx.status, hop: ctx.hop, body: ctx.body, text: ctx.text },
+        {
+            header: (...a) => ctx.header(String(a[0])),
+            reqHeader: (...a) => ctx.reqHeader(String(a[0])),
+        }
+    );
 }
 
 /**
