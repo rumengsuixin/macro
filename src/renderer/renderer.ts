@@ -2315,6 +2315,11 @@ function applyLoadedMacro(loaded: { macro: Macro; captures: MacroCaptures | null
     steps = Array.isArray(macro.steps) ? (macro.steps as Step[]) : [];
     collapsedUrlGroups.clear(); // 换宏重置 URL 分组折叠态(集合按 URL 字符串记忆,不随数组替换自动清)
     markedColors.clear(); // 换宏清空标记(relinkCaptures 会重建 cid/对象引用,标记必清)
+    // 换宏清空上一个宏残留的 list-action 编辑区 DOM:否则手动切回 list-action 时会被
+    // refreshListActionEditor()「已有行则保留」分支误当成用户在编辑而复活旧宏的行
+    laActionsBox.innerHTML = '';
+    laConditionsBox.innerHTML = '';
+    laVarsBox.innerHTML = '';
     // 回挂旁车上下文:按同序对齐 + type/selector 一致性校验,给命中的步骤分配 cid 并入 Map
     relinkCaptures(loaded.captures);
     // 记住来源文件路径:此后改动步骤 / 选择器可自动保存回此文件(宏 + 旁车)
@@ -2334,10 +2339,17 @@ function applyLoadedMacro(loaded: { macro: Macro; captures: MacroCaptures | null
             aiModeSel.value = loadedMode;
         }
         refreshAiModeOptions();
+        // 程序化设 aiModeSel.value 不触发 change,须手动刷新 list-action 可视化区:
+        // 以目标宏为准——是 list-action 就显示并回填其 JSON,否则藏回 display:none
+        refreshListActionEditor();
     } else {
-        // 宏无提取规则:显式清空,避免残留 init() 预填的 DEFAULT_EXTRACT
+        // 宏无提取规则:显式清空,避免残留 init() 预填的 DEFAULT_EXTRACT;
+        // 同时把采集方式下拉复位到默认 list,否则若上一个宏是 list-action,下拉会停在
+        // list-action 使 refreshListActionEditor() 误显示一个空的 list-action 编辑区
         extractInput.value = '';
+        aiModeSel.value = 'list';
         refreshAiModeOptions();
+        refreshListActionEditor();
     }
     // 回显宏里启用的插件勾选
     refreshPluginSelection(macro.postProcess);
