@@ -1,0 +1,20 @@
+{
+    "timeoutMs": 300000,
+    "modes": {
+        "bank-integrate-domestic": {
+            "executable": "{HOME}/bank-integration/domestic_bank_integration"
+        },
+        "bank-integrate-overseas": {
+            "executable": "{HOME}/bank-integration/overseas_bank_integration"
+        },
+        "bank-integrate-order-match": {
+            "executable": "{HOME}/bank-integration/order_payment_match"
+        },
+        "bank-integrate-payout": {
+            "executable": "{HOME}/bank-integration/payout_order_reconcile"
+        },
+        "bank-integrate-collection-payout": {
+            "executable": "{HOME}/bank-integration/collection_payout_reconcile"
+        }
+    }
+}

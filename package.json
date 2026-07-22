@@ -48,6 +48,14 @@
             {
                 "from": "build/ms-playwright",
                 "to": "ms-playwright"
+            },
+            {
+                "from": "config-templates/bank-integrate.win.json",
+                "to": "bank-integrate.win.json"
+            },
+            {
+                "from": "config-templates/bank-integrate.mac.json",
+                "to": "bank-integrate.mac.json"
             }
         ],
         "electronLanguages": [

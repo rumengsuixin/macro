@@ -82,23 +82,70 @@ function templateConfig(): BankIntegrateConfig {
     return { timeoutMs: 300000, modes };
 }
 
+/** 展开模板占位符:{HOME} → 用户主目录(mac 家目录随用户名变化,故模板不写死绝对家目录) */
+function expandPlaceholders(s: string): string {
+    return s.replace(/\{HOME\}/g, os.homedir());
+}
+
+/**
+ * 读平台专属模板文件(打包 resources 或仓库 config-templates 里的 bank-integrate.<平台>.json),
+ * 展开 {HOME} 占位符后作为首次生成内容。缺路径/文件不存在/坏 JSON/无 modes 返回 null,
+ * 交调用方回退代码内默认(templateConfig)。
+ */
+function loadTemplateFile(templatePath?: string): BankIntegrateConfig | null {
+    if (!templatePath) {
+        return null;
+    }
+    try {
+        if (!fs.existsSync(templatePath)) {
+            return null;
+        }
+        const raw = JSON.parse(fs.readFileSync(templatePath, 'utf-8')) as Partial<BankIntegrateConfig>;
+        if (!raw.modes || typeof raw.modes !== 'object' || Array.isArray(raw.modes)) {
+            return null;
+        }
+        const modes: Record<string, BankIntegrateMode> = {};
+        for (const [type, m] of Object.entries(raw.modes)) {
+            const mm = (m && typeof m === 'object' ? m : {}) as Partial<BankIntegrateMode>;
+            modes[type] = {
+                executable:
+                    typeof mm.executable === 'string' ? expandPlaceholders(mm.executable) : '',
+            };
+        }
+        return {
+            timeoutMs:
+                typeof raw.timeoutMs === 'number' && raw.timeoutMs > 0 ? raw.timeoutMs : 300000,
+            modes,
+        };
+    } catch {
+        return null;
+    }
+}
+
 /**
  * 加载 bank-integrate 配置。
- * - 不存在:写模板并返回(便于用户改路径)。
+ * - 不存在:优先用平台专属模板(templatePath)首次生成并返回;模板不可用时回退代码内默认。
+ * - 已存在:只读不覆盖(升级/重装保留用户改动)。
  * - 坏 JSON:回退模板默认。
  * - 某 mode 缺 executable:回退当前平台默认(兼容旧格式配置、不阻塞)。
  * @param filePath 配置文件路径(dataRoot/bank-integrate.json)
+ * @param templatePath 平台专属模板绝对路径(主进程按 process.platform 解析后传入),用于首次生成
  */
-export function loadBankIntegrateConfig(filePath: string): BankIntegrateConfig {
+export function loadBankIntegrateConfig(
+    filePath: string,
+    templatePath?: string
+): BankIntegrateConfig {
     const tpl = templateConfig();
     try {
         if (!fs.existsSync(filePath)) {
+            // 首次生成:平台专属模板优先(打包时预置、可控),读不到再回退代码内平台默认
+            const generated = loadTemplateFile(templatePath) ?? tpl;
             try {
-                fs.writeFileSync(filePath, JSON.stringify(tpl, null, 4), 'utf-8');
+                fs.writeFileSync(filePath, JSON.stringify(generated, null, 4), 'utf-8');
             } catch {
                 /* 写模板失败(如只读目录)不致命 */
             }
-            return tpl;
+            return generated;
         }
         const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<BankIntegrateConfig>;
         const rawModes =

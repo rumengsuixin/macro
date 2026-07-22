@@ -42,7 +42,10 @@ const handler: PostProcessHandler = async (
     if (!ctx.dataRoot) {
         return { type: spec.type, message: '缺少配置根目录(dataRoot),无法定位 bank-integrate.json。' };
     }
-    const cfg = loadBankIntegrateConfig(path.join(ctx.dataRoot, 'bank-integrate.json'));
+    const cfg = loadBankIntegrateConfig(
+        path.join(ctx.dataRoot, 'bank-integrate.json'),
+        ctx.bankTemplatePath
+    );
     const mode = cfg.modes[spec.type];
     if (!mode) {
         return { type: spec.type, message: `bank-integrate.json 未配置模式「${spec.type}」。` };

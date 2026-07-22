@@ -33,6 +33,15 @@ import type {
 const projectRoot = path.resolve(__dirname, '..', '..');
 const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
 
+// bank-integrate 平台专属模板路径:首次生成 bank-integrate.json 时优先拷此模板(见 loadBankIntegrateConfig)。
+// 打包态取产物 resources 内平台模板(package.json build.extraResources 已同梱 win/mac 两份),
+// 开发态取仓库 config-templates;按 process.platform 选对应一份,故打包体虽两份都在,只用当前平台这份。
+const bankTemplateName =
+    process.platform === 'darwin' ? 'bank-integrate.mac.json' : 'bank-integrate.win.json';
+const bankTemplatePath = app.isPackaged
+    ? path.join(process.resourcesPath, bankTemplateName)
+    : path.join(projectRoot, 'config-templates', bankTemplateName);
+
 // 注:打包态的环境变量(PLAYWRIGHT_BROWSERS_PATH / MACRO_DATA_DIR)已在 runtime-bootstrap 中
 // 于 playwright 初始化前提前设置,此处不再重复设置(dataRoot 与 bootstrap 取值一致)。
 
@@ -356,6 +365,7 @@ function registerIpc(): void {
                     exportsDir,
                     stamp: timestamp(),
                     dataRoot,
+                    bankTemplatePath,
                 });
                 result.postProcessed = postProcessed;
             }
@@ -430,6 +440,7 @@ function registerIpc(): void {
                 exportsDir,
                 stamp: timestamp(),
                 dataRoot,
+                bankTemplatePath,
             });
             const out = results.filter((r) => r.output).pop()?.output;
             if (out) {

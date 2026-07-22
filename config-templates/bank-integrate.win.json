@@ -1,0 +1,20 @@
+{
+    "timeoutMs": 300000,
+    "modes": {
+        "bank-integrate-domestic": {
+            "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\国内银行整合.exe"
+        },
+        "bank-integrate-overseas": {
+            "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\海外银行整合.exe"
+        },
+        "bank-integrate-order-match": {
+            "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\游戏订单匹配.exe"
+        },
+        "bank-integrate-payout": {
+            "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\代付订单对账.exe"
+        },
+        "bank-integrate-collection-payout": {
+            "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\代收代付对账.exe"
+        }
+    }
+}
