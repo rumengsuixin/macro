@@ -16,6 +16,7 @@ import { registerPostProcessor, type PostProcessContext, type PostProcessHandler
 import {
     loadMergeConfig,
     resolveMergeOpts,
+    deriveColumnValue,
     DEFAULT_CONFIG,
     type MergeConfig,
 } from './merge-config';
@@ -97,7 +98,29 @@ function readTable(name: string, buf: Buffer, config: MergeConfig): ExtractRow[]
         defval: '',
         raw: false,
     });
-    return rows;
+
+    // 派生列:凭文件名等现算列并塞进每行(如从文件名提日期)。start→行首(成第一列)、end→行尾
+    if (opts.addColumns.length === 0) {
+        return rows;
+    }
+    const derived = opts.addColumns.map((col) => ({
+        name: col.name,
+        value: deriveColumnValue(col, name),
+        atStart: (col.position ?? 'start') !== 'end',
+    }));
+    return rows.map((row) => {
+        const out: ExtractRow = {};
+        for (const d of derived) {
+            if (d.atStart) out[d.name] = d.value;
+        }
+        for (const [k, v] of Object.entries(row)) {
+            out[k] = v;
+        }
+        for (const d of derived) {
+            if (!d.atStart) out[d.name] = d.value;
+        }
+        return out;
+    });
 }
 
 const handler: PostProcessHandler = async (

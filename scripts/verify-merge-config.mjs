@@ -5,6 +5,9 @@
 //   ② matchSheet 规则(headerRow=2、endColumn=D)→ 干净 4 列 1 行(按工作表名命中,文件名可任意)
 //   ③ match 文件名 glob 规则 → 同样干净(证明文件名匹配也通)
 //   ④ 全新空 dataRoot 首次运行 → 自动生成 merge-config.json(含 Binance 示例规则)且直接合出干净表
+//   ⑤ 派生列 addColumns:两个带日期文件名的普通表 → 从文件名提日期作「日期」首列、逐文件不同值
+//   ⑥ 对照:无 addColumns → 无「日期」列(证明由配置驱动)
+//   ⑦ 结构+派生列复合:Binance 结构文件 + 文件名带日期,专属规则须排在通用 payout 规则前 → 净表且带日期首列
 // 用法:npm run build && node scripts/verify-merge-config.mjs
 import { createRequire } from 'node:module';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
@@ -105,6 +108,61 @@ function isClean(headers, dataRowCount) {
     return noEmpty && exact && dataRowCount === 1;
 }
 
+/** 造一份普通表 .xls Buffer(首行表头、其余数据行) */
+function buildPlainXls(header, dataRows, sheetName) {
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xls' });
+}
+
+/**
+ * 跑一个多文件合并场景,返回 { headers, rows(对象数组), output }。
+ * files: [{ name, buf }]。用于验证派生列(逐文件不同取值)。
+ */
+async function runMultiCase(name, files, configObj) {
+    caseNo += 1;
+    const dataRoot = path.join(tmpRoot, `case${caseNo}`);
+    const downloadDir = path.join(dataRoot, 'downloads');
+    const exportsDir = path.join(dataRoot, 'exports');
+    mkdirSync(downloadDir, { recursive: true });
+    mkdirSync(exportsDir, { recursive: true });
+    if (configObj !== null) {
+        writeFileSync(path.join(dataRoot, 'merge-config.json'), JSON.stringify(configObj, null, 4), 'utf-8');
+    }
+    const downloads = files.map((f) => {
+        const p = path.join(downloadDir, f.name);
+        writeFileSync(p, f.buf);
+        return p;
+    });
+    const results = await runPostProcessors([{ type: 'merge-zip-excel' }], {
+        downloads,
+        downloadDir,
+        exportsDir,
+        stamp: `case${caseNo}`,
+        dataRoot,
+    });
+    const r = results[0];
+    let headers = [];
+    const rows = [];
+    if (r.output && existsSync(r.output)) {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.readFile(r.output);
+        const sheet = wb.worksheets[0];
+        headers = sheet.getRow(1).values.slice(1).map((v) => String(v ?? ''));
+        for (let i = 2; i <= sheet.rowCount; i++) {
+            const vals = sheet.getRow(i).values;
+            const obj = {};
+            headers.forEach((h, idx) => (obj[h] = String(vals[idx + 1] ?? '')));
+            rows.push(obj);
+        }
+    }
+    console.log(`\n----- 场景:${name} -----`);
+    console.log('message =', r.message);
+    console.log('表头 =', JSON.stringify(headers));
+    return { headers, rows, output: r.output };
+}
+
 // ① 默认:显式写 rules:[](headerRow 缺省 1)→ 应乱
 const c1 = await runCase('默认无规则(应乱)', 'download-export.xls', {
     defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false },
@@ -141,6 +199,68 @@ try {
 }
 check(tplOk, '④ 生成的模板可解析且含示例规则');
 check(isClean(c4.headers, c4.dataRowCount), '④ 首次模板经内置 Binance 规则直接合出干净表');
+
+// ⑤ 派生列:数据本身无日期,从文件名提 yyyy-mm-dd 作「日期」列(逐文件不同值、放最前)
+const prize1 = buildPlainXls(['名称', '积分'], [['甲', '10'], ['乙', '20']], 'Sheet1');
+const prize2 = buildPlainXls(['名称', '积分'], [['丙', '30']], 'Sheet1');
+const prizeFiles = [
+    { name: 'USDT奖品发放信息2026-07-01.xls', buf: prize1 },
+    { name: 'USDT奖品发放信息2026-07-02.xls', buf: prize2 },
+];
+const dateRule = {
+    defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
+    rules: [
+        {
+            match: '*奖品发放*',
+            addColumns: [
+                { name: '日期', from: 'fileName', pattern: '(\\d{4}-\\d{2}-\\d{2})', position: 'start' },
+            ],
+        },
+    ],
+};
+const c5 = await runMultiCase('派生列日期(应有首列日期)', prizeFiles, dateRule);
+check(c5.headers[0] === '日期', '⑤ 「日期」列出现在第一列');
+check(c5.rows.length === 3, `⑤ 合并 3 行(实际 ${c5.rows.length})`);
+check(
+    c5.rows.filter((r) => ['甲', '乙'].includes(r['名称'])).every((r) => r['日期'] === '2026-07-01'),
+    '⑤ 07-01 文件的行日期 = 2026-07-01',
+);
+check(
+    c5.rows.filter((r) => r['名称'] === '丙').every((r) => r['日期'] === '2026-07-02'),
+    '⑤ 07-02 文件的行日期 = 2026-07-02',
+);
+
+// ⑥ 对照:同两文件但无 addColumns → 不应有「日期」列(证明由配置驱动)
+const c6 = await runMultiCase('派生列对照(应无日期列)', prizeFiles, {
+    defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
+    rules: [],
+});
+check(!c6.headers.includes('日期'), '⑥ 无 addColumns 时无「日期」列');
+
+// ⑦ 结构+派生列复合:Binance 结构文件(工作表名带 Payout Template),文件名带日期。
+//    专属规则(headerRow=2+endColumn=D+日期)须排在通用 payout 规则之前,否则被后者抢先命中丢日期。
+const structured = buildBinanceXls(); // 工作表名 Binance Pay Payout Template、行1标题、行2表头、行3数据
+const c7 = await runMultiCase('结构+派生列复合(应净且带日期)', [{ name: '奖品发放2026-07-01.xls', buf: structured }], {
+    defaults: { sheet: 0, headerRow: 1, endColumn: '', addSourceColumn: false, addColumns: [] },
+    rules: [
+        {
+            match: '*奖品发放*',
+            sheet: 0,
+            headerRow: 2,
+            endColumn: 'D',
+            addColumns: [{ name: '日期', from: 'fileName', pattern: '(\\d{4}-\\d{2}-\\d{2})', position: 'start' }],
+        },
+        { matchSheet: '*Payout Template*', sheet: 0, headerRow: 2, endColumn: 'D' },
+    ],
+});
+check(
+    JSON.stringify(c7.headers) === JSON.stringify(['日期', ...REAL_HEADERS]),
+    `⑦ 复合规则:表头 = 日期 + 4 真列(实际 ${JSON.stringify(c7.headers)})`,
+);
+check(
+    c7.rows.length === 1 && c7.rows[0]['日期'] === '2026-07-01',
+    '⑦ 复合规则:数据带正确日期 2026-07-01',
+);
 
 // 清理
 try {
