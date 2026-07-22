@@ -1026,7 +1026,8 @@
             font-family: inherit;
         }
 
-        .la-row select {
+        .la-row select,
+        .la-filter-head select {
             padding: 6px 6px;
             border: 1px solid var(--border-strong);
             border-radius: var(--r-sm);
@@ -1035,7 +1036,8 @@
         }
 
         .la-row input:focus,
-        .la-row select:focus {
+        .la-row select:focus,
+        .la-filter-head select:focus {
             outline: none;
             /* 锁定白底深字:否则被全局 input[type="text"]:focus 的深色背景覆盖,致深字压深底看不清 */
             background: #fff;
