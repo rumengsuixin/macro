@@ -12,6 +12,7 @@ browser-profile/
 browser-config.json
 request-rules.json
 bank-integrate.json
+merge-config.json
 
 # 打包产物
 release/

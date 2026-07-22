@@ -13,6 +13,12 @@ import type { PostProcessSpec, PostProcessResult, ExtractRow } from '../macro-ty
 import { exportToExcel } from '../excel-exporter';
 import { logInfo, logError } from '../logger';
 import { registerPostProcessor, type PostProcessContext, type PostProcessHandler } from './index';
+import {
+    loadMergeConfig,
+    resolveMergeOpts,
+    DEFAULT_CONFIG,
+    type MergeConfig,
+} from './merge-config';
 
 /** 来源文件列名(options.addSourceColumn 为真时追加) */
 const SOURCE_COLUMN = '来源文件';
@@ -47,11 +53,13 @@ function decodeCsv(buf: Buffer): string {
 }
 
 /**
- * 读取一个表格文件(csv/xls/xlsx)的首个工作表,转成 ExtractRow[]。
- * 以首行表头为键、空单元格填空串、值转字符串;无数据返回 []。
+ * 读取一个表格文件(csv/xls/xlsx),按配置解析出 ExtractRow[]。
+ * 配置驱动:先按文件名/工作表名匹配规则,决定用哪个工作表、真表头在第几行、裁到哪列;
+ * 无匹配则用 defaults(= 首表、行1 表头、不裁列,等价历史行为)。
+ * 以表头行为键、空单元格填空串、值转字符串;全空行 SheetJS 自动剔除;无数据返回 []。
  * 不支持的扩展名返回 null(由调用方告警跳过)。
  */
-function readTable(name: string, buf: Buffer): ExtractRow[] | null {
+function readTable(name: string, buf: Buffer, config: MergeConfig): ExtractRow[] | null {
     const ext = lowerExt(name);
     if (!SUPPORTED_EXT.includes(ext)) {
         return null;
@@ -60,13 +68,32 @@ function readTable(name: string, buf: Buffer): ExtractRow[] | null {
         ext === '.csv'
             ? XLSX.read(decodeCsv(buf), { type: 'string' })
             : XLSX.read(buf, { type: 'buffer' });
-    const sheetName = wb.SheetNames[0];
-    if (!sheetName) {
+    const sheetName0 = wb.SheetNames[0];
+    if (!sheetName0) {
         return [];
     }
-    const ws = wb.Sheets[sheetName];
+    const opts = resolveMergeOpts(config, name, sheetName0);
+
+    // 选表:字符串名优先(存在才用)、数字取索引、否则首表
+    let chosen = sheetName0;
+    if (typeof opts.sheet === 'string' && wb.Sheets[opts.sheet]) {
+        chosen = opts.sheet;
+    } else if (typeof opts.sheet === 'number' && wb.SheetNames[opts.sheet]) {
+        chosen = wb.SheetNames[opts.sheet];
+    }
+    const ws = wb.Sheets[chosen];
+
+    // 构造读取区域:endColumn 时用 A1 串同时限「起始行 + 列上界」,否则用数字(仅设起始表头行)
+    let range: string | number = opts.headerRow - 1;
+    if (opts.endColumn && ws['!ref']) {
+        const full = XLSX.utils.decode_range(ws['!ref']);
+        const lastRow = Math.max(full.e.r + 1, opts.headerRow); // 1 起;防 headerRow 越界成非法区域
+        range = `A${opts.headerRow}:${opts.endColumn}${lastRow}`;
+    }
+
     // defval:'' 缺省填空串、raw:false 值统一转字符串 → 直接得 Record<string,string>[]
     const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, {
+        range,
         defval: '',
         raw: false,
     });
@@ -77,14 +104,25 @@ const handler: PostProcessHandler = async (
     spec: PostProcessSpec,
     ctx: PostProcessContext
 ): Promise<PostProcessResult> => {
-    const addSourceColumn = spec.options?.addSourceColumn === true;
+    // 解析配置:优先读 dataRoot/merge-config.json(首次自动生成模板);无 dataRoot(如自检旧 ctx)走内置默认
+    let config: MergeConfig = DEFAULT_CONFIG;
+    if (ctx.dataRoot) {
+        try {
+            config = loadMergeConfig(path.join(ctx.dataRoot, 'merge-config.json'));
+        } catch {
+            config = DEFAULT_CONFIG;
+        }
+    }
+    // 是否追加「来源文件」列:宏 spec.options 显式指定优先,否则取配置 defaults
+    const optAdd = spec.options?.addSourceColumn;
+    const addSourceColumn = optAdd !== undefined ? optAdd === true : config.defaults.addSourceColumn;
     const allRows: ExtractRow[] = [];
     let mergedTableCount = 0;
 
     /** 读一个表格 Buffer,成功则并入 allRows;来源名 sourceLabel 用于日志/来源列 */
     const ingest = (name: string, buf: Buffer, sourceLabel: string): void => {
         try {
-            const rows = readTable(name, buf);
+            const rows = readTable(name, buf, config);
             if (rows === null) {
                 return; // 不支持的扩展名,由外层决定是否告警
             }
@@ -151,7 +189,8 @@ registerPostProcessor(
     {
         type: 'merge-zip-excel',
         label: '批量下载表格合并',
-        description: '解压 zip 取内部表格(csv/xls/xlsx),或直接下载的表格,堆叠为一张总表(产出 exports/merged-*.xlsx)',
+        description:
+            '把下载的表格堆叠为一张总表:支持 zip 内表格 或 直接下载的单个表格(csv/xls/xlsx)。带标题块/说明面板的模板可用 merge-config.json 指定表头行/裁列/工作表(按文件名或工作表名匹配)。产出 exports/merged-*.xlsx',
     },
     handler
 );
