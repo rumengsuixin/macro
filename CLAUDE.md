@@ -39,12 +39,13 @@
 - `开发计划.md` — 模块状态/待办/已知问题时间线(**唯一现状记录**,每次任务后维护)
 - `功能开发计划.md` — 欠缺功能路线图(P0/P1/P2 优先级,2026-07-06)
 - `拦截器规则配置手册.html` — `request-rules.json` 8 支路全字段速查表
+- `配置文件位置总览.html` — 全部 7 个运行时配置(统一收于 `dataRoot/config/`)的位置/作用/加载方式/热更新/模板来源速查
 - `YouTube上传流程分析.html` — YouTube Studio 上传三阶段逆向(frontendUploadId↔scottyResourceId 配对绑定)
 - `xlsxIntgration融合设计.html` — 与外部 Python 银行整合项目的融合评估(仅设计文档)
 - `打包指南.md` — Win/Mac 安装包打包(自带 Chromium;Mac 走 GitHub Actions `build-mac.yml`,未签名)
 - `examples/` — 演示宏 `demo-macro.json` / `demo-list-action.json` + `request-rules.example.json`
 - `assets/icon.{png,ico,icns}` — 应用图标,由 `scripts/make-icon.mjs` 纯 Node 生成(改几何/颜色常量后重跑)
-- **运行时配置**(已 gitignore,首次运行自动生成):`ai-config.json`(AI profile)· `browser-config.json`(登录态复用/反检测)· `request-rules.json`(拦截 8 支路)· `bank-integrate.json`(银行整合 exe 路径)· `merge-config.json`(合并解析规则:按文件名/工作表名匹配,指定表头行/裁列/工作表 + `addColumns` 派生列——从文件名按正则提列如日期 + `output.fileName` 配输出名——占位符 `{stamp}`/`{date}`)· `replay-profile.json`(回放行为档,多档可切:全局/每步超时、重试+退避、步骤间随机延时、出错策略、翻页节奏、scroll 等待;`default`=现状,UI 顶栏下拉切档)· `hooks.json`(事件钩子,默认关:回放 start/complete/failure 触发 webhook/命令/状态文件/桌面通知,`{{var}}` 模板注入)· `<宏名>.captures.json`(选择器上下文旁车)。新配置统一走 `core/json-config.ts` 骨架 + `template-util.ts`
+- **运行时配置**(**全部统一收于 `dataRoot/config/`**,已 gitignore,首次运行自动生成;`configDir` 单一事实源,core 层 ai-config 经 `MACRO_DATA_DIR/config/` 对齐,后处理器经 `ctx.configDir`;位置速查见 `配置文件位置总览.html`):`ai-config.json`(AI profile)· `browser-config.json`(登录态复用/反检测)· `request-rules.json`(拦截 8 支路)· `bank-integrate.json`(银行整合 exe 路径)· `merge-config.json`(合并解析规则:按文件名/工作表名匹配,指定表头行/裁列/工作表 + `addColumns` 派生列——从文件名按正则提列如日期 + `output.fileName` 配输出名——占位符 `{stamp}`/`{date}`)· `replay-profile.json`(回放行为档,多档可切:全局/每步超时、重试+退避、步骤间随机延时、出错策略、翻页节奏、scroll 等待;`default`=现状,UI 顶栏下拉切档)· `hooks.json`(事件钩子,默认关:回放 start/complete/failure 触发 webhook/命令/状态文件/桌面通知,`{{var}}` 模板注入)· `<宏名>.captures.json`(选择器上下文旁车)。新配置统一走 `core/json-config.ts` 骨架 + `template-util.ts`
 
 ## 关键命令
 

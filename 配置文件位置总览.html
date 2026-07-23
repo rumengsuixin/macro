@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>配置文件位置总览 · 二爪鱼</title>
+<style>
+    :root {
+        --bg: #f6f8fa; --card: #fff; --ink: #1f2933; --muted: #647084;
+        --line: #e3e8ef; --accent: #0e7490; --accent-soft: #e0f2fe;
+        --warn: #b45309; --warn-soft: #fef3c7; --code: #eef2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 32px 20px 64px; background: var(--bg); color: var(--ink);
+        font: 15px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; }
+    h1 { font-size: 26px; margin: 0 0 6px; }
+    .sub { color: var(--muted); margin: 0 0 28px; }
+    h2 { font-size: 18px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line); }
+    code { background: var(--code); padding: 1px 6px; border-radius: 4px; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; }
+    .tree {
+        background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+        padding: 18px 22px; white-space: pre; font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 13px; line-height: 1.9; overflow-x: auto;
+    }
+    .tree .dir { color: var(--accent); font-weight: 600; }
+    .tree .cfg { color: var(--ink); }
+    .tree .cm { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--accent-soft); color: #0c5461; font-weight: 600; font-size: 13px; }
+    td { font-size: 13.5px; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .hot { background: #dcfce7; color: #166534; }
+    .next { background: var(--accent-soft); color: #0c5461; }
+    .read { background: #f1f5f9; color: #475569; }
+    .note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 8px; padding: 14px 18px; margin: 16px 0; color: #713f12; }
+    .note b { color: var(--warn); }
+    ul { margin: 10px 0; padding-left: 22px; }
+    li { margin: 5px 0; }
+    .foot { color: var(--muted); font-size: 12.5px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>配置文件位置总览</h1>
+    <p class="sub">二爪鱼(网页宏录制/回放/提取/导出工具)全部运行时配置的位置、作用与加载约定 · 收尾于配置统一收拢到 <code>config/</code> 之后</p>
+
+    <h2>目录布局</h2>
+    <div class="tree"><span class="cm"># dataRoot：开发态 = 项目根;打包态 = %APPDATA%\macro-recorder(由 app.isPackaged 分叉)</span>
+dataRoot/
+├── <span class="dir">config/</span>                      <span class="cm"># ← 全部 7 个运行时配置统一收于此(首次运行自动生成,已 gitignore)</span>
+│   ├── <span class="cfg">ai-config.json</span>         <span class="cm"># AI 对接 profile / 凭据</span>
+│   ├── <span class="cfg">browser-config.json</span>    <span class="cm"># 登录态复用 / 反检测开关</span>
+│   ├── <span class="cfg">request-rules.json</span>     <span class="cm"># 请求拦截 8 支路</span>
+│   ├── <span class="cfg">bank-integrate.json</span>    <span class="cm"># 银行整合 5 代号 exe 路径</span>
+│   ├── <span class="cfg">merge-config.json</span>      <span class="cm"># 表格合并解析规则</span>
+│   ├── <span class="cfg">replay-profile.json</span>    <span class="cm"># 回放行为档(多档可切)</span>
+│   └── <span class="cfg">hooks.json</span>             <span class="cm"># 事件钩子</span>
+├── <span class="dir">macros/</span>                      <span class="cm"># 宏文件 + &lt;宏名&gt;.captures.json 选择器旁车(随宏走,不在 config/)</span>
+├── <span class="dir">exports/</span>  <span class="dir">errors/</span>  <span class="dir">downloads/</span>  <span class="dir">timelines/</span>  <span class="dir">dumps/</span>   <span class="cm"># 运行时输出目录</span>
+└── <span class="dir">browser-profile/</span>             <span class="cm"># 持久化浏览器 profile(浏览器状态目录,非配置文件)</span>
+
+<span class="cm"># 注:config-templates/(git 追踪)是打包预置模板,≠ 运行时 config/;bank-integrate 首次从它拷平台模板。</span></div>
+
+    <h2>配置清单</h2>
+    <table>
+        <thead>
+            <tr><th>配置文件</th><th>作用</th><th>加载 / 写回</th><th>生效方式</th><th>首次模板来源</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>config/ai-config.json</code></td>
+                <td>AI 对接(webextract / selector-fix)profile 与连接凭据</td>
+                <td>core <code>ai-extract.ts</code>(经环境变量 <code>MACRO_DATA_DIR</code> 定位,与主进程 configDir 对齐)</td>
+                <td><span class="badge read">读取时</span></td>
+                <td>代码默认;「导入 ai-config.json」覆盖</td>
+            </tr>
+            <tr>
+                <td><code>config/browser-config.json</code></td>
+                <td>登录态复用三开关 + <code>useSystemChrome</code> 反检测</td>
+                <td><code>storage/browser-config-store.ts</code>(<code>set-browser-config</code> 写回)</td>
+                <td><span class="badge next">next-run</span></td>
+                <td>代码默认(全关,useSystemChrome 开)</td>
+            </tr>
+            <tr>
+                <td><code>config/request-rules.json</code></td>
+                <td>请求拦截 8 支路(改 body / 重发 / 阻断 / 落盘 / 替换 / 记录…)</td>
+                <td><code>storage/request-rules-store.ts</code></td>
+                <td><span class="badge hot">回放中热更新</span> <code>fs.watchFile</code></td>
+                <td>内联 inert 模板(<code>enabled:false</code>)</td>
+            </tr>
+            <tr>
+                <td><code>config/bank-integrate.json</code></td>
+                <td>银行整合 5 代号(domestic/overseas/…)exe 路径</td>
+                <td><code>post-processors/bank-integrate-config.ts</code>(经 <code>ctx.configDir</code>)</td>
+                <td><span class="badge next">next-run</span></td>
+                <td>平台预置 <code>config-templates/bank-integrate.{win,mac}.json</code></td>
+            </tr>
+            <tr>
+                <td><code>config/merge-config.json</code></td>
+                <td>表格合并解析(表头行 / 裁列 / 工作表 / 派生列 / 输出名)</td>
+                <td><code>post-processors/merge-config.ts</code>(经 <code>ctx.configDir</code>)</td>
+                <td><span class="badge next">next-run</span></td>
+                <td>内联模板(含示例规则)</td>
+            </tr>
+            <tr>
+                <td><code>config/replay-profile.json</code></td>
+                <td>回放行为档:超时 / 重试+退避 / 步骤间延时 / 出错策略 / 翻页节奏 / scroll 等待</td>
+                <td><code>storage/replay-profile-store.ts</code>(<code>json-config</code> 骨架)</td>
+                <td><span class="badge next">next-run</span>(UI 下拉切档)</td>
+                <td>内联模板(<code>default</code>=现状 / <code>slow-site</code> / <code>anti-bot</code>)</td>
+            </tr>
+            <tr>
+                <td><code>config/hooks.json</code></td>
+                <td>事件钩子:on-start/complete/failure → webhook / 命令 / 状态文件 / 桌面通知</td>
+                <td><code>core/hooks-config.ts</code>(<code>json-config</code> 骨架)</td>
+                <td><span class="badge next">next-run</span>(UI 开关 / 导入)</td>
+                <td>内联 inert 模板(<code>enabled:false</code>)</td>
+            </tr>
+            <tr>
+                <td><code>macros/&lt;宏名&gt;.captures.json</code></td>
+                <td>选择器上下文旁车(录制时抓的 DOM 上下文,供离线校正)</td>
+                <td><code>storage/macro-store.ts</code>(随宏读写)</td>
+                <td><span class="badge read">随宏</span></td>
+                <td>录制时生成</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>加载约定(单一事实来源)</h2>
+    <ul>
+        <li><b>位置</b>:主进程 <code>configDir = path.join(dataRoot, 'config')</code> 是唯一事实源,4 个主进程配置路径由它派生;core 层 <code>ai-config</code> 经 <code>MACRO_DATA_DIR/config/</code> 对齐;后处理器经 <code>ctx.configDir</code>。</li>
+        <li><b>骨架</b>:新配置统一走 <code>core/json-config.ts</code> 的 <code>loadJsonConfig</code>(existsSync 不存在 → 建目录写模板 → 存在 → <code>readFileSync</code> + normalize → 坏 JSON 回退现状,永不抛)。</li>
+        <li><b>自建目录</b>:各 loader 首次写模板前 <code>mkdirSync(config/)</code>,且 <code>ensureDirs()</code> 启动即建,双保险。</li>
+        <li><b>模板</b>:值平台无关者走代码内联模板;需随包者落 <code>config-templates/&lt;name&gt;.json</code> + <code>package.json build.extraResources</code>。</li>
+        <li><b>忽略</b>:<code>.gitignore</code> 忽略整个 <code>/config/</code>(及根目录旧位置遗留文件),不追踪任何运行时配置。</li>
+    </ul>
+
+    <div class="note">
+        <b>迁移说明</b>:本次仅调整新生成配置的落点(旧位置在 <code>dataRoot</code> 根),<b>不含旧配置自动迁移逻辑</b>(按约定「不管已安装用户」)。升级后旧根位置的配置文件将不再被读取,程序会在 <code>config/</code> 下按模板重新生成默认配置;如需保留旧配置,手动把根目录对应 <code>*.json</code> 移入 <code>config/</code> 即可。
+    </div>
+
+    <p class="foot">详情:模块状态见 <code>开发计划.md</code>;拦截器全字段见 <code>拦截器规则配置手册.html</code>;逐次变更见 <code>git log</code>。</p>
+</div>
+</body>
+</html>
