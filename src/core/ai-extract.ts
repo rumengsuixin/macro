@@ -115,18 +115,19 @@ const DEFAULT_CONFIG: AiConfig = {
 };
 
 // ===== 配置读写 =====
-/** ai-config.json 的绝对路径(项目根目录) */
+/** ai-config.json 的绝对路径(统一收在 <dataRoot>/config/ 下,与其它运行时配置对齐) */
 export function getConfigPath(): string {
-    // 打包后主进程会设 MACRO_DATA_DIR 指向用户可写目录;开发时回退项目根
+    // 打包后主进程会设 MACRO_DATA_DIR 指向用户可写目录;开发时回退项目根。均落到 config/ 子目录。
     const base = process.env.MACRO_DATA_DIR;
-    if (base) return path.join(base, 'ai-config.json');
-    return path.resolve(__dirname, '..', '..', 'ai-config.json');
+    if (base) return path.join(base, 'config', 'ai-config.json');
+    return path.resolve(__dirname, '..', '..', 'config', 'ai-config.json');
 }
 
-/** 读取配置;不存在则写入默认配置 */
+/** 读取配置;不存在则写入默认配置(先建 config/ 目录,避免首次写失败) */
 export function loadAiConfig(): AiConfig {
     const file = getConfigPath();
     if (!fs.existsSync(file)) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify(DEFAULT_CONFIG, null, 4), 'utf8');
         return DEFAULT_CONFIG;
     }
@@ -314,6 +315,7 @@ export function importAiConfig(srcPath: string): ImportResult {
     }
     const dest = getConfigPath();
     try {
+        fs.mkdirSync(path.dirname(dest), { recursive: true }); // 先建 config/ 目录
         // 覆盖前备份旧配置(若存在),便于回滚
         if (fs.existsSync(dest)) {
             fs.copyFileSync(dest, `${dest}.bak`);

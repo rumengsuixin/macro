@@ -2,6 +2,7 @@
 // 「existsSync 不存在→写模板 / 存在→readFileSync+normalize / 坏 JSON→fallback」,写模板与读取失败均不致命。
 // 纯 node:fs,无 Electron 依赖;主进程侧(storage/core loader)复用,保证行为与老配置一字不差。
 import fs from 'node:fs';
+import path from 'node:path';
 
 /** 一份 JSON 配置的加载规格 */
 export interface JsonConfigSpec<T> {
@@ -33,6 +34,7 @@ export function loadJsonConfig<T>(spec: JsonConfigSpec<T>): T {
                 (templatePath && loadTemplateFile ? loadTemplateFile(templatePath) : null) ??
                 buildTemplate();
             try {
+                fs.mkdirSync(path.dirname(filePath), { recursive: true }); // 先建 config/ 目录再写模板
                 fs.writeFileSync(filePath, JSON.stringify(generated, null, 4), 'utf-8');
             } catch {
                 /* 只读目录等写失败不致命 */

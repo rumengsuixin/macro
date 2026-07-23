@@ -17,6 +17,8 @@ export interface PostProcessContext {
     stamp: string;
     /** macro userData 根目录(由主进程传入),供需要读自身配置的后处理器定位,如 bank-integrate.json */
     dataRoot?: string;
+    /** 运行时配置目录(dataRoot/config,主进程传入);读自身配置优先用它,缺省回退 dataRoot(兼容旧自检 ctx) */
+    configDir?: string;
     /**
      * bank-integrate 平台专属模板绝对路径(由主进程按 process.platform 解析后传入):
      * 打包态 = resources/bank-integrate.<平台>.json,开发态 = config-templates/bank-integrate.<平台>.json。

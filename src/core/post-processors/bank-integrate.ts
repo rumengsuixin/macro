@@ -39,11 +39,13 @@ const handler: PostProcessHandler = async (
     spec: PostProcessSpec,
     ctx: PostProcessContext
 ): Promise<PostProcessResult> => {
-    if (!ctx.dataRoot) {
-        return { type: spec.type, message: '缺少配置根目录(dataRoot),无法定位 bank-integrate.json。' };
+    // configDir 优先(主进程传 dataRoot/config),缺省回退 dataRoot(兼容只设 dataRoot 的旧自检 ctx)
+    const cfgDir = ctx.configDir ?? ctx.dataRoot;
+    if (!cfgDir) {
+        return { type: spec.type, message: '缺少配置根目录,无法定位 bank-integrate.json。' };
     }
     const cfg = loadBankIntegrateConfig(
-        path.join(ctx.dataRoot, 'bank-integrate.json'),
+        path.join(cfgDir, 'bank-integrate.json'),
         ctx.bankTemplatePath
     );
     const mode = cfg.modes[spec.type];

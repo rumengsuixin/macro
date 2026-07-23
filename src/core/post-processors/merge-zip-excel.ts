@@ -128,11 +128,13 @@ const handler: PostProcessHandler = async (
     spec: PostProcessSpec,
     ctx: PostProcessContext
 ): Promise<PostProcessResult> => {
-    // 解析配置:优先读 dataRoot/merge-config.json(首次自动生成模板);无 dataRoot(如自检旧 ctx)走内置默认
+    // 解析配置:优先读 config/merge-config.json(首次自动生成模板);无目录(如自检旧 ctx)走内置默认
+    // configDir 优先(主进程传 dataRoot/config),缺省回退 dataRoot(兼容只设 dataRoot 的旧自检 ctx)
+    const cfgDir = ctx.configDir ?? ctx.dataRoot;
     let config: MergeConfig = DEFAULT_CONFIG;
-    if (ctx.dataRoot) {
+    if (cfgDir) {
         try {
-            config = loadMergeConfig(path.join(ctx.dataRoot, 'merge-config.json'));
+            config = loadMergeConfig(path.join(cfgDir, 'merge-config.json'));
         } catch {
             config = DEFAULT_CONFIG;
         }

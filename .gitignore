@@ -9,12 +9,16 @@ downloads/
 timelines/
 dumps/
 browser-profile/
-browser-config.json
-request-rules.json
-bank-integrate.json
-merge-config.json
-replay-profile.json
-hooks.json
+# 运行时配置:现全部收在 dataRoot/config/(首次运行自动生成;不含 git 追踪的 config-templates/)。
+# 根目录旧位置的遗留文件(旧版本生成)一并忽略,防误提交(尤其 ai-config.json 可能含凭据)。
+/config/
+/ai-config.json
+/browser-config.json
+/request-rules.json
+/bank-integrate.json
+/merge-config.json
+/replay-profile.json
+/hooks.json
 
 # 打包产物
 release/
