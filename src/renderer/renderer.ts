@@ -126,7 +126,7 @@ interface ElectronAPI {
     readMacro(filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
     openMacrosDir(): Promise<string>;
     runMacro(macro: Macro): Promise<RunResult>;
-    exportExcel(rows: Record<string, string>[]): Promise<string>;
+    exportExcel(rows: Record<string, string>[], fields?: Array<Record<string, unknown>>): Promise<string>;
     listPlugins(): Promise<PostProcessorManifest[]>;
     runPlugin(type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
     chooseOutputDir(): Promise<string | null>;
@@ -2566,13 +2566,32 @@ loadBtn.addEventListener('click', async () => {
     applyLoadedMacro(loaded);
 });
 
+/**
+ * 从当前提取规则 JSON 收集字段定义(fields + list-detail 的 detailFields),
+ * 供导出按 label/order/hidden/清洗格式 出表;解析失败或无字段返回 undefined(退回历史行为)。
+ */
+function currentExportFields(): Array<Record<string, unknown>> | undefined {
+    try {
+        const cfg = JSON.parse(extractInput.value.trim() || '{}') as {
+            fields?: unknown[];
+            detailFields?: unknown[];
+        };
+        const fields = Array.isArray(cfg.fields) ? cfg.fields : [];
+        const detail = Array.isArray(cfg.detailFields) ? cfg.detailFields : [];
+        const all = [...fields, ...detail] as Array<Record<string, unknown>>;
+        return all.length > 0 ? all : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 exportBtn.addEventListener('click', async () => {
     if (lastRows.length === 0) {
         logLocal('暂无可导出的数据,请先运行宏并成功提取数据。', 'error');
         return;
     }
     try {
-        const filePath = await window.electronAPI.exportExcel(lastRows);
+        const filePath = await window.electronAPI.exportExcel(lastRows, currentExportFields());
         if (!filePath) {
             logLocal('已取消导出。');
             return;

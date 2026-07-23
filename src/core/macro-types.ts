@@ -175,6 +175,23 @@ export type OnPause = (info: PauseInfo) => Promise<void>;
 /** 字段提取类型 */
 export type FieldType = 'text' | 'html' | 'attr' | 'href' | 'src';
 
+/**
+ * 字段清洗动作(声明式,按序施加,每步 string→string)。以 op 判别:
+ * - trim               去首尾空白
+ * - collapseWhitespace 连续空白折叠为单空格并去首尾
+ * - replace            正则替换(pattern 非法则跳过该步,不影响后续)
+ * - stripThousands     剥离数字千分位逗号(1,234 → 1234)
+ * - number             规整为数字文本(decimals 指定小数位;非数字保持原值,不猜)
+ * - date               解析日期并按 to 模板格式化(YYYY/MM/DD/HH/mm/ss;非法日期保持原值)
+ */
+export type TransformOp =
+    | { op: 'trim' }
+    | { op: 'collapseWhitespace' }
+    | { op: 'replace'; pattern: string; flags?: string; to?: string }
+    | { op: 'stripThousands' }
+    | { op: 'number'; decimals?: number }
+    | { op: 'date'; from?: string; to: string };
+
 /** 提取字段定义 */
 export interface ExtractField {
     name: string;
@@ -183,6 +200,16 @@ export interface ExtractField {
     type: FieldType;
     /** 当 type 为 attr 时,指定要提取的属性名 */
     attr?: string;
+    /** 导出列名(缺省 = name) */
+    label?: string;
+    /** 导出列排序键(升序;缺省 = 字段定义顺序) */
+    order?: number;
+    /** 隐藏列:仍提取但导出时不出列 */
+    hidden?: boolean;
+    /** 清洗后仍为空时的填充值(缺省沿用 '') */
+    default?: string;
+    /** 声明式清洗链,按序施加;缺省时 text 类型仍隐含一步 trim(兼容旧行为) */
+    transform?: TransformOp[];
 }
 
 /** 单字段提取(整页) */
@@ -354,6 +381,22 @@ export interface MacroSummary {
 
 /** 提取结果的一行 */
 export type ExtractRow = Record<string, string>;
+
+/** 导出列规格:由 ExtractField 的 label/order/hidden/transform 推导,驱动 Excel 列名/排序/隐藏/格式 */
+export interface ColumnSpec {
+    /** 行对象的 key(= 字段 name) */
+    key: string;
+    /** 表头显示名 */
+    label: string;
+    /** 排序键(升序) */
+    order: number;
+    /** 是否隐藏该列 */
+    hidden: boolean;
+    /** Excel 数字/日期格式串(如 '0.00' / 'yyyy-mm-dd');缺省按文本 */
+    numFmt?: string;
+    /** 导出单元格类型:number/date 时写真类型便于 Excel 计算;缺省 text */
+    kind?: 'text' | 'number' | 'date';
+}
 
 /** 回放出错时的结构化错误信息 */
 export interface RunError {

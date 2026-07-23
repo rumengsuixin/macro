@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
 import { exportToExcel } from '../core/excel-exporter';
+import { fieldsToColumnSpecs } from '../core/field-transform';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
@@ -19,6 +20,7 @@ import type {
     Macro,
     MacroCaptures,
     ExtractRow,
+    ExtractField,
     RunResult,
     PostProcessResult,
     OnPause,
@@ -389,23 +391,29 @@ function registerIpc(): void {
         }
     });
 
-    ipcMain.handle('export-excel', async (_e, rows: ExtractRow[]): Promise<string | null> => {
-        ensureDirs();
-        // 弹出保存对话框,默认目录 exports/、默认名 result-时间戳.xlsx
-        const result = await dialog.showSaveDialog(mainWindow!, {
-            title: '导出 Excel',
-            defaultPath: path.join(exportsDir, `result-${timestamp()}.xlsx`),
-            filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
-        });
-        if (result.canceled || !result.filePath) {
-            logInfo('已取消导出 Excel。');
-            return null;
+    ipcMain.handle(
+        'export-excel',
+        async (_e, rows: ExtractRow[], fields?: ExtractField[]): Promise<string | null> => {
+            ensureDirs();
+            // 弹出保存对话框,默认目录 exports/、默认名 result-时间戳.xlsx
+            const result = await dialog.showSaveDialog(mainWindow!, {
+                title: '导出 Excel',
+                defaultPath: path.join(exportsDir, `result-${timestamp()}.xlsx`),
+                filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
+            });
+            if (result.canceled || !result.filePath) {
+                logInfo('已取消导出 Excel。');
+                return null;
+            }
+            // 传入当前宏的字段定义时,按 label/order/hidden/格式 出表;否则退回历史行为(行 key 并集)
+            const columns =
+                Array.isArray(fields) && fields.length > 0 ? fieldsToColumnSpecs(fields) : undefined;
+            const saved = await exportToExcel(rows ?? [], result.filePath, columns);
+            logInfo(`Excel 已导出:${saved}`);
+            shell.showItemInFolder(saved); // 打开所在文件夹并高亮该文件
+            return saved;
         }
-        const saved = await exportToExcel(rows ?? [], result.filePath);
-        logInfo(`Excel 已导出:${saved}`);
-        shell.showItemInFolder(saved); // 打开所在文件夹并高亮该文件
-        return saved;
-    });
+    );
 
     // 列出可用后处理器插件(驱动渲染进程的可选插件列表)
     ipcMain.handle('list-plugins', () => {

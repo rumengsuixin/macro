@@ -14,6 +14,7 @@ import type {
 import type { DownloadManager } from './download-manager';
 import { logInfo, logError } from './logger';
 import { evalBoolExpr, checkExprSyntax } from './expr-eval';
+import { cleanFieldValue } from './field-transform';
 
 /** 翻页上下文:由回放引擎构造,提取流程在采完一页后驱动翻页 */
 export interface PaginationContext {
@@ -544,14 +545,14 @@ async function extractListDetail(
                 logError(`详情页抓取失败(${detailUrl}):${message},该行详情字段留空。`);
                 for (const field of config.detailFields) {
                     if (!(field.name in row)) {
-                        row[field.name] = '';
+                        row[field.name] = cleanFieldValue(field, '');
                     }
                 }
             }
         } else {
-            // 无详情链接:详情字段留空,保证列对齐
+            // 无详情链接:详情字段填默认值(缺省空串),保证列对齐
             for (const field of config.detailFields) {
-                row[field.name] = '';
+                row[field.name] = cleanFieldValue(field, '');
             }
         }
         logInfo(`详情进度 ${i + 1}/${collected.length}`);
@@ -560,15 +561,15 @@ async function extractListDetail(
     return rows;
 }
 
-/** 按字段类型从定位器取值;元素缺失时返回空串(保证数据完整,不截断) */
-async function extractFieldValue(locator: Locator, field: ExtractField): Promise<string> {
+/** 按字段类型从定位器取原始值;元素缺失时返回空串(清洗层负责 trim/转换) */
+async function extractRawFieldValue(locator: Locator, field: ExtractField): Promise<string> {
     const exists = await locator.count();
     if (exists === 0) {
         return '';
     }
     switch (field.type) {
         case 'text':
-            return ((await locator.innerText()) ?? '').trim();
+            return (await locator.innerText()) ?? ''; // 不在此 trim,交清洗层统一处理
         case 'html':
             return (await locator.innerHTML()) ?? '';
         case 'attr':
@@ -580,6 +581,12 @@ async function extractFieldValue(locator: Locator, field: ExtractField): Promise
         default:
             return '';
     }
+}
+
+/** 取值并施加字段清洗链 + 默认值(保证数据完整,不截断) */
+async function extractFieldValue(locator: Locator, field: ExtractField): Promise<string> {
+    const raw = await extractRawFieldValue(locator, field);
+    return cleanFieldValue(field, raw);
 }
 
 /** 归一化后的行筛选变量(缺省已补全) */

@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, MacroCaptures, MacroSummary, ExtractRow, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
+import type { Macro, MacroCaptures, MacroSummary, ExtractRow, ExtractField, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
 
@@ -50,8 +50,9 @@ const api = {
     /** 运行宏,返回结构化结果 */
     runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),
 
-    /** 导出 Excel(弹出保存对话框),返回文件路径或 null(取消) */
-    exportExcel: (rows: ExtractRow[]): Promise<string | null> => ipcRenderer.invoke('export-excel', rows),
+    /** 导出 Excel(弹出保存对话框);fields=当前宏字段定义,用于按 label/order/hidden/格式 出表 */
+    exportExcel: (rows: ExtractRow[], fields?: ExtractField[]): Promise<string | null> =>
+        ipcRenderer.invoke('export-excel', rows, fields),
 
     /** 列出可用后处理器插件(驱动可选插件列表) */
     listPlugins: (): Promise<PostProcessorManifest[]> => ipcRenderer.invoke('list-plugins'),
