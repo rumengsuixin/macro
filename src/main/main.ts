@@ -2,7 +2,7 @@
 // 注:runtime-bootstrap 必须放在所有 import 最前(尤其在引入 macro-runner/playwright 之前),
 // 它负责在 playwright 初始化前设好 PLAYWRIGHT_BROWSERS_PATH,否则自带 Chromium 路径不生效。
 import './runtime-bootstrap';
-import { app, BrowserWindow, ipcMain, dialog, shell, session, type Cookie, type WebContents } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, Notification, type Cookie, type WebContents } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
@@ -13,6 +13,9 @@ import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros 
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { loadRequestRules } from '../storage/request-rules-store';
 import { loadReplayProfile, resolveActiveProfile, setActiveProfile } from '../storage/replay-profile-store';
+import { loadHooksConfig, setHooksEnabled } from '../core/hooks-config';
+import { dispatchHooks } from '../core/hooks-dispatcher';
+import type { HooksConfig } from '../core/macro-types';
 // 注:RequestInterceptor(录制端 CDP 拦截器)已不再由主进程接线——拦截模块仅在回放阶段生效(见 did-attach-webview)。
 // 类文件仍保留(供自检脚本 verify-request-intercept / verify-timeline-record 直接实例化)。
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
@@ -65,6 +68,20 @@ const requestRulesPath = path.join(dataRoot, 'request-rules.json');
 
 // 回放行为档:文件路径(首次生成含 default/slow-site/anti-bot 三档;default=现状写死值)
 const replayProfilePath = path.join(dataRoot, 'replay-profile.json');
+
+// 事件钩子:文件路径(默认 enabled=false,不显式开则零对外)
+const hooksPath = path.join(dataRoot, 'hooks.json');
+
+/** 桌面通知(注入给钩子派发器的 notify 通道);通知失败不致命 */
+function showDesktopNotification(title: string, body: string): void {
+    try {
+        if (Notification.isSupported()) {
+            new Notification({ title, body }).show();
+        }
+    } catch {
+        /* 通知失败不致命 */
+    }
+}
 
 // webview 录制 preload 的绝对路径(与 main.js 同目录)
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
@@ -358,6 +375,14 @@ function registerIpc(): void {
             wc.send('macro-run-started', { runId });
         }
 
+        // 事件钩子:本次运行读一次配置(next-run 生效),各阶段 fire-and-forget 派发对外动作
+        const hooks = loadHooksConfig(hooksPath);
+        const hookDeps = { notify: showDesktopNotification, dataRoot };
+        const macroName = macro.name || '(未命名宏)';
+        const startedAt = new Date().toISOString();
+        const startMs = Date.now();
+        void dispatchHooks(hooks, 'on-start', { macroName, status: 'started', startedAt, dataRoot }, hookDeps);
+
         try {
             const result = await runner.run(macro);
             if (result.ok && result.downloads && result.downloads.length > 0) {
@@ -382,10 +407,62 @@ function registerIpc(): void {
             } else if (result.downloads && result.downloads.length > 0) {
                 shell.showItemInFolder(result.downloads[0]);
             }
+            // 事件钩子:成功→on-complete;失败(非用户主动停止)→on-failure(带结构化 error 详情)
+            if (result.ok) {
+                const outputs = (result.postProcessed ?? [])
+                    .map((r) => r.output)
+                    .filter((o): o is string => !!o);
+                void dispatchHooks(
+                    hooks,
+                    'on-complete',
+                    {
+                        macroName,
+                        status: 'success',
+                        rowCount: result.rows?.length ?? 0,
+                        elapsedMs: Date.now() - startMs,
+                        startedAt,
+                        finishedAt: new Date().toISOString(),
+                        dataRoot,
+                        downloads: result.downloads ?? [],
+                        outputs,
+                    },
+                    hookDeps
+                );
+            } else if (!result.cancelled) {
+                void dispatchHooks(
+                    hooks,
+                    'on-failure',
+                    {
+                        macroName,
+                        status: 'failure',
+                        elapsedMs: Date.now() - startMs,
+                        startedAt,
+                        finishedAt: new Date().toISOString(),
+                        dataRoot,
+                        error: result.error,
+                    },
+                    hookDeps
+                );
+            }
             return result;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             logError(`运行宏时发生未捕获错误:${message}`);
+            // 事件钩子:未捕获异常也视为失败,派发 on-failure
+            void dispatchHooks(
+                hooks,
+                'on-failure',
+                {
+                    macroName,
+                    status: 'failure',
+                    elapsedMs: Date.now() - startMs,
+                    startedAt,
+                    finishedAt: new Date().toISOString(),
+                    dataRoot,
+                    error: { stepIndex: -1, stepType: 'goto', message },
+                },
+                hookDeps
+            );
             return { ok: false, error: { stepIndex: -1, stepType: 'goto', message } };
         } finally {
             // 清理本次运行注册的所有监听器(单窗单跑场景已足够;并发多窗需按窗口隔离)
@@ -593,6 +670,43 @@ function registerIpc(): void {
         }
         const cfg = loadReplayProfile(replayProfilePath);
         return { names: Object.keys(cfg.profiles), active: cfg.activeProfile };
+    });
+
+    // 事件钩子:读取配置(供 UI 显示开关与各事件动作数)
+    ipcMain.handle('get-hooks-config', (): HooksConfig => {
+        return loadHooksConfig(hooksPath);
+    });
+
+    // 事件钩子:切换总开关(next-run 生效),返回最新配置
+    ipcMain.handle('set-hooks-enabled', (_e, enabled: boolean): HooksConfig => {
+        const cfg = setHooksEnabled(hooksPath, enabled === true);
+        logInfo(`事件钩子已${cfg.enabled ? '启用' : '禁用'}(下次回放生效)。`);
+        return cfg;
+    });
+
+    // 事件钩子:导入 hooks.json 文件(校验合法后覆盖生效,复杂 + 涉安全故用导入文件模型)
+    ipcMain.handle('import-hooks-config', async (): Promise<{ ok: boolean; error?: string; canceled?: boolean; enabled?: boolean }> => {
+        const picked = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择 hooks.json 文件',
+            defaultPath: hooksPath,
+            properties: ['openFile'],
+            filters: [{ name: 'JSON 配置文件', extensions: ['json'] }],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) {
+            return { ok: false, canceled: true };
+        }
+        try {
+            const raw = fs.readFileSync(picked.filePaths[0], 'utf-8');
+            JSON.parse(raw); // 先验证是合法 JSON
+            fs.writeFileSync(hooksPath, raw, 'utf-8'); // 覆盖到 dataRoot;下次加载经 normalize 归一
+            const cfg = loadHooksConfig(hooksPath);
+            logInfo(`hooks.json 已导入:${picked.filePaths[0]}(启用=${cfg.enabled ? '开' : '关'})`);
+            return { ok: true, enabled: cfg.enabled };
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logError(`导入 hooks.json 失败:${msg}`);
+            return { ok: false, error: msg };
+        }
     });
 
     // 选择 profile 目录(目录对话框),返回所选路径或 null(取消)

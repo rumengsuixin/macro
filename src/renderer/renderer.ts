@@ -129,6 +129,9 @@ interface ElectronAPI {
     exportExcel(rows: Record<string, string>[], fields?: Array<Record<string, unknown>>): Promise<string>;
     getReplayProfiles(): Promise<{ names: string[]; active: string }>;
     setActiveReplayProfile(name: string): Promise<{ names: string[]; active: string }>;
+    getHooksConfig(): Promise<{ enabled: boolean; events: Record<string, unknown[]> }>;
+    setHooksEnabled(enabled: boolean): Promise<{ enabled: boolean; events: Record<string, unknown[]> }>;
+    importHooksConfig(): Promise<{ ok: boolean; error?: string; canceled?: boolean; enabled?: boolean }>;
     listPlugins(): Promise<PostProcessorManifest[]>;
     runPlugin(type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
     chooseOutputDir(): Promise<string | null>;
@@ -2637,6 +2640,46 @@ replayProfileSelect.addEventListener('change', async () => {
         logLocal(`回放行为档已切换为「${info.active}」,下次回放生效。`);
     } catch (e) {
         logLocal('切换回放行为档失败:' + (e as Error).message, 'error');
+    }
+});
+
+// ===== 事件钩子:总开关勾选 + 导入 hooks.json(均下次回放生效) =====
+const hooksEnabledCheckbox = byId<HTMLInputElement>('hooks-enabled');
+const hooksImportBtn = byId<HTMLButtonElement>('hooks-import');
+
+// 启动时回填开关状态(失败静默)
+void (async () => {
+    try {
+        hooksEnabledCheckbox.checked = (await window.electronAPI.getHooksConfig()).enabled;
+    } catch {
+        /* 忽略 */
+    }
+})();
+
+hooksEnabledCheckbox.addEventListener('change', async () => {
+    try {
+        const cfg = await window.electronAPI.setHooksEnabled(hooksEnabledCheckbox.checked);
+        hooksEnabledCheckbox.checked = cfg.enabled;
+        logLocal(`事件钩子已${cfg.enabled ? '启用' : '禁用'},下次回放生效。`);
+    } catch (e) {
+        logLocal('切换事件钩子失败:' + (e as Error).message, 'error');
+    }
+});
+
+hooksImportBtn.addEventListener('click', async () => {
+    try {
+        const r = await window.electronAPI.importHooksConfig();
+        if (r.canceled) {
+            return;
+        }
+        if (r.ok) {
+            hooksEnabledCheckbox.checked = r.enabled === true;
+            logLocal(`已导入 hooks.json(启用=${r.enabled ? '开' : '关'}),下次回放生效。`);
+        } else {
+            logLocal('导入 hooks.json 失败:' + (r.error ?? '未知错误'), 'error');
+        }
+    } catch (e) {
+        logLocal('导入 hooks.json 失败:' + (e as Error).message, 'error');
     }
 });
 

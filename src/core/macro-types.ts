@@ -797,3 +797,49 @@ export interface SessionOptions {
     /** 当前生效的回放行为档(超时/重试/延时/出错策略/翻页节奏);缺省则全部走历史写死值 */
     replayProfile?: ReplayProfile;
 }
+
+/** 事件钩子的生命周期事件 */
+export type HookEvent = 'on-start' | 'on-progress' | 'on-complete' | 'on-failure';
+
+/**
+ * 单个钩子动作(以 action 判别):
+ * - webhook     HTTP POST 到静态 url(url/headers 只取配置、禁注入页面变量防 SSRF;bodyTemplate 变量按 JSON 转义)
+ * - command     spawn 外部程序(exe 静态;args 可含变量,array 传参无 shell 故无注入)
+ * - status-file 写状态文件(path 限定在 dataRoot 内防穿越)
+ * - notify      桌面通知(Electron Notification,由主进程注入)
+ */
+export type HookAction =
+    | {
+          action: 'webhook';
+          url: string;
+          method?: string;
+          headers?: Record<string, string>;
+          bodyTemplate?: string;
+          timeoutMs?: number;
+      }
+    | { action: 'command'; exe: string; args?: string[]; cwd?: string; timeoutMs?: number }
+    | { action: 'status-file'; path: string; template?: string }
+    | { action: 'notify'; title: string; body?: string };
+
+/** hooks.json 顶层结构:默认 enabled:false(inert,不显式开则零对外) */
+export interface HooksConfig {
+    enabled: boolean;
+    events: Partial<Record<HookEvent, HookAction[]>>;
+}
+
+/** 派发钩子时注入模板的运行时数据 */
+export interface RunHookPayload {
+    macroName: string;
+    status: 'started' | 'progress' | 'success' | 'failure';
+    rowCount?: number;
+    elapsedMs?: number;
+    startedAt?: string;
+    finishedAt?: string;
+    dataRoot?: string;
+    downloads?: string[];
+    outputs?: string[];
+    /** 失败事件专有:结构化错误详情 */
+    error?: RunError;
+    /** 进度事件专有 */
+    progress?: { page?: number; rows?: number };
+}

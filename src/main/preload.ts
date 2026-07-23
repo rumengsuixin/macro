@@ -62,6 +62,18 @@ const api = {
     setActiveReplayProfile: (name: string): Promise<{ names: string[]; active: string }> =>
         ipcRenderer.invoke('set-active-replay-profile', name),
 
+    /** 读取事件钩子配置(供 UI 显示开关) */
+    getHooksConfig: (): Promise<{ enabled: boolean; events: Record<string, unknown[]> }> =>
+        ipcRenderer.invoke('get-hooks-config'),
+
+    /** 切换事件钩子总开关(下次回放生效),返回最新配置 */
+    setHooksEnabled: (enabled: boolean): Promise<{ enabled: boolean; events: Record<string, unknown[]> }> =>
+        ipcRenderer.invoke('set-hooks-enabled', enabled),
+
+    /** 导入 hooks.json 文件(覆盖生效) */
+    importHooksConfig: (): Promise<{ ok: boolean; error?: string; canceled?: boolean; enabled?: boolean }> =>
+        ipcRenderer.invoke('import-hooks-config'),
+
     /** 列出可用后处理器插件(驱动可选插件列表) */
     listPlugins: (): Promise<PostProcessorManifest[]> => ipcRenderer.invoke('list-plugins'),
 
