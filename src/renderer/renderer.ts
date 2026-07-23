@@ -127,6 +127,8 @@ interface ElectronAPI {
     openMacrosDir(): Promise<string>;
     runMacro(macro: Macro): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[], fields?: Array<Record<string, unknown>>): Promise<string>;
+    getReplayProfiles(): Promise<{ names: string[]; active: string }>;
+    setActiveReplayProfile(name: string): Promise<{ names: string[]; active: string }>;
     listPlugins(): Promise<PostProcessorManifest[]>;
     runPlugin(type: string, outputDir?: string): Promise<{ canceled?: boolean; results?: PostProcessResult[] }>;
     chooseOutputDir(): Promise<string | null>;
@@ -2599,6 +2601,42 @@ exportBtn.addEventListener('click', async () => {
         logLocal(`Excel 已导出到:${filePath}`);
     } catch (e) {
         logLocal('导出 Excel 失败:' + (e as Error).message, 'error');
+    }
+});
+
+// ===== 回放行为档下拉:列出所有档、显示当前档、切换即写回(下次回放生效) =====
+const replayProfileSelect = byId<HTMLSelectElement>('replay-profile');
+
+/** 用 {names, active} 重建下拉选项 */
+function renderReplayProfiles(info: { names: string[]; active: string }): void {
+    replayProfileSelect.innerHTML = '';
+    for (const name of info.names) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name === 'default' ? 'default(默认)' : name;
+        if (name === info.active) {
+            opt.selected = true;
+        }
+        replayProfileSelect.appendChild(opt);
+    }
+}
+
+// 启动时拉取档列表填充下拉(失败静默,不阻断)
+void (async () => {
+    try {
+        renderReplayProfiles(await window.electronAPI.getReplayProfiles());
+    } catch {
+        /* 忽略:配置读取失败不影响主流程 */
+    }
+})();
+
+replayProfileSelect.addEventListener('change', async () => {
+    try {
+        const info = await window.electronAPI.setActiveReplayProfile(replayProfileSelect.value);
+        renderReplayProfiles(info);
+        logLocal(`回放行为档已切换为「${info.active}」,下次回放生效。`);
+    } catch (e) {
+        logLocal('切换回放行为档失败:' + (e as Error).message, 'error');
     }
 });
 

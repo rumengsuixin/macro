@@ -22,9 +22,13 @@ export interface PaginationContext {
     totalPages: number;
     /** 执行一次翻页(按序执行所有被标记的翻页步骤) */
     turnPage: () => Promise<void>;
+    /** 等列表就绪/换页的上限(毫秒);缺省走 PAGE_SETTLE_TIMEOUT(由回放档 pagination.settleTimeoutMs 注入) */
+    settleTimeoutMs?: number;
+    /** 每页处理后额外停顿(毫秒;缺省 0,由回放档 pagination.perPageDelayMs 注入) */
+    perPageDelayMs?: number;
 }
 
-/** 等列表渲染/换页的上限(毫秒):空页不干等满全局 60s;与 list-action 既有 actionTimeout 默认一致但语义独立 */
+/** 等列表渲染/换页的上限(毫秒)缺省值:空页不干等满全局 60s;可被回放档 settleTimeoutMs 覆盖 */
 const PAGE_SETTLE_TIMEOUT = 30000;
 
 /**
@@ -32,10 +36,12 @@ const PAGE_SETTLE_TIMEOUT = 30000;
  * 修首页:此前各循环只在 turnPage 后才等,首页之前无等待→AJAX 未就绪 count=0 整页被跳过。
  * 超时不抛(catch):真空结果页自然按 0 项处理,非致命。
  */
-async function waitListReady(page: Page, listSelector: string): Promise<void> {
-    await page
-        .waitForSelector(listSelector, { timeout: PAGE_SETTLE_TIMEOUT })
-        .catch(() => undefined);
+async function waitListReady(
+    page: Page,
+    listSelector: string,
+    settleMs: number = PAGE_SETTLE_TIMEOUT
+): Promise<void> {
+    await page.waitForSelector(listSelector, { timeout: settleMs }).catch(() => undefined);
 }
 
 /**
@@ -67,7 +73,7 @@ async function turnPageAndSettle(
                     return !!el && el.textContent !== prev;
                 },
                 [listSelector, before] as const,
-                { timeout: PAGE_SETTLE_TIMEOUT }
+                { timeout: pagination.settleTimeoutMs ?? PAGE_SETTLE_TIMEOUT }
             )
             .catch(() => undefined); // 两页首行恰好相同/超时:放行,靠下一轮 waitListReady 兜底
     }
@@ -86,9 +92,14 @@ async function paginatedCollect(
     processPage: (pageIndex: number, totalPages: number) => Promise<void>
 ): Promise<void> {
     const totalPages = pagination ? pagination.totalPages : 1;
+    const settleMs = pagination?.settleTimeoutMs ?? PAGE_SETTLE_TIMEOUT;
+    const perPageDelay = pagination?.perPageDelayMs ?? 0;
     for (let p = 1; p <= totalPages; p += 1) {
-        await waitListReady(page, listSelector);
+        await waitListReady(page, listSelector, settleMs);
         await processPage(p, totalPages);
+        if (perPageDelay > 0) {
+            await page.waitForTimeout(perPageDelay); // 每页处理后拟人化停顿(回放档 perPageDelayMs)
+        }
         if (p < totalPages && pagination) {
             logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
             await turnPageAndSettle(page, pagination, listSelector);

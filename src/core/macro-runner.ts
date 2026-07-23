@@ -23,6 +23,8 @@ import type {
     ExtractRow,
     OnPause,
     SessionOptions,
+    ReplayProfile,
+    OnErrorPolicy,
     ElementFingerprint,
     RequestRule,
     ResendRule,
@@ -76,9 +78,25 @@ interface CdpRequestPaused {
     responseStatusCode?: number;
 }
 
+/** 现状写死值构成的默认回放档:无 session.replayProfile(无头/单测)时兜底,保证行为与历史一致 */
+function defaultReplayProfile(): ReplayProfile {
+    return {
+        globalTimeoutMs: 60000,
+        stepTimeoutMs: {},
+        retry: { count: 0, backoff: 'fixed', baseMs: 500, factor: 2, maxMs: 10000 },
+        stepDelay: { min: 0, max: 0 },
+        onError: 'abort',
+        onErrorByType: {},
+        pagination: { settleTimeoutMs: 30000, perPageDelayMs: 0 },
+        scrollBottomWaitMs: 1000,
+    };
+}
+
 export class MacroRunner {
     private errorDir: string;
     private timeoutMs: number;
+    /** 当前回放行为档(超时/重试/延时/出错策略/翻页节奏);缺省 = 现状写死值 */
+    private replay: ReplayProfile;
     /** 人工介入暂停回调:由主进程注入,负责通知 UI 并等待用户点继续;无则默认立即放行 */
     private onPause: OnPause;
     /** 会话选项:持久化目录 / 注入的 cookies;由主进程组装,缺省则用临时 profile、不注入 */
@@ -169,11 +187,13 @@ export class MacroRunner {
         dumpsDir?: string
     ) {
         this.errorDir = errorDir;
-        // 回放默认超时:默认 60 秒;可用环境变量 MACRO_TIMEOUT(毫秒)覆盖
-        this.timeoutMs = timeoutMs ?? (Number(process.env.MACRO_TIMEOUT) || 60000);
         // 无回调(无头/单测场景)时立即放行,避免永久挂起
         this.onPause = onPause ?? (async (): Promise<void> => {});
         this.session = session ?? {};
+        // 回放行为档:优先用主进程解析好的当前档,缺省(无头/单测)用现状默认档
+        this.replay = this.session.replayProfile ?? defaultReplayProfile();
+        // 回放全局超时优先级:构造入参 > 环境变量 MACRO_TIMEOUT(保留旧用法)> 当前档 globalTimeoutMs
+        this.timeoutMs = timeoutMs ?? (Number(process.env.MACRO_TIMEOUT) || this.replay.globalTimeoutMs);
         this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
         this.timelinesDir = timelinesDir ?? path.join(errorDir, '..', 'timelines');
         this.dumpsDir = dumpsDir ?? path.join(errorDir, '..', 'dumps');
@@ -403,7 +423,7 @@ export class MacroRunner {
                     continue;
                 }
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${describeStep(step)} —— 执行中`);
-                await this.executeStep(activePage, step, i, context);
+                await this.executeStepWithPolicy(activePage, step, i, context);
                 logInfo(`第 ${i + 1}/${macro.steps.length} 步:${step.type} —— 完成`);
             }
 
@@ -429,6 +449,9 @@ export class MacroRunner {
                     const runContext = context; // 闭包内 context 收窄丢失,捕获非空引用
                     pagination = {
                         totalPages,
+                        // 翻页节奏来自当前回放档(缺省 = 现状:settle 30s、每页间隔 0)
+                        settleTimeoutMs: this.replay.pagination.settleTimeoutMs,
+                        perPageDelayMs: this.replay.pagination.perPageDelayMs,
                         turnPage: async (): Promise<void> => {
                             for (const s of paginationSteps) {
                                 await this.executeStep(runPage, s, -1, runContext);
@@ -1451,6 +1474,90 @@ export class MacroRunner {
      * 分发并执行单个步骤;stepIndex 仅用于 pause 步骤向 UI 报告位置。
      * context 传入时,等待类步骤会兼顾「随后弹出的新窗口」(解决活动页切换晚于下一步的竞态)。
      */
+    /** 按当前档算一次步骤间延时:min==max=固定;min<max=区间随机(拟人化);max<=0=不延时 */
+    private pickStepDelay(): number {
+        const { min, max } = this.replay.stepDelay;
+        if (max <= 0) {
+            return 0;
+        }
+        if (max <= min) {
+            return Math.max(0, min);
+        }
+        return Math.floor(min + Math.random() * (max - min));
+    }
+
+    /** 第 attempt 次重试的退避等待(attempt 从 1 起):fixed=baseMs;exponential=baseMs*factor^(attempt-1),封顶 maxMs */
+    private computeBackoff(attempt: number): number {
+        const r = this.replay.retry;
+        const ms =
+            r.backoff === 'exponential' ? r.baseMs * Math.pow(r.factor, attempt - 1) : r.baseMs;
+        return Math.min(r.maxMs, Math.max(0, ms));
+    }
+
+    /**
+     * 按回放档执行一步:每步类型超时覆盖 + 出错策略(重试/跳过/继续/中止)+ 成功后拟人化延时。
+     * - onError/onErrorByType:abort=抛出(走既有失败截图流程)、skip/continue=记录后跳过继续、retry=按退避重试。
+     * - 用户主动停止(cancelled)一律立即冒泡,不受策略影响。
+     */
+    private async executeStepWithPolicy(
+        page: Page,
+        step: Step,
+        stepIndex: number,
+        context?: BrowserContext
+    ): Promise<void> {
+        const type = step.type;
+        const stepTimeout = this.replay.stepTimeoutMs[type];
+        const hasOverride = typeof stepTimeout === 'number' && stepTimeout > 0;
+        if (hasOverride) {
+            page.setDefaultTimeout(stepTimeout);
+        }
+        const policy: OnErrorPolicy = this.replay.onErrorByType[type] ?? this.replay.onError;
+        const maxAttempts = policy === 'retry' ? this.replay.retry.count + 1 : 1;
+        let lastErr: unknown;
+        try {
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                try {
+                    await this.executeStep(page, step, stepIndex, context);
+                    lastErr = undefined;
+                    break;
+                } catch (err) {
+                    lastErr = err;
+                    if (this.cancelled) {
+                        throw err; // 用户停止:立即冒泡,不重试不吞
+                    }
+                    if (policy === 'retry' && attempt < maxAttempts) {
+                        const wait = this.computeBackoff(attempt);
+                        const msg = err instanceof Error ? err.message : String(err);
+                        logInfo(
+                            `第 ${stepIndex + 1} 步失败(${msg}),${wait}ms 后重试(${attempt}/${this.replay.retry.count})……`
+                        );
+                        await page.waitForTimeout(wait);
+                        continue;
+                    }
+                    break;
+                }
+            }
+            if (lastErr !== undefined) {
+                if (policy === 'skip' || policy === 'continue') {
+                    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+                    logError(`第 ${stepIndex + 1} 步失败(${msg}),按策略「${policy}」跳过继续。`);
+                } else {
+                    throw lastErr; // abort:冒泡到 run() 的 catch,走既有失败截图流程
+                }
+            } else {
+                const delay = this.pickStepDelay();
+                if (delay > 0) {
+                    await page.waitForTimeout(delay);
+                }
+            }
+        } finally {
+            // 恢复全局默认超时,避免本步的短超时污染后续步骤 / 翻页 / 提取
+            if (hasOverride) {
+                page.setDefaultTimeout(this.timeoutMs);
+            }
+        }
+    }
+
     private async executeStep(
         page: Page,
         step: Step,
@@ -1630,8 +1737,8 @@ export class MacroRunner {
             return n; // 命中的内部可滚动容器数,供日志诊断
         });
         logInfo(`滚动到底部:已滚动 window + ${scrolled} 个内部可滚动容器。`);
-        // 等懒加载内容就绪(非致命,固定短等待)
-        await page.waitForTimeout(1000);
+        // 等懒加载内容就绪(非致命,时长取当前回放档 scrollBottomWaitMs,缺省 1000ms)
+        await page.waitForTimeout(this.replay.scrollBottomWaitMs);
     }
 
     /** 等待页面加载完成:等 load 事件(DOM 与全部资源加载完毕);超时只告警不致命,避免轮询型站点永久挂死 */

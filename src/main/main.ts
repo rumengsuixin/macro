@@ -12,6 +12,7 @@ import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { loadRequestRules } from '../storage/request-rules-store';
+import { loadReplayProfile, resolveActiveProfile, setActiveProfile } from '../storage/replay-profile-store';
 // 注:RequestInterceptor(录制端 CDP 拦截器)已不再由主进程接线——拦截模块仅在回放阶段生效(见 did-attach-webview)。
 // 类文件仍保留(供自检脚本 verify-request-intercept / verify-timeline-record 直接实例化)。
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
@@ -61,6 +62,9 @@ const defaultProfileDir = path.join(dataRoot, 'browser-profile');
 
 // 录制端请求改写规则:文件路径(默认 enabled=false,不干预录制)
 const requestRulesPath = path.join(dataRoot, 'request-rules.json');
+
+// 回放行为档:文件路径(首次生成含 default/slow-site/anti-bot 三档;default=现状写死值)
+const replayProfilePath = path.join(dataRoot, 'replay-profile.json');
 
 // webview 录制 preload 的绝对路径(与 main.js 同目录)
 const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
@@ -575,6 +579,22 @@ function registerIpc(): void {
         return next;
     });
 
+    // 回放行为档:列出所有档名 + 当前生效档(驱动渲染层下拉)
+    ipcMain.handle('get-replay-profiles', (): { names: string[]; active: string } => {
+        const cfg = loadReplayProfile(replayProfilePath);
+        return { names: Object.keys(cfg.profiles), active: cfg.activeProfile };
+    });
+
+    // 回放行为档:切换当前生效档(next-run 生效),返回最新 {names, active}
+    ipcMain.handle('set-active-replay-profile', (_e, name: string): { names: string[]; active: string } => {
+        const ok = setActiveProfile(replayProfilePath, name);
+        if (ok) {
+            logInfo(`回放行为档已切换为:${name}(下次回放生效)。`);
+        }
+        const cfg = loadReplayProfile(replayProfilePath);
+        return { names: Object.keys(cfg.profiles), active: cfg.activeProfile };
+    });
+
     // 选择 profile 目录(目录对话框),返回所选路径或 null(取消)
     ipcMain.handle('choose-user-data-dir', async (): Promise<string | null> => {
         const result = await dialog.showOpenDialog(mainWindow!, {
@@ -688,6 +708,12 @@ async function buildSessionOptions(): Promise<SessionOptions> {
                 `回放将记录请求时间线(只记录不修改),匹配 URL:${requestRules.record?.urlPattern || '全部'}。`
             );
         }
+    }
+    // 回放行为档:每次回放开始读一次(next-run 生效,与 browser-config 同类),取当前档带给 runner。
+    const replayCfg = loadReplayProfile(replayProfilePath);
+    options.replayProfile = resolveActiveProfile(replayCfg);
+    if (replayCfg.activeProfile !== 'default') {
+        logInfo(`回放行为档:${replayCfg.activeProfile}(自定义超时/重试/延时/翻页节奏生效)。`);
     }
     return options;
 }

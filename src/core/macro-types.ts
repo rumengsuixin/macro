@@ -731,6 +731,58 @@ export interface BrowserCookie {
 }
 
 /** 回放时注入的会话选项(由主进程组装,core 层不依赖 Electron) */
+/** 单步出错处置策略:abort=中止全流程 / skip·continue=记录后跳过该步继续 / retry=按退避重试 */
+export type OnErrorPolicy = 'abort' | 'skip' | 'continue' | 'retry';
+
+/** 重试退避策略 */
+export interface RetryPolicy {
+    /** 重试次数(0=不重试) */
+    count: number;
+    /** 退避方式:fixed=固定 baseMs;exponential=baseMs*factor^(n-1),封顶 maxMs */
+    backoff: 'fixed' | 'exponential';
+    baseMs: number;
+    factor: number;
+    maxMs: number;
+}
+
+/** 步骤间延时(min==max=固定;min<max=区间随机拟人化,躲行为风控) */
+export interface StepDelay {
+    min: number;
+    max: number;
+}
+
+/** 翻页节奏 */
+export interface PaginationPacing {
+    /** 等列表就绪/换页的上限(毫秒) */
+    settleTimeoutMs: number;
+    /** 每页处理后额外停顿(毫秒;0=不停) */
+    perPageDelayMs: number;
+}
+
+/** 单个回放行为档:所有字段均已补全(由 resolveActiveProfile 合并默认得到) */
+export interface ReplayProfile {
+    /** 全局默认超时(作用于 click/fill/waitForSelector/goto 等) */
+    globalTimeoutMs: number;
+    /** 按步骤类型覆盖超时(缺省走全局) */
+    stepTimeoutMs: Record<string, number>;
+    retry: RetryPolicy;
+    stepDelay: StepDelay;
+    /** 全局出错策略 */
+    onError: OnErrorPolicy;
+    /** 按步骤类型覆盖出错策略 */
+    onErrorByType: Record<string, OnErrorPolicy>;
+    pagination: PaginationPacing;
+    /** scroll-bottom 步骤等懒加载的停顿(毫秒) */
+    scrollBottomWaitMs: number;
+}
+
+/** replay-profile.json 顶层结构:多档可切换 */
+export interface ReplayProfileConfig {
+    /** 当前生效档名(须存在于 profiles;缺则回退 default) */
+    activeProfile: string;
+    profiles: Record<string, ReplayProfile>;
+}
+
 export interface SessionOptions {
     /** 有值 → 用持久化 context(launchPersistentContext) */
     userDataDir?: string;
@@ -742,4 +794,6 @@ export interface SessionOptions {
     preferSystemChrome?: boolean;
     /** 有值且 enabled → 回放时按规则拦截改写命中的 POST body(与录制端共用同一份规则/函数) */
     requestRules?: RequestRulesConfig;
+    /** 当前生效的回放行为档(超时/重试/延时/出错策略/翻页节奏);缺省则全部走历史写死值 */
+    replayProfile?: ReplayProfile;
 }

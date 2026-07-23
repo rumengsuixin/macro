@@ -54,6 +54,14 @@ const api = {
     exportExcel: (rows: ExtractRow[], fields?: ExtractField[]): Promise<string | null> =>
         ipcRenderer.invoke('export-excel', rows, fields),
 
+    /** 列出回放行为档(下拉数据源):{names, active} */
+    getReplayProfiles: (): Promise<{ names: string[]; active: string }> =>
+        ipcRenderer.invoke('get-replay-profiles'),
+
+    /** 切换当前生效回放行为档(下次回放生效),返回最新 {names, active} */
+    setActiveReplayProfile: (name: string): Promise<{ names: string[]; active: string }> =>
+        ipcRenderer.invoke('set-active-replay-profile', name),
+
     /** 列出可用后处理器插件(驱动可选插件列表) */
     listPlugins: (): Promise<PostProcessorManifest[]> => ipcRenderer.invoke('list-plugins'),
 
