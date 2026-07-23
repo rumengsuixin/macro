@@ -4561,7 +4561,7 @@ function setupAdvancedMode(): void {
 // 工具栏动作按钮:顺序即优先级;超过「显示数量」且排在后面的自动收进「更多」下拉。
 // 改顺序 / 显示数量只改这两个常量即可,溢出规则自动生效。
 const TOOLBAR_ACTIONS = ['start', 'stop', 'run', 'stop-run', 'save', 'load', 'ai-fix-all', 'export'];
-const MAX_VISIBLE_ACTIONS = 7;
+const MAX_VISIBLE_ACTIONS = 6;
 
 /**
  * 工具栏「更多」下拉:①按规则把超出显示数量的靠后按钮移进下拉(自动溢出),
