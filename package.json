@@ -65,7 +65,17 @@
         "files": [
             "**/*",
             "!**/*.map",
-            "!**/*.d.ts"
+            "!**/*.d.ts",
+            "!config",
+            "!config/**",
+            "!ai-config.json",
+            "!browser-config.json",
+            "!request-rules.json",
+            "!bank-integrate.json",
+            "!merge-config.json",
+            "!replay-profile.json",
+            "!hooks.json",
+            "!**/*.bak"
         ],
         "asar": true,
         "win": {
