@@ -13,6 +13,8 @@ browser-config.json
 request-rules.json
 bank-integrate.json
 merge-config.json
+replay-profile.json
+hooks.json
 
 # 打包产物
 release/
