@@ -642,19 +642,44 @@ export interface RequestHeaderRule {
 }
 
 /**
- * 「真拦截」规则:命中 urlPattern(可选限定 method)的请求被拦在发送阶段,按 mode 处置——
+ * 「真拦截」规则:命中触发条件的请求被拦在发送阶段,按 mode 处置——
  * - `abort`(缺省):**硬阻断、不让其发出**,回放端 Playwright route.abort()(页面 fetch/XHR 收到网络错误);
  * - `hold`:**挂起等待人工放行**,回放端在 route handler 里 await 一个受控 promise 把请求悬在半空(pending,
  *   不发也不失败),同时把它登记到「被拦截请求列表」推给 UI,人工逐条选「继续(route.continue)」或
  *   「阻断(route.abort)」后才终结。仅回放端支持 hold(录制端 CDP 不涉及)。
- * 与 rules[]/resends[]/responseRules[] 物理分开存 blocks[](matchRule「首个命中即返回」,混数组会互抢首命中)。
- * 受 RequestRulesConfig.enabled 总开关统管(enabled=true 且有 blocks 才生效)。
+ *
+ * 触发条件不止 urlPattern:urlPattern / method / requestHeaders / query / bodyJson / bodyContains / when
+ * **各组均可选、缺省=不校验、全组 AND**——沿用 resends.responseTrigger 同款词汇但**判的是请求自身**
+ * (请求头 / query 参数 / 请求体)。旧配置(仅 urlPattern)完全向后兼容。命中判定见 request-rewrite 的
+ * `matchBlockRule`(遍历取**首个全条件命中**者,不会被仅 URL 命中却条件不符的前序规则遮蔽)。
+ *
+ * 与 rules[]/resends[]/responseRules[] 物理分开存 blocks[]。受 RequestRulesConfig.enabled 总开关统管
+ * (enabled=true 且有 blocks 才生效)。**仅回放端生效**(请求头 / 请求体在回放端 route handler 同步可得)。
  */
 export interface BlockRule {
     /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
     urlPattern: string;
     /** 可选,仅拦截指定 HTTP 方法(大小写不敏感,如 POST/GET);缺省=拦截所有方法 */
     method?: string;
+    /** 可选:**请求头条件**——这些头需全部相等才命中(AND,头名大小写不敏感,值精确相等);缺省=不校验 */
+    requestHeaders?: Record<string, string>;
+    /** 可选:**URL query 参数条件**——这些参数需全部相等才命中(AND,参数名大小写敏感,值精确相等);缺省=不校验 */
+    query?: Record<string, string>;
+    /**
+     * 可选:**请求体 JSON 条件**,点路径 → 期望值(如 `{"action":"delete"}`),全部满足才命中(AND)。
+     * 请求体先 JSON.parse,按点路径逐层取值,`String()` 后与期望值精确等值比较。解析失败 / 路径不存在 /
+     * 无请求体 → 该条件不命中。
+     */
+    bodyJson?: Record<string, string>;
+    /** 可选:**请求体原文子串**条件,这些子串需全部出现在请求体文本里才命中(AND,大小写敏感);无请求体 → 不命中 */
+    bodyContains?: string[];
+    /**
+     * 可选:**通用布尔表达式**(evalBoolExpr 引擎,同 responseTrigger.when),与上述静态条件 AND;空 → 无条件。
+     * 上下文变量:`method`/`url`/`body`(请求体 JSON.parse,失败=undefined)/`text`(请求体原文);
+     * 函数 `header(n)` 与 `reqHeader(n)`(**都取请求头**,兼容从 resends 迁移的写法)/`query(n)`(取 query 参数)/
+     * 内置 `contains`/`match`。求值出错或结果非真 → 判**不命中**(fail-open:不拦、放行)。
+     */
+    when?: string;
     /** 处置模式:`abort`=硬阻断(缺省,向后兼容旧配置);`hold`=挂起等人工放行(仅回放端) */
     mode?: 'abort' | 'hold';
 }

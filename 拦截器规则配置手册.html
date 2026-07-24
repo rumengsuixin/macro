@@ -511,8 +511,9 @@
                     <tr><td>重发时换整个 body 成一个本地文件(换视频)</td><td><code>resends</code></td><td>replaceWithFile</td></tr>
                     <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
                     <tr><td>改某请求的请求头(换 Authorization / 删探针头)</td><td><code>requestHeaderRules</code></td><td>when / setHeaders / removeHeaders</td></tr>
-                    <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method</td></tr>
-                    <tr><td>拦下关键请求、人工审查后再逐条放行 / 丢弃</td><td><code>blocks</code>(mode:hold)</td><td>urlPattern / mode</td></tr>
+                    <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method / requestHeaders / query / bodyJson / bodyContains / when</td></tr>
+                    <tr><td>同一 URL 只拦其中一类(按请求头 / 参数 / body 区分)</td><td><code>blocks</code></td><td>requestHeaders / query / bodyJson / bodyContains / when</td></tr>
+                    <tr><td>拦下关键请求、人工审查后再逐条放行 / 丢弃</td><td><code>blocks</code>(mode:hold)</td><td>urlPattern / mode + 上述条件</td></tr>
                     <tr><td>把上传接口的字节体存下来(抓视频原始字节)</td><td><code>dumps</code></td><td>urlPattern / extension</td></tr>
                     <tr><td>拦截时把整个上传体换成本地另一个文件</td><td><code>bodyReplaces</code></td><td>replaceWithFile</td></tr>
                     <tr><td>只想看有哪些请求 / 响应,不改任何东西</td><td><code>record</code></td><td>enabled / urlPattern</td></tr>
@@ -723,7 +724,8 @@
 
         <!-- ============ 5. blocks ============ -->
         <h2 id="blocks"><span class="num">5</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断 / 挂起放行）</h2>
-        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求被拦在<b>发送阶段</b>,按 <code class="inline">mode</code> 处置:<code class="inline">abort</code>(缺省)<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面 fetch/XHR 收到网络错误);<code class="inline">hold</code> <b>挂起等人工放行</b>——请求悬在半空(pending,不发也不失败),同时列进暂停模态框的「被拦截的请求」列表,人工逐条选「继续」放行或「阻断」丢弃。</p>
+        <p class="section-hint">命中<b>触发条件</b>的请求被拦在<b>发送阶段</b>,按 <code class="inline">mode</code> 处置:<code class="inline">abort</code>(缺省)<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面 fetch/XHR 收到网络错误);<code class="inline">hold</code> <b>挂起等人工放行</b>——请求悬在半空(pending,不发也不失败),同时列进暂停模态框的「被拦截的请求」列表,人工逐条选「继续」放行或「阻断」丢弃。</p>
+        <p class="section-hint">触发条件不止 <code class="inline">urlPattern</code>:<code class="inline">urlPattern</code> / <code class="inline">method</code> / <code class="inline">requestHeaders</code> / <code class="inline">query</code> / <code class="inline">bodyJson</code> / <code class="inline">bodyContains</code> / <code class="inline">when</code> <b>各组均可选、缺省=不校验、全组 AND</b>——沿用 <a href="#resends"><code class="inline">resends.responseTrigger</code></a> 同款词汇,但<b>判的是请求自身</b>(请求头 / query 参数 / 请求体)。旧配置(仅 <code class="inline">urlPattern</code>)完全向后兼容。多条规则按声明序逐条整条件判定,取<b>首个全条件命中</b>者(仅 URL 命中却条件不符的规则<b>不会遮蔽</b>后面本应命中的规则)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
             <table>
@@ -731,14 +733,23 @@
                 <tbody>
                     <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
                     <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只拦指定 HTTP 方法(如 POST/GET)</td><td>大小写不敏感;<b>缺省=拦该 URL 所有方法</b></td></tr>
+                    <tr><td class="field"><code>requestHeaders</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>请求头条件</b>:这些头需全部相等才命中(AND)</td><td>头名大小写不敏感、值精确相等;<b>缺省=不校验</b></td></tr>
+                    <tr><td class="field"><code>query</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>URL query 参数条件</b>:这些参数需全部相等才命中(AND)</td><td>参数名大小写敏感、值精确相等;<b>缺省=不校验</b></td></tr>
+                    <tr><td class="field"><code>bodyJson</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>请求体 JSON 条件</b>:点路径 → 期望值,全满足才命中(AND)</td><td>请求体 JSON.parse 后按点路径取值 <code class="inline">String()</code> 比对;解析失败 / 路径缺失 / 无请求体 → 不命中</td></tr>
+                    <tr><td class="field"><code>bodyContains</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td><b>请求体原文子串条件</b>:这些子串需全部出现才命中(AND)</td><td>大小写敏感、不解析 JSON;无请求体 → 不命中</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td><b>通用布尔表达式</b>(同 <code class="inline">responseTrigger.when</code> 引擎),与上述静态条件 AND</td><td>变量 <code class="inline">method</code>/<code class="inline">url</code>/<code class="inline">body</code>/<code class="inline">text</code>,函数 <code class="inline">header(n)</code>·<code class="inline">reqHeader(n)</code>(<b>都取请求头</b>)·<code class="inline">query(n)</code>·<code class="inline">contains</code>·<code class="inline">match</code>;<b>失败即安全</b>:表达式坏了 / 结果为假 → 不拦、放行</td></tr>
                     <tr><td class="field"><code>mode</code></td><td class="type">'abort' | 'hold'</td><td><span class="badge opt">可选</span></td><td><code class="inline">abort</code>=硬阻断;<code class="inline">hold</code>=挂起等人工放行(仅回放端)</td><td><b>缺省 / 非法值=abort</b>(向后兼容旧配置)</td></tr>
                 </tbody>
             </table>
 <pre><span class="c">// 屏蔽埋点上报;只拦 POST,GET 照常放行</span>
 { <span class="k">"urlPattern"</span>: <span class="s">"*/api/track*"</span> }
 { <span class="k">"urlPattern"</span>: <span class="s">"*/api/report*"</span>, <span class="k">"method"</span>: <span class="s">"POST"</span> }
-<span class="c">// 挂起下单确认请求,等人工在「被拦截的请求」列表里逐条放行/阻断</span>
-{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/confirm*"</span>, <span class="k">"mode"</span>: <span class="s">"hold"</span> }</pre>
+<span class="c">// 同一 URL:仅拦带标记头 + 特定 query 的那类请求(urlPattern 之外的复合匹配)</span>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/confirm*"</span>, <span class="k">"requestHeaders"</span>: { <span class="k">"x-env"</span>: <span class="s">"prod"</span> }, <span class="k">"query"</span>: { <span class="k">"confirm"</span>: <span class="s">"1"</span> }, <span class="k">"mode"</span>: <span class="s">"hold"</span> }
+<span class="c">// 只拦「删除且强制」的请求体:bodyJson 点路径 + bodyContains 子串 AND</span>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/op*"</span>, <span class="k">"bodyJson"</span>: { <span class="k">"action"</span>: <span class="s">"delete"</span> }, <span class="k">"bodyContains"</span>: [<span class="s">"\"force\":true"</span>] }
+<span class="c">// when 表达式:金额大于 1000 且环境为 prod 才拦</span>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/pay*"</span>, <span class="k">"when"</span>: <span class="s">"reqHeader('x-env')=='prod' &amp;&amp; body.amount&gt;1000"</span>, <span class="k">"mode"</span>: <span class="s">"hold"</span> }</pre>
             <div class="note info"><span class="nt">hold 常配 pause 步骤</span>回放中通常用「暂停,等待人工操作」步骤卡住浏览器让人工操作;此时人工触发的、命中 hold 规则的请求会挂进同一个暂停模态框的列表,一处审查、逐条放行。</div>
         </div>
 

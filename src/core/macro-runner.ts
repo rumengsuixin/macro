@@ -41,6 +41,7 @@ import { extract, type PaginationContext } from './extractor';
 import { DownloadManager } from './download-manager';
 import {
     matchRule,
+    matchBlockRule,
     globToRegExp,
     decideBodyType,
     rewritePostBody,
@@ -577,14 +578,17 @@ export class MacroRunner {
                     await route.continue();
                     return;
                 }
-                // 真拦截:命中 block 规则(可选限定 method)在发送阶段拦下,按 mode 处置。
-                // 放在 isResendOrigin 之后 → 工具自己发的重发请求不会被自己阻断;放在改写之前 → 命中即拦最干净。
-                const blockRule = matchRule(this.blockRules, request.url());
-                if (
-                    blockRule &&
-                    (!blockRule.method ||
-                        blockRule.method.toUpperCase() === request.method().toUpperCase())
-                ) {
+                // 真拦截:命中 block 规则(urlPattern + method + 请求头 / query / body / when 复合 AND)在
+                // 发送阶段拦下,按 mode 处置。放在 isResendOrigin 之后 → 工具自己发的重发请求不会被自己阻断;
+                // 放在改写之前 → 命中即拦最干净。请求头 / 请求体在回放端 route handler 同步可得。
+                const blockRule = matchBlockRule(
+                    this.blockRules,
+                    request.url(),
+                    request.method(),
+                    request.headers(),
+                    request.postData()
+                );
+                if (blockRule) {
                     if (blockRule.mode === 'hold') {
                         // 挂起模式:await onHold 把请求悬在半空(pending,不发也不失败),等人工在 UI 上决定。
                         // 运行结束/取消时主进程会把未决 hold 统一 resolve('abort'),此后 route 可能已失效,

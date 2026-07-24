@@ -21,6 +21,8 @@ const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 // 服务端命中记录:记下真正到达服务器的路径
 const hits = new Set();
+// /gated 同一 URL 被请求两次(带/不带标记头),记到达次数,期望恰好 1(仅不带头的到达)
+let gatedHits = 0;
 
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?'))) {
@@ -33,7 +35,13 @@ const server = http.createServer((req, res) => {
     fetch('/allowed').then(function () { results.allowed = 'ok'; },
                            function (e) { results.allowed = 'err:' + String(e); }),
     fetch('/blocked').then(function () { results.blocked = 'ok'; },
-                           function (e) { results.blocked = 'err:' + String(e); })
+                           function (e) { results.blocked = 'err:' + String(e); }),
+    // 同一 URL /gated:带标记头 x-block-me:1 的这次应被拦(命中 requestHeaders 条件)
+    fetch('/gated', { headers: { 'x-block-me': '1' } }).then(function () { results.gatedMarked = 'ok'; },
+                           function (e) { results.gatedMarked = 'err:' + String(e); }),
+    // 同一 URL /gated:不带标记头的这次应放行(URL 命中但请求头不符 → 不拦)
+    fetch('/gated').then(function () { results.gatedPlain = 'ok'; },
+                         function (e) { results.gatedPlain = 'err:' + String(e); })
   ]).then(function () {
     var d = document.createElement('div');
     d.id = 'done';
@@ -56,6 +64,14 @@ const server = http.createServer((req, res) => {
         res.end('blocked-should-not-arrive');
         return;
     }
+    if (req.method === 'GET' && (req.url === '/gated' || req.url.startsWith('/gated?'))) {
+        // /gated 同一 URL 被请求两次:带 x-block-me:1 的那次应被拦(不到这里),不带的应到这里。
+        // 计数到达次数,期望恰好 1(证明 requestHeaders 条件真按请求头区分了同 URL 的两次请求)。
+        gatedHits += 1;
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('gated-arrived');
+        return;
+    }
     res.writeHead(404);
     res.end('not found');
 });
@@ -69,7 +85,11 @@ const sessionOptions = {
     requestRules: {
         enabled: true,
         rules: [],
-        blocks: [{ urlPattern: '*/blocked*' }],
+        blocks: [
+            { urlPattern: '*/blocked*' },
+            // 请求头门控:同一 URL /gated,仅当携带 x-block-me:1 才拦(证 urlPattern 之外的复合匹配)
+            { urlPattern: '*/gated*', requestHeaders: { 'x-block-me': '1' } },
+        ],
     },
 };
 
@@ -108,19 +128,24 @@ console.log('\n========== 验证结果 ==========');
 console.log('result.ok =', result && result.ok);
 console.log('服务端命中 /allowed =', hits.has('/allowed'));
 console.log('服务端命中 /blocked =', hits.has('/blocked'), '(期望 false)');
+console.log('服务端 /gated 到达次数 =', gatedHits, '(期望 1:仅不带标记头的那次到达)');
 
 const pass =
     result &&
     result.ok === true &&
     hits.has('/allowed') === true && // 放行的请求正常到达
-    hits.has('/blocked') === false; // 命中 block 的请求被硬阻断、服务端永不收到
+    hits.has('/blocked') === false && // 命中 block 的请求被硬阻断、服务端永不收到
+    gatedHits === 1; // 同一 URL:带 x-block-me:1 的被拦(未到达)、不带的放行(到达)→ 恰好 1
 
 if (pass) {
     console.log(
-        '✅ 回放端真拦截生效:/blocked 被 route.abort() 硬阻断、服务端从未收到;/allowed 正常放行到达。'
+        '✅ 回放端真拦截生效:/blocked 被 route.abort() 硬阻断、服务端从未收到;/allowed 正常放行到达;\n' +
+            '   /gated 同一 URL:带标记头 x-block-me:1 的被请求头条件拦下、不带的放行(到达 1 次)——urlPattern 之外的复合匹配生效。'
     );
     process.exit(0);
 } else {
-    console.log('❌ 真拦截未达预期(期望 /allowed 到达且 /blocked 未到达)。');
+    console.log(
+        '❌ 真拦截未达预期(期望 /allowed 到达、/blocked 未到达、/gated 恰好到达 1 次)。'
+    );
     process.exit(1);
 }

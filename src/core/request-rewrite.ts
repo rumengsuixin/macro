@@ -10,8 +10,9 @@ import type {
     ResendRule,
     ResendResponseTrigger,
     RequestSectionToggles,
+    BlockRule,
 } from './macro-types';
-import { tryEvalTriggerWhen, checkExprSyntax, type ExprContext } from './expr-eval';
+import { tryEvalTriggerWhen, checkExprSyntax, evalBoolExpr, type ExprContext } from './expr-eval';
 
 // 再导出引擎表面:让 runner 与自检脚本仍从单一入口 request-rewrite 取(与现有 import 风格一致)
 export { tryEvalTriggerWhen, checkExprSyntax };
@@ -47,6 +48,89 @@ export function matchRule<T extends { urlPattern: string }>(rules: T[], url: str
             }
         } catch {
             /* 非法 pattern 跳过 */
+        }
+    }
+    return null;
+}
+
+/**
+ * 判断单条 blocks「真拦截」规则是否命中该请求:按 urlPattern → method → requestHeaders → query →
+ * body(bodyContains/bodyJson)→ when 顺序**逐组 AND**,全过才 true;各组缺省=不校验。
+ * - urlPattern:CDP glob 整串匹配(非法 pattern 视作不命中);
+ * - method:大小写不敏感相等,缺省=任意方法;
+ * - requestHeaders:请求头全等(复用 headersAllEqual,头名大小写不敏感);
+ * - query:URL query 参数全等(queryAllEqual);
+ * - body:请求体子串 + 点路径(bodyConditionsMet,与响应触发同款);
+ * - when:通用布尔表达式,读请求侧上下文;**失败即安全**(解析/求值出错或结果为假 → 不命中,即不拦、放行)。
+ * 纯逻辑、零 IO,录制端不接 blocks,仅回放端调用(headers/bodyText 由 route handler 同步取得)。
+ */
+export function blockRuleMatches(
+    rule: BlockRule,
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    bodyText: string | null
+): boolean {
+    try {
+        if (!globToRegExp(rule.urlPattern).test(url)) {
+            return false;
+        }
+    } catch {
+        return false; // 非法 pattern → 不命中
+    }
+    if (rule.method && rule.method.toUpperCase() !== method.toUpperCase()) {
+        return false;
+    }
+    if (!headersAllEqual(headers, rule.requestHeaders)) {
+        return false;
+    }
+    if (!queryAllEqual(url, rule.query)) {
+        return false;
+    }
+    if (!bodyConditionsMet(bodyText, rule.bodyContains, rule.bodyJson)) {
+        return false;
+    }
+    if (rule.when && rule.when.trim()) {
+        let body: unknown;
+        if (bodyText) {
+            try {
+                body = JSON.parse(bodyText);
+            } catch {
+                body = undefined; // 非合法 JSON → body 为 undefined,用户可用 !body / body && … 安全短路
+            }
+        }
+        const r = evalBoolExpr(
+            rule.when,
+            { method, url, body, text: bodyText },
+            {
+                // header/reqHeader 都取**请求头**(blocks 无响应),兼容从 resends 迁移的写法;query 取 query 参数
+                header: (...a) => headerValue(headers, String(a[0])),
+                reqHeader: (...a) => headerValue(headers, String(a[0])),
+                query: (...a) => queryValue(url, String(a[0])),
+            }
+        );
+        if (!r.ok || !r.value) {
+            return false; // 失败即安全:表达式坏了 / 结果为假 → 不拦
+        }
+    }
+    return true;
+}
+
+/**
+ * 在 blocks 规则表里找到**首个全条件命中**该请求的规则;无则返回 null。
+ * 与 matchRule 的差异:matchRule 只取首个 URL 命中即返回,若该规则的头/体/when 条件不满足会**遮蔽**
+ * 后面本应命中的规则;故 blocks 必须整条件判定后再决定是否跳到下一条(逐条 blockRuleMatches)。
+ */
+export function matchBlockRule(
+    rules: BlockRule[],
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    bodyText: string | null
+): BlockRule | null {
+    for (const rule of rules) {
+        if (blockRuleMatches(rule, url, method, headers, bodyText)) {
+            return rule;
         }
     }
     return null;
@@ -178,6 +262,37 @@ export function headerValue(headers: Record<string, string>, name: string): stri
     return '';
 }
 
+/** 从 URL 取某 query 参数值(参数名大小写敏感);无该参数 / URL 非法 → 返回 '' */
+export function queryValue(url: string, name: string): string {
+    try {
+        return new URL(url).searchParams.get(name) ?? '';
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * 判断 URL 的 query 参数是否**全部相等**(AND,参数名大小写敏感、值精确相等);expected 缺省/空 → 恒真。
+ * URL 解析失败(理论上回放端 url 恒合法)→ 有条件时返回 false(失败即安全:不误判命中)。
+ */
+export function queryAllEqual(url: string, expected?: Record<string, string>): boolean {
+    if (!expected || Object.keys(expected).length === 0) {
+        return true;
+    }
+    let params: URLSearchParams;
+    try {
+        params = new URL(url).searchParams;
+    } catch {
+        return false;
+    }
+    for (const [name, val] of Object.entries(expected)) {
+        if (params.get(name) !== val) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ── 「响应头条件改写」支路的共享纯逻辑(录制端 CDP 与回放端 Playwright 共用) ──
 
 /**
@@ -234,6 +349,48 @@ export function getJsonByPath(obj: unknown, path: string): unknown {
         cur = (cur as Record<string, unknown>)[p];
     }
     return cur;
+}
+
+/**
+ * 判断一段 body 文本是否**同时**满足 bodyContains(原文子串,AND,大小写敏感)与 bodyJson(点路径→期望值,AND)。
+ * - bodyContains:bodyText 为 null → 不满足;否则每个子串都须 includes(先判,免不必要的 JSON.parse);
+ * - bodyJson:bodyText 为 null 或 JSON.parse 失败 → 不满足;否则逐点路径 String(取值)===期望值。
+ * 两组均可选、缺省=不校验(恒真)。被 responseTriggerMet(响应体)与 blockRuleMatches(请求体)共用,
+ * 保证请求/响应两侧 body 判定逻辑逐字一致。
+ */
+export function bodyConditionsMet(
+    bodyText: string | null,
+    bodyContains?: string[],
+    bodyJson?: Record<string, string>
+): boolean {
+    if (bodyContains && bodyContains.length > 0) {
+        if (bodyText === null) {
+            return false;
+        }
+        for (const sub of bodyContains) {
+            if (!bodyText.includes(sub)) {
+                return false;
+            }
+        }
+    }
+    if (bodyJson && Object.keys(bodyJson).length > 0) {
+        if (bodyText === null) {
+            return false;
+        }
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(bodyText);
+        } catch {
+            return false;
+        }
+        for (const [path, expected] of Object.entries(bodyJson)) {
+            const val = getJsonByPath(parsed, path);
+            if (val === undefined || String(val) !== expected) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /**
@@ -308,33 +465,9 @@ export function responseTriggerMet(
     if (!headersAllEqual(requestHeaders, trigger.requestHeaders)) {
         return false;
     }
-    // bodyContains 先判(纯子串,免不必要的 JSON.parse)
-    if (trigger.bodyContains && trigger.bodyContains.length > 0) {
-        if (bodyText === null) {
-            return false;
-        }
-        for (const sub of trigger.bodyContains) {
-            if (!bodyText.includes(sub)) {
-                return false;
-            }
-        }
-    }
-    if (trigger.bodyJson && Object.keys(trigger.bodyJson).length > 0) {
-        if (bodyText === null) {
-            return false;
-        }
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(bodyText);
-        } catch {
-            return false;
-        }
-        for (const [path, expected] of Object.entries(trigger.bodyJson)) {
-            const val = getJsonByPath(parsed, path);
-            if (val === undefined || String(val) !== expected) {
-                return false;
-            }
-        }
+    // bodyContains(纯子串)先判、bodyJson(点路径)后判——两段共享逻辑抽到 bodyConditionsMet
+    if (!bodyConditionsMet(bodyText, trigger.bodyContains, trigger.bodyJson)) {
+        return false;
     }
     // when:JS 风格布尔表达式,放在所有静态条件之后(与它们 AND);空 → 无条件。
     // 失败即安全:解析失败 / 求值异常 / 结果为假一律不命中(绝不因表达式坏了误开连环)。

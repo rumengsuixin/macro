@@ -414,6 +414,30 @@ function normalizeBlockRule(raw: unknown): BlockRule | null {
     if (typeof r.method === 'string' && r.method.trim()) {
         rule.method = r.method;
     }
+    // 复合触发条件(各组可选、缺省不校验、全组 AND):照 normalizeResponseTrigger 同款归一化
+    const requestHeaders = normalizeStringMap(r.requestHeaders);
+    if (requestHeaders) {
+        rule.requestHeaders = requestHeaders;
+    }
+    const query = normalizeStringMap(r.query);
+    if (query) {
+        rule.query = query;
+    }
+    const bodyJson = normalizeStringMap(r.bodyJson);
+    if (bodyJson) {
+        rule.bodyJson = bodyJson;
+    }
+    if (Array.isArray(r.bodyContains)) {
+        // 只保留非空字符串子串(空串 includes 恒真、无意义故剔除);结果非空才写
+        const subs = r.bodyContains.filter((x): x is string => typeof x === 'string' && x.length > 0);
+        if (subs.length) {
+            rule.bodyContains = subs;
+        }
+    }
+    // when:原样保留字符串(不在此解析);非法表达式不丢规则、不剥字段——运行期 fail-open(判不命中=不拦)+ 诊断
+    if (typeof r.when === 'string' && r.when.trim()) {
+        rule.when = r.when;
+    }
     // mode 白名单:仅 'hold' 显式生效,其余(含缺省 / 非法值)一律视作 'abort'(向后兼容旧配置)
     if (r.mode === 'hold') {
         rule.mode = 'hold';
