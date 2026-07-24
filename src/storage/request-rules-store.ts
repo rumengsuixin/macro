@@ -135,10 +135,15 @@ function templateConfig(): RequestRulesConfig {
                 removeHeaders: [],
             },
         ],
-        // blocks:「真拦截(硬阻断)」支路(受 enabled 总开关管)。命中 urlPattern 的请求**直接阻断、
-        // 不发出**(回放端 route.abort(),页面 fetch/XHR 收到网络错误)。method 可选,只拦指定方法;缺省拦所有。
-        // 与 rules/resends/responseRules 物理分开写在 blocks 数组。enabled=false 时不生效。
-        blocks: [{ urlPattern: '*/api/track*' }],
+        // blocks:「真拦截」支路(受 enabled 总开关管)。命中 urlPattern 的请求被拦在发送阶段,按 mode 处置:
+        // - mode 缺省 / 'abort':**直接阻断、不发出**(回放端 route.abort(),页面 fetch/XHR 收到网络错误);
+        // - mode:'hold':**挂起等人工放行**(仅回放端)——请求悬在半空(pending,不发也不失败),同时在暂停
+        //   模态框的「被拦截的请求」列表里列出,人工逐条选「继续」放行(route.continue)或「阻断」丢弃(route.abort)。
+        // method 可选,只拦指定方法;缺省拦所有。与 rules/resends/responseRules 物理分开。enabled=false 时不生效。
+        blocks: [
+            { urlPattern: '*/api/track*' },
+            { urlPattern: '*/api/confirm*', mode: 'hold' },
+        ],
         // dumps:「请求体落盘」支路(受 enabled 总开关管,仅回放端)。命中 urlPattern 的请求,把其
         // **完整二进制请求体**(从第一字节到最后一字节)写成一个文件到 dumps/(缺省 .mp4)。用于抓取
         // 上传型接口的字节体(如把视频上传请求体存成 mp4)。method 可选只落指定方法;缺省落所有方法。
@@ -408,6 +413,10 @@ function normalizeBlockRule(raw: unknown): BlockRule | null {
     const rule: BlockRule = { urlPattern: r.urlPattern };
     if (typeof r.method === 'string' && r.method.trim()) {
         rule.method = r.method;
+    }
+    // mode 白名单:仅 'hold' 显式生效,其余(含缺省 / 非法值)一律视作 'abort'(向后兼容旧配置)
+    if (r.mode === 'hold') {
+        rule.mode = 'hold';
     }
     return rule;
 }

@@ -22,6 +22,8 @@ import type {
     RunError,
     ExtractRow,
     OnPause,
+    OnHold,
+    HoldDecision,
     SessionOptions,
     ReplayProfile,
     OnErrorPolicy,
@@ -100,6 +102,11 @@ export class MacroRunner {
     private replay: ReplayProfile;
     /** 人工介入暂停回调:由主进程注入,负责通知 UI 并等待用户点继续;无则默认立即放行 */
     private onPause: OnPause;
+    /**
+     * 挂起放行回调:命中 blocks 中 mode:'hold' 规则时调用,await 直到人工在 UI 上选 continue/abort。
+     * 由主进程经 setOnHold 注入;缺省(无头/单测)立即 continue,避免永久挂死回放。
+     */
+    private onHold: OnHold = async (): Promise<HoldDecision> => 'continue';
     /** 会话选项:持久化目录 / 注入的 cookies;由主进程组装,缺省则用临时 profile、不注入 */
     private session: SessionOptions;
     /** 下载文件保存目录;缺省回退到 errorDir 同级的 downloads */
@@ -198,6 +205,14 @@ export class MacroRunner {
         this.downloadDir = downloadDir ?? path.join(errorDir, '..', 'downloads');
         this.timelinesDir = timelinesDir ?? path.join(errorDir, '..', 'timelines');
         this.dumpsDir = dumpsDir ?? path.join(errorDir, '..', 'dumps');
+    }
+
+    /**
+     * 注入「挂起放行」回调(主进程在 new 之后调用)。与 onPause 走构造入参不同,此处用 setter
+     * 以避免动 7 个位置参数的构造签名、破坏所有既有 new MacroRunner 调用点。缺省保持默认立即 continue。
+     */
+    setOnHold(cb: OnHold): void {
+        this.onHold = cb;
     }
 
     /**
@@ -562,7 +577,7 @@ export class MacroRunner {
                     await route.continue();
                     return;
                 }
-                // 真拦截(硬阻断):命中 block 规则(可选限定 method)直接 abort,不放行——本模块唯一不放行分支。
+                // 真拦截:命中 block 规则(可选限定 method)在发送阶段拦下,按 mode 处置。
                 // 放在 isResendOrigin 之后 → 工具自己发的重发请求不会被自己阻断;放在改写之前 → 命中即拦最干净。
                 const blockRule = matchRule(this.blockRules, request.url());
                 if (
@@ -570,6 +585,28 @@ export class MacroRunner {
                     (!blockRule.method ||
                         blockRule.method.toUpperCase() === request.method().toUpperCase())
                 ) {
+                    if (blockRule.mode === 'hold') {
+                        // 挂起模式:await onHold 把请求悬在半空(pending,不发也不失败),等人工在 UI 上决定。
+                        // 运行结束/取消时主进程会把未决 hold 统一 resolve('abort'),此后 route 可能已失效,
+                        // continue/abort 抛错由本 handler 末尾的 catch 兜住,安全。
+                        logInfo(
+                            `回放请求拦截器:已挂起等待人工放行 [${request.method()} ${request.url()}]`
+                        );
+                        const decision = await this.onHold({
+                            url: request.url(),
+                            method: request.method(),
+                            resourceType: request.resourceType(),
+                        });
+                        if (decision === 'abort') {
+                            logInfo(`回放请求拦截器:人工阻断 [${request.method()} ${request.url()}]`);
+                            await route.abort();
+                        } else {
+                            logInfo(`回放请求拦截器:人工放行 [${request.method()} ${request.url()}]`);
+                            await route.continue();
+                        }
+                        return;
+                    }
+                    // 硬阻断(缺省 abort):直接丢弃、不放行——页面 fetch/XHR 收到网络错误。
                     logInfo(`回放请求拦截器:已阻断 [${request.method()} ${request.url()}]`);
                     await route.abort();
                     return;

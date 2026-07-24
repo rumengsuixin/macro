@@ -392,7 +392,7 @@
         <a href="#resends"><span class="idx">2</span>resends 重发</a>
         <a href="#responseRules"><span class="idx">3</span>responseRules 响应头改写</a>
         <a href="#requestHeaderRules"><span class="idx">4</span>requestHeaderRules 请求头改写</a>
-        <a href="#blocks"><span class="idx">5</span>blocks 硬阻断</a>
+        <a href="#blocks"><span class="idx">5</span>blocks 硬阻断 / 挂起</a>
         <a href="#dumps"><span class="idx">6</span>dumps 请求体落盘</a>
         <a href="#bodyReplaces"><span class="idx">7</span>bodyReplaces 请求体替换</a>
 
@@ -422,7 +422,7 @@
             <a class="ov-item" href="#resends"><div class="k">resends[]</div><div class="d">命中后延时改参重发一个新请求</div></a>
             <a class="ov-item" href="#responseRules"><div class="k">responseRules[]</div><div class="d">按条件改写响应头</div></a>
             <a class="ov-item" href="#requestHeaderRules"><div class="k">requestHeaderRules[]</div><div class="d">按条件改写原始请求的请求头</div></a>
-            <a class="ov-item" href="#blocks"><div class="k">blocks[]</div><div class="d">硬阻断,命中即不发出</div></a>
+            <a class="ov-item" href="#blocks"><div class="k">blocks[]</div><div class="d">真拦截:硬阻断 / 挂起等人工放行</div></a>
             <a class="ov-item" href="#dumps"><div class="k">dumps[]</div><div class="d">把请求体完整字节落成文件</div></a>
             <a class="ov-item" href="#bodyReplaces"><div class="k">bodyReplaces[]</div><div class="d">用本地文件整体替换请求体</div></a>
             <a class="ov-item" href="#record"><div class="k">record</div><div class="d">只记录不修改,独立开关</div></a>
@@ -444,7 +444,7 @@
                     <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应头改写规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>requestHeaderRules</code></td><td class="type">RequestHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>请求头改写规则列表</td><td>无</td></tr>
-                    <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>硬阻断规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>真拦截规则列表(mode:abort 硬阻断 / hold 挂起放行)</td><td>无</td></tr>
                     <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>bodyReplaces</code></td><td class="type">BodyReplaceRule[]</td><td><span class="badge opt">可选</span></td><td>请求体整体替换规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>record</code></td><td class="type">TimelineRecordConfig</td><td><span class="badge opt">可选</span></td><td>只记录不修改支路(独立开关)</td><td>不记录</td></tr>
@@ -512,6 +512,7 @@
                     <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
                     <tr><td>改某请求的请求头(换 Authorization / 删探针头)</td><td><code>requestHeaderRules</code></td><td>when / setHeaders / removeHeaders</td></tr>
                     <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method</td></tr>
+                    <tr><td>拦下关键请求、人工审查后再逐条放行 / 丢弃</td><td><code>blocks</code>(mode:hold)</td><td>urlPattern / mode</td></tr>
                     <tr><td>把上传接口的字节体存下来(抓视频原始字节)</td><td><code>dumps</code></td><td>urlPattern / extension</td></tr>
                     <tr><td>拦截时把整个上传体换成本地另一个文件</td><td><code>bodyReplaces</code></td><td>replaceWithFile</td></tr>
                     <tr><td>只想看有哪些请求 / 响应,不改任何东西</td><td><code>record</code></td><td>enabled / urlPattern</td></tr>
@@ -721,8 +722,8 @@
         </div>
 
         <!-- ============ 5. blocks ============ -->
-        <h2 id="blocks"><span class="num">5</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断）</h2>
-        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面的 fetch/XHR 收到网络错误)。这是本模块唯一「不放行」的分支。</p>
+        <h2 id="blocks"><span class="num">5</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断 / 挂起放行）</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求被拦在<b>发送阶段</b>,按 <code class="inline">mode</code> 处置:<code class="inline">abort</code>(缺省)<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面 fetch/XHR 收到网络错误);<code class="inline">hold</code> <b>挂起等人工放行</b>——请求悬在半空(pending,不发也不失败),同时列进暂停模态框的「被拦截的请求」列表,人工逐条选「继续」放行或「阻断」丢弃。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
             <table>
@@ -730,11 +731,15 @@
                 <tbody>
                     <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃</td></tr>
                     <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只拦指定 HTTP 方法(如 POST/GET)</td><td>大小写不敏感;<b>缺省=拦该 URL 所有方法</b></td></tr>
+                    <tr><td class="field"><code>mode</code></td><td class="type">'abort' | 'hold'</td><td><span class="badge opt">可选</span></td><td><code class="inline">abort</code>=硬阻断;<code class="inline">hold</code>=挂起等人工放行(仅回放端)</td><td><b>缺省 / 非法值=abort</b>(向后兼容旧配置)</td></tr>
                 </tbody>
             </table>
-<pre><span class="c">// 屏蔽埋点上报;下例只拦 POST,GET 照常放行</span>
+<pre><span class="c">// 屏蔽埋点上报;只拦 POST,GET 照常放行</span>
 { <span class="k">"urlPattern"</span>: <span class="s">"*/api/track*"</span> }
-{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/report*"</span>, <span class="k">"method"</span>: <span class="s">"POST"</span> }</pre>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/report*"</span>, <span class="k">"method"</span>: <span class="s">"POST"</span> }
+<span class="c">// 挂起下单确认请求,等人工在「被拦截的请求」列表里逐条放行/阻断</span>
+{ <span class="k">"urlPattern"</span>: <span class="s">"*/api/confirm*"</span>, <span class="k">"mode"</span>: <span class="s">"hold"</span> }</pre>
+            <div class="note info"><span class="nt">hold 常配 pause 步骤</span>回放中通常用「暂停,等待人工操作」步骤卡住浏览器让人工操作;此时人工触发的、命中 hold 规则的请求会挂进同一个暂停模态框的列表,一处审查、逐条放行。</div>
         </div>
 
         <!-- ============ 6. dumps ============ -->

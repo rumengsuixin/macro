@@ -33,6 +33,9 @@ import type {
     PostProcessResult,
     OnPause,
     PauseInfo,
+    OnHold,
+    HoldInfo,
+    HoldDecision,
     BrowserConfig,
     BrowserCookie,
     SessionOptions,
@@ -401,6 +404,52 @@ function registerIpc(): void {
                 }
             });
 
+        // 被挂起请求(blocks 的 mode:'hold')的人工放行回调:每个挂起请求分配 holdId,pendingHolds 存其 resolve。
+        // 与 onPause 同构(await promise 直到 UI 信号),但按 holdId 隔离以支持同时挂起多条请求。
+        const pendingHolds = new Map<number, (d: HoldDecision) => void>();
+        let holdSeq = 0;
+        const onHold: OnHold = (info: HoldInfo) =>
+            new Promise<HoldDecision>((resolve) => {
+                const holdId = ++holdSeq;
+                pendingHolds.set(holdId, resolve);
+                if (!wc.isDestroyed()) {
+                    wc.send('request-held', { runId, holdId, ...info });
+                }
+            });
+        // 人工处置信号:continue=放行 / abort=丢弃;按 runId + holdId 双重隔离,防跨运行/跨请求串信号
+        const decideHold = (holdId: number, decision: HoldDecision): void => {
+            const resolve = pendingHolds.get(holdId);
+            if (resolve) {
+                pendingHolds.delete(holdId);
+                resolve(decision);
+            }
+        };
+        const continueReqListener = (_ev: unknown, p: { runId: number; holdId: number }): void => {
+            if (p && p.runId === runId) {
+                decideHold(p.holdId, 'continue');
+            }
+        };
+        const abortReqListener = (_ev: unknown, p: { runId: number; holdId: number }): void => {
+            if (p && p.runId === runId) {
+                decideHold(p.holdId, 'abort');
+            }
+        };
+        ipcMain.on('continue-request', continueReqListener);
+        ipcMain.on('abort-request', abortReqListener);
+        listeners.push(() => {
+            ipcMain.removeListener('continue-request', continueReqListener);
+            ipcMain.removeListener('abort-request', abortReqListener);
+            // 运行结束/窗口关闭:未决挂起请求统一 abort(避免 route handler 永久 await + promise 泄漏),
+            // 并通知渲染进程清空「被拦截请求」列表。
+            for (const resolve of pendingHolds.values()) {
+                resolve('abort');
+            }
+            pendingHolds.clear();
+            if (!wc.isDestroyed()) {
+                wc.send('request-holds-cleared', { runId });
+            }
+        });
+
         // 运行前组装会话选项:持久化目录 + 录制 cookie 注入(均按 browser-config.json 开关)
         ensureDirs();
         const sessionOptions = await buildSessionOptions();
@@ -413,6 +462,8 @@ function registerIpc(): void {
             timelinesDir,
             dumpsDir
         );
+        // 注入挂起放行回调(setter 而非构造入参,避免动构造签名)
+        runner.setOnHold(onHold);
 
         // 「停止回放」信号:匹配 runId 时调用 runner.cancel() 主动中止(与 resume 同一 runId 隔离机制)
         const stopListener = (_ev: unknown, id: number): void => {

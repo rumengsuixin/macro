@@ -31,6 +31,15 @@ export interface PauseEvent {
     timeout?: number;
 }
 
+/** 被拦截(挂起)请求事件:命中 blocks 中 mode:'hold' 规则时主进程推送,等人工放行/阻断 */
+export interface HeldRequestEvent {
+    runId: number;
+    holdId: number;
+    url: string;
+    method: string;
+    resourceType?: string;
+}
+
 const api = {
     /** 获取 webview 录制 preload 的绝对路径 */
     getWebviewPreloadPath: (): Promise<string> => ipcRenderer.invoke('get-webview-preload-path'),
@@ -169,6 +178,26 @@ const api = {
     /** 通知主进程「停止」回放(需带回对应的 runId) */
     stopMacro: (runId: number): void => {
         ipcRenderer.send('stop-macro', runId);
+    },
+
+    /** 订阅「请求被挂起」推送(blocks mode:'hold' 命中):回调收到待放行的请求信息 */
+    onRequestHeld: (callback: (info: HeldRequestEvent) => void): void => {
+        ipcRenderer.on('request-held', (_event, info: HeldRequestEvent) => callback(info));
+    },
+
+    /** 订阅「挂起请求全部清空」推送(回放结束/停止时):回调清空 UI 列表 */
+    onRequestHoldsCleared: (callback: (info: { runId: number }) => void): void => {
+        ipcRenderer.on('request-holds-cleared', (_event, info: { runId: number }) => callback(info));
+    },
+
+    /** 放行某条被挂起的请求(route.continue) */
+    continueRequest: (runId: number, holdId: number): void => {
+        ipcRenderer.send('continue-request', { runId, holdId });
+    },
+
+    /** 阻断某条被挂起的请求(route.abort) */
+    abortRequest: (runId: number, holdId: number): void => {
+        ipcRenderer.send('abort-request', { runId, holdId });
     },
 };
 

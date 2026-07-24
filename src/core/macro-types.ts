@@ -172,6 +172,29 @@ export interface PauseInfo {
 /** 暂停回调:回放引擎执行到 pause 步骤时调用,promise resolve 表示用户已点继续 */
 export type OnPause = (info: PauseInfo) => Promise<void>;
 
+/**
+ * 被挂起请求的信息:命中 `blocks` 中 `mode:'hold'` 规则的请求被回放引擎挂起时,传给 onHold 回调
+ * 供 UI 展示。holdId 由主进程赋(回放引擎不感知,只透传回调返回的决定)。
+ */
+export interface HoldInfo {
+    /** 被拦截请求的完整 URL */
+    url: string;
+    /** HTTP 方法(大写,如 GET/POST) */
+    method: string;
+    /** 资源类型(Playwright request.resourceType(),如 xhr/fetch/document);仅供展示 */
+    resourceType?: string;
+}
+
+/** 人工对被挂起请求的处置:continue=放行(route.continue)、abort=丢弃(route.abort) */
+export type HoldDecision = 'continue' | 'abort';
+
+/**
+ * 挂起放行回调:回放引擎命中 `mode:'hold'` 的 block 规则时调用,await 其 promise 把请求悬在半空,
+ * resolve 的值即人工在 UI 上做出的处置(continue/abort)。无回调(无头/单测)时引擎默认立即 continue,
+ * 避免永久挂死回放。与 [[OnPause]] 同构(都是「await promise 直到 UI 信号」)。
+ */
+export type OnHold = (info: HoldInfo) => Promise<HoldDecision>;
+
 /** 字段提取类型 */
 export type FieldType = 'text' | 'html' | 'attr' | 'href' | 'src';
 
@@ -619,16 +642,21 @@ export interface RequestHeaderRule {
 }
 
 /**
- * 「真拦截(硬阻断)」规则:命中 urlPattern(可选限定 method)的请求**直接阻断、不让其发出**——
- * 回放端 Playwright route.abort()(页面的 fetch/XHR 收到网络错误)。与 rules[]/resends[]/responseRules[]
- * 物理分开存 blocks[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
- * 总开关统管(enabled=true 且有 blocks 才生效)。这是本模块唯一「不放行」的分支。
+ * 「真拦截」规则:命中 urlPattern(可选限定 method)的请求被拦在发送阶段,按 mode 处置——
+ * - `abort`(缺省):**硬阻断、不让其发出**,回放端 Playwright route.abort()(页面 fetch/XHR 收到网络错误);
+ * - `hold`:**挂起等待人工放行**,回放端在 route handler 里 await 一个受控 promise 把请求悬在半空(pending,
+ *   不发也不失败),同时把它登记到「被拦截请求列表」推给 UI,人工逐条选「继续(route.continue)」或
+ *   「阻断(route.abort)」后才终结。仅回放端支持 hold(录制端 CDP 不涉及)。
+ * 与 rules[]/resends[]/responseRules[] 物理分开存 blocks[](matchRule「首个命中即返回」,混数组会互抢首命中)。
+ * 受 RequestRulesConfig.enabled 总开关统管(enabled=true 且有 blocks 才生效)。
  */
 export interface BlockRule {
     /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
     urlPattern: string;
     /** 可选,仅拦截指定 HTTP 方法(大小写不敏感,如 POST/GET);缺省=拦截所有方法 */
     method?: string;
+    /** 处置模式:`abort`=硬阻断(缺省,向后兼容旧配置);`hold`=挂起等人工放行(仅回放端) */
+    mode?: 'abort' | 'hold';
 }
 
 /**

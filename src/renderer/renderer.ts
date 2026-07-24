@@ -98,6 +98,15 @@ interface PauseEvent {
     timeout?: number;
 }
 
+/** 被拦截(挂起)请求事件:命中 blocks 中 mode:'hold' 规则时主进程推送(与 preload HeldRequestEvent 同构) */
+interface HeldRequestEvent {
+    runId: number;
+    holdId: number;
+    url: string;
+    method: string;
+    resourceType?: string;
+}
+
 /** 浏览器登录态复用配置(与主进程 BrowserConfig 同构) */
 interface BrowserConfig {
     persistProfile: boolean;
@@ -166,6 +175,10 @@ interface ElectronAPI {
     resumeMacro(runId: number): void;
     onMacroRunStarted(cb: (info: { runId: number }) => void): void;
     stopMacro(runId: number): void;
+    onRequestHeld(cb: (info: HeldRequestEvent) => void): void;
+    onRequestHoldsCleared(cb: (info: { runId: number }) => void): void;
+    continueRequest(runId: number, holdId: number): void;
+    abortRequest(runId: number, holdId: number): void;
     aiListProfiles(): Promise<AiProfilesInfo>;
     aiGenerateExtract(input: {
         requirement: string;
@@ -258,6 +271,9 @@ const pauseOverlay = byId<HTMLDivElement>('pause-overlay');
 const pauseReasonEl = byId<HTMLDivElement>('pause-reason');
 const pauseContinueBtn = byId<HTMLButtonElement>('pause-continue');
 const pauseStopBtn = byId<HTMLButtonElement>('pause-stop');
+const pauseSection = byId<HTMLDivElement>('pause-section');
+const holdSection = byId<HTMLDivElement>('hold-section');
+const holdListEl = byId<HTMLDivElement>('hold-list');
 const confirmOverlay = byId<HTMLDivElement>('confirm-overlay');
 const confirmTitleEl = byId<HTMLHeadingElement>('confirm-title');
 const confirmMessageEl = byId<HTMLDivElement>('confirm-message');
@@ -1437,19 +1453,103 @@ stopRunBtn.addEventListener('click', () => {
     stopRunBtn.textContent = '停止中…';
 });
 
+// 当前被挂起(blocks mode:'hold')的请求:holdId → 请求信息;同时挂起多条时逐条展示/处置
+const heldRequests = new Map<number, HeldRequestEvent>();
+
+/**
+ * 统一同步暂停 overlay 的显隐:overlay 整体在「处于暂停 OR 有挂起请求」时显示,两区各自独立显隐。
+ * 这样「暂停 + 挂起请求」同框(合并展示)、「仅挂起请求」单独显示、「仅暂停」为现状,三种情形统一处理;
+ * 且点暂停「继续」后若仍有挂起请求,overlay 不会误关(hold 区续留)。
+ */
+function syncPauseOverlay(): void {
+    const pauseOn = currentPauseRunId !== null;
+    const holdOn = heldRequests.size > 0;
+    pauseSection.style.display = pauseOn ? '' : 'none';
+    holdSection.style.display = holdOn ? '' : 'none';
+    pauseOverlay.classList.toggle('show', pauseOn || holdOn);
+}
+
+/** 渲染被挂起请求列表:每条一行(方法徽标 + URL + 继续/阻断按钮),命令式重建 */
+function renderHoldList(): void {
+    holdListEl.innerHTML = '';
+    for (const info of heldRequests.values()) {
+        const row = document.createElement('div');
+        row.className = 'hold-row';
+
+        const method = document.createElement('span');
+        method.className = 'hold-method';
+        method.textContent = info.method;
+
+        const url = document.createElement('span');
+        url.className = 'hold-url';
+        url.textContent = info.resourceType ? `${info.url}  ·  ${info.resourceType}` : info.url;
+        url.title = info.url;
+
+        const actions = document.createElement('div');
+        actions.className = 'hold-actions';
+
+        const holdId = info.holdId;
+        const runId = info.runId;
+        const continueBtn = document.createElement('button');
+        continueBtn.className = 'hold-continue';
+        continueBtn.textContent = '继续';
+        continueBtn.addEventListener('click', () => {
+            window.electronAPI.continueRequest(runId, holdId);
+            heldRequests.delete(holdId);
+            logLocal(`已放行被拦截请求 [${info.method} ${info.url}]`);
+            renderHoldList();
+            syncPauseOverlay();
+        });
+
+        const abortBtn = document.createElement('button');
+        abortBtn.className = 'hold-abort';
+        abortBtn.textContent = '阻断';
+        abortBtn.addEventListener('click', () => {
+            window.electronAPI.abortRequest(runId, holdId);
+            heldRequests.delete(holdId);
+            logLocal(`已阻断被拦截请求 [${info.method} ${info.url}]`);
+            renderHoldList();
+            syncPauseOverlay();
+        });
+
+        actions.append(continueBtn, abortBtn);
+        row.append(method, url, actions);
+        holdListEl.appendChild(row);
+    }
+}
+
 function showPauseModal(info: PauseEvent): void {
     currentPauseRunId = info.runId;
     pauseReasonEl.textContent =
         info.reason && info.reason.trim()
             ? info.reason
             : `回放执行到第 ${info.stepIndex + 1} 步,需要人工操作。`;
-    pauseOverlay.classList.add('show');
+    syncPauseOverlay();
     logLocal(`回放已暂停(第 ${info.stepIndex + 1} 步),等待人工操作……`);
 }
 
+// 关闭暂停区(点「继续」/「停止」):只清暂停态,overlay 是否收起交给 syncPauseOverlay
+//(仍有挂起请求时保留 hold 区继续处置)
 function hidePauseModal(): void {
-    pauseOverlay.classList.remove('show');
     currentPauseRunId = null;
+    syncPauseOverlay();
+}
+
+/** 收到「请求被挂起」推送:登记并刷新列表 + overlay */
+function onRequestHeld(info: HeldRequestEvent): void {
+    heldRequests.set(info.holdId, info);
+    logLocal(`请求被拦截挂起,等待放行 [${info.method} ${info.url}]`);
+    renderHoldList();
+    syncPauseOverlay();
+}
+
+/** 收到「挂起请求全部清空」推送(回放结束/停止):清空列表 + overlay */
+function clearHeldRequests(): void {
+    if (heldRequests.size > 0) {
+        heldRequests.clear();
+        renderHoldList();
+        syncPauseOverlay();
+    }
 }
 
 /**
@@ -4986,6 +5086,9 @@ async function init(): Promise<void> {
     window.electronAPI.onMacroRunStarted(({ runId }) => {
         activeRunId = runId; // 记录本次运行 runId,供「停止回放」按钮回传
     });
+    // 被拦截请求(blocks mode:'hold')的挂起/清空推送
+    window.electronAPI.onRequestHeld((info) => onRequestHeld(info));
+    window.electronAPI.onRequestHoldsCleared(() => clearHeldRequests());
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
     await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins(), renderMacroLibrary(), loadConfigFiles()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
