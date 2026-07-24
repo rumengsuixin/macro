@@ -4,11 +4,21 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { Macro, MacroCaptures, MacroSummary, ExtractRow, ExtractField, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
+import type { BankIntegrateConfig } from '../core/post-processors/bank-integrate-config';
 
 /** AI 配置档列表返回结构 */
 export interface AiProfilesInfo {
     profiles: ProfileSummary[];
     defaultProfile: string;
+}
+
+/** 配置中心:单个可编辑配置的元信息(list-config-files 返回项) */
+export interface ConfigFileInfo {
+    name: string;
+    label: string;
+    description: string;
+    editor: 'bank-form' | 'open-only';
+    exists: boolean;
 }
 type AiGenerateInput = GenerateInput;
 type AiGenerateResult = GenerateResult;
@@ -114,6 +124,27 @@ const api = {
 
     /** 弹目录对话框选择 profile 目录,返回路径或 null(取消) */
     chooseUserDataDir: (): Promise<string | null> => ipcRenderer.invoke('choose-user-data-dir'),
+
+    // ===== 配置中心(可视化编辑运行时配置)=====
+    /** 列出可编辑配置 + 各自是否已生成(驱动配置中心列表) */
+    listConfigFiles: (): Promise<ConfigFileInfo[]> => ipcRenderer.invoke('list-config-files'),
+
+    /** 读取 bank-integrate 配置(首次自动生成 + 归一),供表单预填 */
+    readBankIntegrateConfig: (): Promise<BankIntegrateConfig> =>
+        ipcRenderer.invoke('read-bank-integrate-config'),
+
+    /** 保存 bank-integrate 配置(表单 → JSON),返回 {ok, error?} */
+    saveBankIntegrateConfig: (cfg: BankIntegrateConfig): Promise<{ ok: boolean; error?: string }> =>
+        ipcRenderer.invoke('save-bank-integrate-config', cfg),
+
+    /** 在系统文件管理器中定位某配置文件(未生成则打开 config 目录);name 走白名单 */
+    revealConfigFile: (name: string): Promise<void> => ipcRenderer.invoke('reveal-config-file', name),
+
+    /** 用系统文件管理器打开 config 配置目录 */
+    openConfigDir: (): Promise<string> => ipcRenderer.invoke('open-config-dir'),
+
+    /** 弹文件对话框选可执行文件(win 过滤 .exe),返回路径或 null(取消) */
+    chooseExecutableFile: (): Promise<string | null> => ipcRenderer.invoke('choose-executable-file'),
 
     /** 订阅主进程日志推送 */
     onLog: (callback: (msg: LogMessage) => void): void => {

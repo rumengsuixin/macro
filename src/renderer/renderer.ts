@@ -119,6 +119,28 @@ interface MacroCaptures {
     steps: ({ type: string; selector: string; capture: StepCapture } | null)[];
 }
 
+/** 银行整合单个业务线配置(与 core BankIntegrateMode 同构) */
+interface BankIntegrateMode {
+    executable: string;
+    description?: string;
+    examples?: string[];
+}
+
+/** 银行整合配置(与 core BankIntegrateConfig 同构) */
+interface BankIntegrateConfig {
+    timeoutMs?: number;
+    modes: Record<string, BankIntegrateMode>;
+}
+
+/** 配置中心:单个可编辑配置的元信息(与 preload ConfigFileInfo 同构) */
+interface ConfigFileInfo {
+    name: string;
+    label: string;
+    description: string;
+    editor: 'bank-form' | 'open-only';
+    exists: boolean;
+}
+
 interface ElectronAPI {
     getWebviewPreloadPath(): Promise<string>;
     saveMacro(macro: Macro, captures?: MacroCaptures | null): Promise<string | null>;
@@ -176,6 +198,13 @@ interface ElectronAPI {
     getBrowserConfig(): Promise<BrowserConfig>;
     setBrowserConfig(patch: Partial<BrowserConfig>): Promise<BrowserConfig>;
     chooseUserDataDir(): Promise<string | null>;
+    // ===== 配置中心 =====
+    listConfigFiles(): Promise<ConfigFileInfo[]>;
+    readBankIntegrateConfig(): Promise<BankIntegrateConfig>;
+    saveBankIntegrateConfig(cfg: BankIntegrateConfig): Promise<{ ok: boolean; error?: string }>;
+    revealConfigFile(name: string): Promise<void>;
+    openConfigDir(): Promise<string>;
+    chooseExecutableFile(): Promise<string | null>;
 }
 
 // <webview> 元素需要用到的 Electron 专有方法(DOM lib 未涵盖,这里最小声明)
@@ -2805,6 +2834,281 @@ toolOpenDirBtn.addEventListener('click', () => {
 
 void refreshToolOutputDir();
 
+// ===== 配置中心(可视化编辑运行时配置)=====
+// 侧栏新板块:普通用户不必找 JSON 手改。首批仅 bank-integrate 做字段级表单,
+// 其余复杂配置只给「打开文件/文件夹」入口(仍用外部编辑器改)。
+const configPanel = byId<HTMLDivElement>('config-panel');
+const configTitle = byId<HTMLElement>('config-title');
+const configList = byId<HTMLDivElement>('config-list');
+const configOpenDirBtn = byId<HTMLButtonElement>('config-open-dir');
+
+configTitle.addEventListener('click', () => {
+    configPanel.classList.toggle('collapsed');
+});
+
+configOpenDirBtn.addEventListener('click', () => {
+    void window.electronAPI.openConfigDir();
+    logLocal('已打开配置文件夹(config/)。');
+});
+
+// bank-integrate 5 个固定业务线的中文名(顺序 = 表单显示顺序,与后端 5 代号一致)
+const BANK_MODE_LABELS: { key: string; label: string }[] = [
+    { key: 'bank-integrate-domestic', label: '国内银行整合' },
+    { key: 'bank-integrate-overseas', label: '海外银行整合' },
+    { key: 'bank-integrate-order-match', label: '游戏订单匹配' },
+    { key: 'bank-integrate-payout', label: '代付订单对账' },
+    { key: 'bank-integrate-collection-payout', label: '代收代付对账' },
+];
+
+/** 加载配置中心列表:逐配置渲染一行(bank-integrate 带可视化编辑,其余仅「打开文件」) */
+async function loadConfigFiles(): Promise<void> {
+    try {
+        const configs = await window.electronAPI.listConfigFiles();
+        configList.innerHTML = '';
+        if (configs.length === 0) {
+            const empty = document.createElement('span');
+            empty.className = 'hint';
+            empty.textContent = '暂无可编辑配置。';
+            configList.appendChild(empty);
+            return;
+        }
+        for (const c of configs) {
+            renderConfigRow(c);
+        }
+    } catch (e) {
+        logLocal('加载配置列表失败:' + (e as Error).message, 'error');
+    }
+}
+
+/** 渲染配置中心一行:标题 +(未生成灰标)+ 描述 + 操作按钮;bank-form 另带可折叠内联表单 */
+function renderConfigRow(c: ConfigFileInfo): void {
+    const row = document.createElement('div');
+    row.className = 'config-row';
+
+    const head = document.createElement('div');
+    head.className = 'config-row-head';
+    const label = document.createElement('span');
+    label.className = 'config-row-label';
+    label.textContent = c.label;
+    head.appendChild(label);
+    if (!c.exists) {
+        const badge = document.createElement('span');
+        badge.className = 'config-row-badge';
+        badge.textContent = '未生成';
+        badge.title = '该配置文件尚未生成,首次使用对应功能或点「打开文件」时会自动创建。';
+        head.appendChild(badge);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'config-row-actions';
+
+    // 表单容器(仅 bank-form 用,惰性渲染:首次点「可视化编辑」才拉数据构建)
+    const formHost = document.createElement('div');
+    formHost.className = 'cfg-form';
+    formHost.style.display = 'none';
+
+    if (c.editor === 'bank-form') {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'plugin-run-now';
+        editBtn.textContent = '✏️ 可视化编辑';
+        let built = false;
+        editBtn.addEventListener('click', () => {
+            const showing = formHost.style.display !== 'none';
+            if (showing) {
+                formHost.style.display = 'none';
+                editBtn.textContent = '✏️ 可视化编辑';
+                return;
+            }
+            formHost.style.display = '';
+            editBtn.textContent = '收起编辑';
+            if (!built) {
+                built = true;
+                void renderBankForm(formHost);
+            }
+        });
+        actions.appendChild(editBtn);
+    }
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'cfg-btn';
+    openBtn.textContent = '📄 打开文件';
+    openBtn.title = '在系统文件管理器中定位该 JSON(未生成则打开配置目录)';
+    openBtn.addEventListener('click', () => {
+        void window.electronAPI.revealConfigFile(c.name);
+        logLocal('已打开配置文件:' + c.label);
+    });
+    actions.appendChild(openBtn);
+
+    head.appendChild(actions);
+    row.appendChild(head);
+
+    const desc = document.createElement('div');
+    desc.className = 'config-desc';
+    desc.textContent = c.description;
+    row.appendChild(desc);
+
+    row.appendChild(formHost);
+    configList.appendChild(row);
+}
+
+/** 构建 bank-integrate 可视化表单到指定容器(读当前配置预填;保存后刷新独立工具面板文案) */
+async function renderBankForm(host: HTMLElement): Promise<void> {
+    host.innerHTML = '<span class="hint">正在加载配置…</span>';
+    let cfg: BankIntegrateConfig;
+    try {
+        cfg = await window.electronAPI.readBankIntegrateConfig();
+    } catch (e) {
+        host.innerHTML = '';
+        const err = document.createElement('span');
+        err.className = 'hint';
+        err.textContent = '读取配置失败:' + (e as Error).message;
+        host.appendChild(err);
+        return;
+    }
+    host.innerHTML = '';
+
+    // 顶部:单次整合超时(毫秒)
+    const timeoutField = document.createElement('div');
+    timeoutField.className = 'cfg-field';
+    const timeoutLabel = document.createElement('span');
+    timeoutLabel.className = 'cfg-field-label';
+    timeoutLabel.textContent = '单次整合超时(毫秒,缺省 300000)';
+    const timeoutInput = document.createElement('input');
+    timeoutInput.className = 'cfg-input';
+    timeoutInput.type = 'number';
+    timeoutInput.min = '1';
+    timeoutInput.value = String(cfg.timeoutMs ?? 300000);
+    timeoutField.append(timeoutLabel, timeoutInput);
+    host.appendChild(timeoutField);
+
+    // 5 个固定 mode 块;每块收集器返回该 mode 的最新对象
+    const collectors: (() => { key: string; mode: BankIntegrateMode })[] = [];
+    for (const { key, label } of BANK_MODE_LABELS) {
+        const m = cfg.modes[key] ?? { executable: '' };
+        const block = document.createElement('div');
+        block.className = 'cfg-mode';
+
+        const title = document.createElement('div');
+        title.className = 'cfg-mode-title';
+        title.textContent = label;
+        block.appendChild(title);
+
+        // 可执行文件路径 + 选择按钮
+        const pathField = document.createElement('div');
+        pathField.className = 'cfg-field';
+        const pathLabel = document.createElement('span');
+        pathLabel.className = 'cfg-field-label';
+        pathLabel.textContent = '可执行文件路径';
+        const pathRow = document.createElement('div');
+        pathRow.className = 'cfg-path-row';
+        const pathInput = document.createElement('input');
+        pathInput.className = 'cfg-input';
+        pathInput.value = m.executable ?? '';
+        pathInput.placeholder = '留空则用内置默认路径';
+        const pickBtn = document.createElement('button');
+        pickBtn.className = 'cfg-btn';
+        pickBtn.textContent = '选择文件';
+        pickBtn.addEventListener('click', () => {
+            void window.electronAPI.chooseExecutableFile().then((p) => {
+                if (p) {
+                    pathInput.value = p;
+                }
+            });
+        });
+        pathRow.append(pathInput, pickBtn);
+        pathField.append(pathLabel, pathRow);
+        block.appendChild(pathField);
+
+        // 面板描述(留空回退内置说明)
+        const descField = document.createElement('div');
+        descField.className = 'cfg-field';
+        const descLabel = document.createElement('span');
+        descLabel.className = 'cfg-field-label';
+        descLabel.textContent = '面板描述(留空用内置说明)';
+        const descArea = document.createElement('textarea');
+        descArea.className = 'cfg-textarea';
+        descArea.value = m.description ?? '';
+        descArea.placeholder = '留空则用内置说明';
+        descField.append(descLabel, descArea);
+        block.appendChild(descField);
+
+        // 示例文件名(可增删,留空回退内置示例)
+        const exField = document.createElement('div');
+        exField.className = 'cfg-field';
+        const exLabel = document.createElement('span');
+        exLabel.className = 'cfg-field-label';
+        exLabel.textContent = '示例文件名(留空用内置示例)';
+        const exList = document.createElement('div');
+        exList.className = 'cfg-field';
+        const addExRow = (val: string): void => {
+            const exRow = document.createElement('div');
+            exRow.className = 'cfg-ex-row';
+            const exInput = document.createElement('input');
+            exInput.className = 'cfg-input';
+            exInput.value = val;
+            const del = document.createElement('button');
+            del.className = 'cfg-del';
+            del.textContent = '✖';
+            del.title = '删除该示例';
+            del.addEventListener('click', () => exRow.remove());
+            exRow.append(exInput, del);
+            exList.appendChild(exRow);
+        };
+        for (const ex of m.examples ?? []) {
+            addExRow(ex);
+        }
+        const addExBtn = document.createElement('button');
+        addExBtn.className = 'cfg-btn';
+        addExBtn.textContent = '➕ 添加示例';
+        addExBtn.addEventListener('click', () => addExRow(''));
+        exField.append(exLabel, exList, addExBtn);
+        block.appendChild(exField);
+
+        host.appendChild(block);
+
+        collectors.push(() => {
+            const mode: BankIntegrateMode = { executable: pathInput.value.trim() };
+            const d = descArea.value.trim();
+            if (d) {
+                mode.description = d;
+            }
+            const exs = Array.from(exList.querySelectorAll<HTMLInputElement>('input'))
+                .map((el) => el.value.trim())
+                .filter((v) => v.length > 0);
+            if (exs.length) {
+                mode.examples = exs;
+            }
+            return { key, mode };
+        });
+    }
+
+    // 保存:采集 → 空描述/空示例省略(回退内置)→ 写盘 → 刷新独立工具面板文案
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'cfg-save';
+    saveBtn.textContent = '💾 保存';
+    saveBtn.addEventListener('click', () => {
+        const modes: Record<string, BankIntegrateMode> = {};
+        for (const collect of collectors) {
+            const { key, mode } = collect();
+            modes[key] = mode;
+        }
+        const t = Number(timeoutInput.value);
+        const out: BankIntegrateConfig = {
+            timeoutMs: Number.isFinite(t) && t > 0 ? t : 300000,
+            modes,
+        };
+        void window.electronAPI.saveBankIntegrateConfig(out).then((r) => {
+            if (r.ok) {
+                logLocal('已保存 银行整合 配置。独立工具面板文案已刷新。');
+                void loadPlugins(); // 让「独立工具」面板 description/examples 即时反映改动
+            } else {
+                logLocal('保存 银行整合 配置失败:' + (r.error ?? '未知错误'), 'error');
+            }
+        });
+    });
+    host.appendChild(saveBtn);
+}
+
 /**
  * 渲染一行插件到指定容器(行 + 其后兄弟描述节点)。
  * @param withCheckbox 为真=附加处理板块(复选框 + 直接运行);为假=独立工具板块(只有「运行」按钮)
@@ -4460,6 +4764,7 @@ const FOCUS_PANELS: FocusPanelDef[] = [
     { id: 'ai-panel', icon: '🤖', label: 'AI 配置' },
     { id: 'plugin-panel', icon: '🧩', label: '附加处理' },
     { id: 'tool-panel', icon: '🧰', label: '独立工具' },
+    { id: 'config-panel', icon: '⚙️', label: '配置中心' },
     { id: 'browser-panel', icon: '🔐', label: '登录状态复用' },
     { id: 'macro-lib-panel', icon: '📚', label: '宏库' },
     { id: 'steps-panel', icon: '🎬', label: '已录制的操作' },
@@ -4682,7 +4987,7 @@ async function init(): Promise<void> {
         activeRunId = runId; // 记录本次运行 runId,供「停止回放」按钮回传
     });
     // 等关键配置加载完成再隐藏遮罩;任一失败也继续(保证遮罩一定会消失)
-    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins(), renderMacroLibrary()]);
+    await Promise.allSettled([loadAiProfiles(), loadBrowserConfig(), loadPlugins(), renderMacroLibrary(), loadConfigFiles()]);
     logLocal('就绪。输入网址后点击「打开网页」,再「开始录制」。');
     hideBootOverlay();
 }

@@ -21,6 +21,8 @@ import type { HooksConfig } from '../core/macro-types';
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
 import { applyBankConfigToManifests } from '../core/post-processors/bank-integrate';
+import { saveJsonConfig } from '../core/json-config';
+import { loadBankIntegrateConfig, type BankIntegrateConfig } from '../core/post-processors/bank-integrate-config';
 import type {
     Macro,
     MacroCaptures,
@@ -76,6 +78,68 @@ const replayProfilePath = path.join(configDir, 'replay-profile.json');
 
 // 事件钩子:文件路径(默认 enabled=false,不显式开则零对外)
 const hooksPath = path.join(configDir, 'hooks.json');
+
+// 「配置中心」板块可编辑的运行时配置注册表(单一事实源:configDir 下 7 个 *.json)。
+// editor='bank-form' 走应用内可视化表单;'open-only' 仅给「打开文件」入口(复杂/敏感配置外部编辑)。
+// name 同时充当白名单键(reveal-config-file 据此查表,防渲染层传任意路径穿越)。
+interface EditableConfigDef {
+    name: string;
+    file: string;
+    label: string;
+    description: string;
+    editor: 'bank-form' | 'open-only';
+}
+const EDITABLE_CONFIGS: EditableConfigDef[] = [
+    {
+        name: 'bank-integrate',
+        file: 'bank-integrate.json',
+        label: '🏦 银行整合工具',
+        description: '5 个银行流水/对账工具的可执行文件路径、独立工具面板描述与示例文件名。',
+        editor: 'bank-form',
+    },
+    {
+        name: 'browser-config',
+        file: 'browser-config.json',
+        label: '🔐 登录态复用',
+        description: '登录状态复用与反检测开关(也可在「登录状态复用」面板可视化修改)。',
+        editor: 'open-only',
+    },
+    {
+        name: 'replay-profile',
+        file: 'replay-profile.json',
+        label: '🎞️ 回放行为档',
+        description: '回放超时/重试/延时/翻页节奏的多档配置。',
+        editor: 'open-only',
+    },
+    {
+        name: 'request-rules',
+        file: 'request-rules.json',
+        label: '🧲 请求拦截规则',
+        description: '回放端请求拦截 8 支路(改参/重发/阻断/落盘等),结构复杂,建议对照手册编辑。',
+        editor: 'open-only',
+    },
+    {
+        name: 'merge-config',
+        file: 'merge-config.json',
+        label: '📑 表格合并规则',
+        description: '合并后处理的解析规则(按文件名/表名匹配、派生列、输出名)。',
+        editor: 'open-only',
+    },
+    {
+        name: 'hooks',
+        file: 'hooks.json',
+        label: '🪝 事件钩子',
+        description: '回放 开始/完成/失败 时触发 webhook/命令/桌面通知等。',
+        editor: 'open-only',
+    },
+    {
+        name: 'ai-config',
+        file: 'ai-config.json',
+        label: '🤖 AI 对接配置',
+        description: 'AI 提取/校正的 Gateway 连接与凭据(含密钥,敏感,谨慎编辑)。',
+        editor: 'open-only',
+    },
+];
 
 /** 桌面通知(注入给钩子派发器的 notify 通道);通知失败不致命 */
 function showDesktopNotification(title: string, body: string): void {
@@ -598,6 +662,96 @@ function registerIpc(): void {
     // 只读返回默认导出目录绝对路径,供渲染进程未设自定义目录时显示真实路径
     ipcMain.handle('get-exports-dir', (): string => {
         return exportsDir;
+    });
+
+    // ===== 配置中心:可视化编辑运行时配置(新板块) =====
+    // 列出可编辑配置 + 各自是否已生成(驱动配置中心列表)
+    ipcMain.handle('list-config-files', () => {
+        return EDITABLE_CONFIGS.map((c) => ({
+            name: c.name,
+            label: c.label,
+            description: c.description,
+            editor: c.editor,
+            exists: fs.existsSync(path.join(configDir, c.file)),
+        }));
+    });
+
+    // 读取 bank-integrate 配置(顺带首次生成 + 逐字段归一),供表单预填
+    ipcMain.handle('read-bank-integrate-config', (): BankIntegrateConfig => {
+        return loadBankIntegrateConfig(path.join(configDir, 'bank-integrate.json'), bankTemplatePath);
+    });
+
+    // 保存 bank-integrate 配置(表单 → JSON,4 空格写回);轻校验,失败返回错误不抛
+    ipcMain.handle(
+        'save-bank-integrate-config',
+        (_e, cfg: unknown): { ok: boolean; error?: string } => {
+            try {
+                if (!cfg || typeof cfg !== 'object') {
+                    return { ok: false, error: '配置格式无效(非对象)。' };
+                }
+                const c = cfg as Partial<BankIntegrateConfig>;
+                if (!c.modes || typeof c.modes !== 'object' || Array.isArray(c.modes)) {
+                    return { ok: false, error: '配置缺少有效的 modes 字段。' };
+                }
+                const out: BankIntegrateConfig = {
+                    timeoutMs:
+                        typeof c.timeoutMs === 'number' && c.timeoutMs > 0 ? c.timeoutMs : 300000,
+                    modes: c.modes as BankIntegrateConfig['modes'],
+                };
+                ensureDirs();
+                saveJsonConfig(path.join(configDir, 'bank-integrate.json'), out);
+                logInfo('已保存 银行整合(bank-integrate)配置。');
+                return { ok: true };
+            } catch (e) {
+                const msg = (e as Error).message;
+                logError('保存 银行整合 配置失败:' + msg);
+                return { ok: false, error: msg };
+            }
+        }
+    );
+
+    // 在系统文件管理器中定位某配置文件(未生成则打开 config 目录兜底);name 走白名单防穿越
+    ipcMain.handle('reveal-config-file', async (_e, name: string): Promise<void> => {
+        ensureDirs();
+        const def = EDITABLE_CONFIGS.find((c) => c.name === name);
+        if (!def) {
+            logError('打开配置文件:未知配置 ' + name);
+            await shell.openPath(configDir);
+            return;
+        }
+        const full = path.join(configDir, def.file);
+        if (fs.existsSync(full)) {
+            shell.showItemInFolder(full);
+        } else {
+            logInfo(`配置 ${def.file} 尚未生成,已打开配置目录。`);
+            await shell.openPath(configDir);
+        }
+    });
+
+    // 用系统文件管理器打开 config 配置目录
+    ipcMain.handle('open-config-dir', async (): Promise<string> => {
+        ensureDirs();
+        return shell.openPath(configDir);
+    });
+
+    // 弹文件对话框选可执行文件(win 过滤 .exe),返回路径或 null(取消)——供 bank 表单选 exe
+    ipcMain.handle('choose-executable-file', async (): Promise<string | null> => {
+        const filters =
+            process.platform === 'win32'
+                ? [
+                      { name: '可执行文件', extensions: ['exe'] },
+                      { name: '所有文件', extensions: ['*'] },
+                  ]
+                : [{ name: '所有文件', extensions: ['*'] }];
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择整合工具可执行文件',
+            properties: ['openFile'],
+            filters,
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        return result.filePaths[0];
     });
 
     // 列出 AI 配置档(供渲染进程下拉选择)

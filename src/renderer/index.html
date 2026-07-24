@@ -637,6 +637,7 @@
         .collapsible.collapsed > .browser-body,
         .collapsible.collapsed > .ai-body,
         .collapsible.collapsed > .plugin-body,
+        .collapsible.collapsed > .config-body,
         .collapsible.collapsed > .tool-actions,
         .collapsible.collapsed > #steps-toolbar,
         .collapsible.collapsed > #steps {
@@ -857,6 +858,216 @@
 
         .tool-actions button:hover {
             background: var(--accent-strong);
+        }
+
+        /* ---------- 配置中心面板(基础视图可见) ---------- */
+        .config-panel {
+            background: linear-gradient(180deg, var(--primary-soft) 0%, #ffffff 70%);
+            border-color: #bfe9ea;
+        }
+
+        .config-panel > .panel-title {
+            border-left: 3px solid var(--primary);
+            background: linear-gradient(180deg, #d3f2f3, var(--primary-soft));
+        }
+
+        .config-body {
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .config-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .config-actions button {
+            padding: 5px 12px;
+            font-size: 12px;
+            white-space: nowrap;
+            background: var(--primary);
+        }
+
+        .config-actions button:hover {
+            background: var(--primary-strong);
+        }
+
+        .config-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* 单个配置条目 */
+        .config-row {
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            background: var(--surface);
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .config-row-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .config-row-label {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .config-row-badge {
+            font-size: 11px;
+            color: var(--muted);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-xs);
+            padding: 0 5px;
+        }
+
+        .config-row-actions {
+            margin-left: auto;
+            display: flex;
+            gap: 6px;
+        }
+
+        .config-row-actions button {
+            padding: 4px 10px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .config-desc {
+            font-size: 12px;
+            color: var(--text-soft);
+            line-height: 1.5;
+        }
+
+        /* bank-integrate 可视化表单 */
+        .cfg-form {
+            border-top: 1px dashed var(--border-strong);
+            margin-top: 2px;
+            padding-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .cfg-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .cfg-field-label {
+            font-size: 12px;
+            color: var(--text-soft);
+        }
+
+        .cfg-mode {
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            background: var(--surface-2);
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .cfg-mode-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--primary-strong);
+        }
+
+        .cfg-input,
+        .cfg-textarea {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-xs);
+            background: var(--surface);
+            color: var(--text);
+            font-family: inherit;
+        }
+
+        .cfg-textarea {
+            resize: vertical;
+            min-height: 60px;
+            line-height: 1.5;
+        }
+
+        .cfg-input:focus,
+        .cfg-textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-soft);
+        }
+
+        .cfg-path-row {
+            display: flex;
+            gap: 6px;
+        }
+
+        .cfg-path-row .cfg-input {
+            flex: 1;
+        }
+
+        .cfg-ex-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .cfg-ex-row .cfg-input {
+            flex: 1;
+        }
+
+        .cfg-btn {
+            padding: 4px 10px;
+            font-size: 12px;
+            white-space: nowrap;
+            background: var(--surface-3);
+            color: var(--text);
+            border: 1px solid var(--border-strong);
+        }
+
+        .cfg-btn:hover {
+            background: var(--primary-soft);
+            border-color: var(--primary);
+        }
+
+        .cfg-del {
+            padding: 2px 8px;
+            font-size: 12px;
+            background: transparent;
+            color: var(--danger);
+            border: 1px solid var(--border);
+        }
+
+        .cfg-del:hover {
+            background: #fdecee;
+            border-color: var(--danger);
+        }
+
+        .cfg-save {
+            align-self: flex-start;
+            padding: 6px 16px;
+            font-size: 13px;
+            background: var(--ok);
+        }
+
+        .cfg-save:hover {
+            background: var(--ok-strong);
         }
 
         /* ---------- 宏库面板(基础视图可见) ---------- */
@@ -2211,6 +2422,17 @@
                     </div>
                     <div class="plugin-body" id="tool-list">
                         <span class="hint">正在加载工具…</span>
+                    </div>
+                </div>
+                <div class="panel collapsible config-panel collapsed" id="config-panel">
+                    <div class="panel-title" id="config-title">⚙️ 配置中心(可视化编辑运行时配置)</div>
+                    <div class="config-body">
+                        <div class="config-actions">
+                            <button id="config-open-dir" title="用系统文件管理器打开 config 配置目录">📂 打开配置文件夹</button>
+                        </div>
+                        <div class="config-list" id="config-list">
+                            <span class="hint">正在加载配置…</span>
+                        </div>
                     </div>
                 </div>
                 <div class="panel collapsible collapsed" id="browser-panel">
