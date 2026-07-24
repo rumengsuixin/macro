@@ -2,19 +2,29 @@
     "timeoutMs": 300000,
     "modes": {
         "bank-integrate-domestic": {
-            "executable": "{HOME}/bank-integration/domestic_bank_integration"
+            "executable": "{HOME}/bank-integration/domestic_bank_integration",
+            "description": "格式:.xls / .xlsx / .csv\n命名:公司-银行全称.xlsx\n可用银行(须写全称):招商银行 / 建设银行 / 工商银行 / 中信银行 / 浦发银行 / 农业银行 / 中国银行\n提示:银行名须写全称(「招行」不识别)、区分大小写;公司名不能为空。",
+            "examples": ["瑞泽商务-中信银行.xlsx", "甲公司-招商银行.xls"]
         },
         "bank-integrate-overseas": {
-            "executable": "{HOME}/bank-integration/overseas_bank_integration"
+            "executable": "{HOME}/bank-integration/overseas_bank_integration",
+            "description": "格式:.xls / .xlsx / .csv;华美银行仅接受 .pdf(文本型 PDF)\n命名:公司-银行全称-币种.xlsx\n币种:2~4 位大写字母(USD / HKD / SGD)\n可用银行(全称):汇丰银行 / 东亚银行 / 华侨银行 / 渣打银行空中云汇 / 华美银行 / 大华银行（UOB) / 联昌国际银行（CIMB） / 招商银行 / 工商银行\n提示:银行名区分大小写、括号须原样(全/半角);华美银行只走 PDF。",
+            "examples": ["A-东亚银行-HKD.csv", "B-大华银行（UOB)-SGD.xlsx", "甲公司-华美银行-USD.pdf"]
         },
         "bank-integrate-order-match": {
-            "executable": "{HOME}/bank-integration/order_payment_match"
+            "executable": "{HOME}/bank-integration/order_payment_match",
+            "description": "格式:.xls / .xlsx / .csv\n必需:admin 订单主表(文件名以 admin 开头)\n平台文件(文件名前缀,不分大小写):adyen- / 华为(月结算用「华为平台结算」)/ googol- 或 google- / 苹果\n提示:admin 缺失会中止;其它平台缺失则跳过。",
+            "examples": ["admin订单.xlsx", "adyen-2026.xlsx", "华为平台结算2026.xlsx", "google-2026.csv", "苹果2026.xlsx"]
         },
         "bank-integrate-payout": {
-            "executable": "{HOME}/bank-integration/payout_order_reconcile"
+            "executable": "{HOME}/bank-integration/payout_order_reconcile",
+            "description": "格式:仅 .xls / .xlsx(不接受 .csv / .pdf)\n必需:admin 主表(文件名以 admin- 开头)\n平台文件(文件名前缀,不分大小写):ibfpay- 或 ibf平台 / superpay- / wangupay- 或 wangguypay- / okey话费卡结算 / EPIN 三件套 epin_siparisler_ + epin_pinler_ + epin_odemeler_ / Binance:usdt奖品发放信息 或 binance- 或 merged-\n提示:只认 xls/xlsx;EPIN 需三个文件配套;admin 缺失会中止。",
+            "examples": ["admin-Okey兑换202604.xls", "superpay-2026.xls", "ibfpay-2026.xls", "wangupay-2026.xls", "okey话费卡结算2026.xls", "epin_siparisler_2026.xls", "epin_pinler_2026.xls", "epin_odemeler_2026.xls", "binance-2026.xls"]
         },
         "bank-integrate-collection-payout": {
-            "executable": "{HOME}/bank-integration/collection_payout_reconcile"
+            "executable": "{HOME}/bank-integration/collection_payout_reconcile",
+            "description": "格式:.xls / .xlsx / .csv\n必需:两张 admin 主表——admin收款 + admin兑换(按前缀分收/付方向)\n平台文件(文件名前缀,收款/代付分开):betcat-payment / betcat-payout、cashnewpay收款 / cashnewpay兑换、goldenpay收款 / goldenpay兑换\n提示:收款用「…收款」或「-payment」,代付用「…兑换」或「-payout」;两张 admin 都缺会中止。",
+            "examples": ["admin收款202604.xlsx", "admin兑换202604.xlsx", "betcat-payment2026.csv", "betcat-payout2026.csv", "cashnewpay收款2026.xlsx", "cashnewpay兑换2026.xlsx", "goldenpay收款2026.xlsx", "goldenpay兑换2026.xlsx"]
         }
     }
 }
