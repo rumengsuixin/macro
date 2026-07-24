@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube 上传重发链路 · 原请求 ↔ 重发请求 实证对比</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1f2430; --muted:#6b7280; --line:#e5e7eb;
+    --orig:#2563eb; --orig-bg:#eff6ff; --resend:#ea580c; --resend-bg:#fff7ed;
+    --ok:#16a34a; --ok-bg:#f0fdf4; --warn:#d97706; --warn-bg:#fffbeb; --danger:#dc2626; --danger-bg:#fef2f2;
+    --code:#0f172a; --code-ink:#e2e8f0; --accent:#7c3aed;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    line-height:1.7;font-size:15px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  header.top{background:linear-gradient(135deg,#111827,#1f2937);color:#fff;border-radius:16px;
+    padding:30px 34px;box-shadow:0 10px 30px rgba(17,24,39,.25)}
+  header.top h1{margin:0 0 6px;font-size:26px;letter-spacing:.5px}
+  header.top .sub{color:#c7cbd4;font-size:14px}
+  header.top .meta{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{display:inline-block;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);
+    color:#e5e7eb;padding:3px 11px;border-radius:999px;font-size:12.5px}
+  h2{font-size:20px;margin:38px 0 14px;padding-left:12px;border-left:4px solid var(--accent)}
+  h3{font-size:16px;margin:22px 0 10px;color:#374151}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:14px 0;
+    box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  p{margin:10px 0}
+  code{background:#eef1f5;padding:1.5px 6px;border-radius:5px;font-family:"Cascadia Code",Consolas,monospace;
+    font-size:13px;color:#0f172a;word-break:break-all}
+  .kw{color:var(--accent);font-weight:600}
+  .lead{font-size:16px;background:var(--accent);background:linear-gradient(90deg,#f5f3ff,#faf5ff);
+    border:1px solid #e9d5ff;border-radius:12px;padding:16px 20px}
+  .lead b{color:#6d28d9}
+  /* 双轨 */
+  .rails{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .rail{border-radius:12px;padding:16px 18px}
+  .rail.a{background:var(--orig-bg);border:1px solid #bfdbfe}
+  .rail.b{background:var(--resend-bg);border:1px solid #fed7aa}
+  .rail h4{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .dot.a{background:var(--orig)} .dot.b{background:var(--resend)}
+  .step{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin:8px 0;font-size:13.5px}
+  .step .id{font-weight:700;font-family:monospace}
+  .step .arrow{color:var(--muted);font-size:12px}
+  .step small{color:var(--muted)}
+  .tagfinal{color:var(--ok);font-weight:600}
+  .taghop{display:inline-block;background:#fef3c7;color:#92400e;border-radius:5px;padding:0 6px;font-size:11.5px;font-weight:700}
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px;background:#fff;border-radius:10px;overflow:hidden}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f3f4f6;font-weight:600}
+  td.dim{color:#374151;font-weight:600;background:#fafbfc;white-space:nowrap}
+  .col-o{background:var(--orig-bg)} .col-r{background:var(--resend-bg)}
+  .same{color:var(--ok);font-weight:600} .diff{color:var(--danger);font-weight:700}
+  .u{color:var(--muted)}
+  /* 提取注入链 */
+  .flow{background:var(--code);color:var(--code-ink);border-radius:12px;padding:18px 20px;font-family:"Cascadia Code",Consolas,monospace;
+    font-size:12.8px;line-height:1.85;overflow-x:auto}
+  .flow .h{color:#7dd3fc} .flow .g{color:#86efac} .flow .o{color:#fdba74} .flow .p{color:#c4b5fd} .flow .c{color:#64748b}
+  /* 提示块 */
+  .note{border-radius:11px;padding:14px 18px;margin:14px 0;border:1px solid}
+  .note.ok{background:var(--ok-bg);border-color:#bbf7d0}
+  .note.warn{background:var(--warn-bg);border-color:#fde68a}
+  .note.danger{background:var(--danger-bg);border-color:#fecaca}
+  .note b{display:block;margin-bottom:4px}
+  .note.ok b{color:#15803d} .note.warn b{color:#b45309} .note.danger b{color:#b91c1c}
+  ul{margin:8px 0;padding-left:22px} li{margin:5px 0}
+  .footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .badge-o{color:var(--orig);font-weight:700} .badge-r{color:var(--resend);font-weight:700}
+  @media(max-width:720px){.rails{grid-template-columns:1fr}}
+  @media print{body{background:#fff}.card,header.top{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>YouTube 上传重发链路 · 原请求 ↔ 重发请求 实证对比</h1>
+  <div class="sub">基于一次真实录制回放时间线,逐维度拆解「工具重发请求」相对「原始录制请求」的差异</div>
+  <div class="meta">
+    <span class="chip">数据源:timeline-replay-20260724-114903445.jsonl</span>
+    <span class="chip">116 条记录 / 66 MB</span>
+    <span class="chip">3 条 resend 规则</span>
+    <span class="chip">生成日期:2026-07-24</span>
+  </div>
+</header>
+
+<h2>一、一句话总览</h2>
+<div class="lead">
+  录制的是<b>上传 A.mp4</b> 的原生三段式流程;3 条 <code>resend</code> 规则在 A 传完的瞬间自动「接力」再传一个 <b>B.mp4</b>。
+  时间线里因此并行两条轨道:<span class="badge-o">蓝 = 浏览器真实发出的原请求</span>、<span class="badge-r">橙 = 工具注入的重发请求</span>。
+  两条轨道请求几乎同形、响应完全等效,差异集中在少数被「提取→注入」改写的字段上。
+</div>
+
+<h2>二、双轨时间线</h2>
+<div class="card">
+  <div class="rails">
+    <div class="rail a">
+      <h4><span class="dot a"></span> 轨道 A · 原始录制回放(无 <code>x-macro-resend</code>)</h4>
+      <div class="step"><span class="id">id=3</span> <span class="arrow">POST</span> <code>upload/studio</code> · <b>start</b><br><small>开会话 → 响应 <span class="tagfinal">active</span>(行15)</small></div>
+      <div class="step"><span class="id">id=8</span> <span class="arrow">POST</span> <code>?upload_id=…DWbHed…</code> · <b>upload,finalize</b><br><small>传 A.mp4 → 响应 <span class="tagfinal">final</span>(行47)</small></div>
+      <div class="step"><span class="id">id=9</span> <span class="arrow">POST</span> <code>createvideo</code><br><small>建视频 → 响应 200(行20)</small></div>
+    </div>
+    <div class="rail b">
+      <h4><span class="dot b"></span> 轨道 B · resend 注入(带 <code>x-macro-resend</code>=跳数)</h4>
+      <div class="step"><span class="id">id=24</span> <span class="taghop">hop 1</span> <code>upload/studio</code> · <b>start</b><br><small>规则1 重发,新开会话 → 响应 <span class="tagfinal">active</span>(行49)</small></div>
+      <div class="step"><span class="id">id=26</span> <span class="taghop">hop 2</span> <code>?upload_id=…oFMymQ9…</code> · <b>upload,finalize</b><br><small>规则2 重发,塞入 <b>B.mp4 26.5MB</b> → 响应 <span class="tagfinal">final</span>(行76)</small></div>
+      <div class="step"><span class="id">id=27</span> <span class="taghop">hop 2</span> <code>createvideo</code><br><small>规则3 重发,换 scottyResourceId → 响应 200(行58)</small></div>
+    </div>
+  </div>
+</div>
+
+<h2>三、触发链与「提取→注入」</h2>
+<div class="card">
+  <p>三条规则形成一条 <span class="kw">A→B→C 连环</span>(hop 逐跳 +1),关键值全部从上一跳的响应<b>头</b>里提取,再注入下一跳:</p>
+  <div class="flow">
+<span class="c"># ① A 的 finalize 响应到达 → 点燃规则1</span>
+行47  id=8 响应 <span class="h">x-goog-upload-status: final</span>
+        │  <span class="p">规则1.when</span>: reqHeader('x-macro') != 1  &&  header('...upload-status')=='final'  &&  reqHeader('...upload-command')=='upload, finalize'
+        ▼
+行48  <span class="o">id=24</span> 重发 upload/studio · start   <span class="taghop">hop1</span>  <span class="c">(+ x-macro:1)</span>  ── 新开一个上传会话
+
+<span class="c"># ② 新会话的 active 响应 → 同时点燃规则2 和 规则3(都要求 req 带 x-macro:1)</span>
+行49  id=24 响应 <span class="h">x-goog-upload-status: active</span>
+        ├─ <span class="g">extract uploadUrl</span>          = 响应头 x-goog-upload-url                → 注入 规则2 的 setUrl
+        │     ▼
+        │   行53  <span class="o">id=26</span> 重发上传 <span class="g">…upload_id=oFMymQ9…</span>  <span class="taghop">hop2</span>  body=<b>B.mp4 26.5MB</b>
+        │
+        └─ <span class="g">extract scottyResourceId</span>   = 响应头 x-goog-upload-header-scotty-resource-id  → 注入 规则3 的 set
+              ▼
+            行54  <span class="o">id=27</span> 重发 createvideo   <span class="taghop">hop2</span>  resourceId.scottyResourceId.id = <span class="g">B 的值</span>
+
+<span class="c"># ③ B 的 finalize 响应也是 final,四个静态条件全中,本该再触发规则1……</span>
+行76  id=26 响应 final  <span class="c">但该请求带 x-macro:1</span>  →  <span class="p">when 的 reqHeader('x-macro')!=1 = false</span>  →  <span class="o">断链,不传 C</span> ✔
+  </div>
+  <div class="note ok"><b>设计要点:x-macro 是「只补一个」的语义熔断</b>
+  规则2/3 要求触发请求带 <code>x-macro:1</code>,所以它们<b>只挂在重发出来的新会话(id=24)上,不会误挂到 A 的原生 active(id=3,行15)</b>。
+  而规则1 的 <code>when</code> 里 <code>reqHeader('x-macro')!=1</code> 又亲手切断了「B 完成 → 再开 C」的无限连环。比单纯靠 <code>maxResendHops:5</code> 更精准。</div>
+</div>
+
+<h2>四、三对「原 ↔ 重发」逐维度对比</h2>
+<div class="card">
+<table>
+  <thead><tr>
+    <th>维度</th>
+    <th>规则1 · start<br><span class="u">id=3 → id=24</span></th>
+    <th>规则2 · finalize<br><span class="u">id=8 → id=26</span></th>
+    <th>规则3 · createvideo<br><span class="u">id=9 → id=27</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td class="dim">URL</td>
+      <td class="same">完全相同</td>
+      <td class="diff">不同<br>upload_id <code>DWbHed</code>→<code>oFMymQ9</code><br><span class="u">(setUrl 注入新会话)</span></td>
+      <td class="same">完全相同</td></tr>
+    <tr><td class="dim">请求体大小</td>
+      <td>0 → 0</td>
+      <td class="diff">0 → 26,587,184 B<br><span class="u">(26.5 MB,B.mp4 字节)</span></td>
+      <td>5938 B → 5938 B</td></tr>
+    <tr><td class="dim">体来源</td>
+      <td>无体</td>
+      <td>原:回放取不到<br>重发:<code>replaceWithFile</code> 读盘</td>
+      <td>原:录制 JSON<br>重发:改参后 JSON</td></tr>
+    <tr><td class="dim">新增请求头</td>
+      <td><code>x-macro:1</code><br><code>x-macro-resend:1</code></td>
+      <td><code>x-macro:1</code><br><code>x-macro-resend:2</code></td>
+      <td><code>x-macro:3</code><br><code>x-macro-resend:2</code></td></tr>
+    <tr><td class="dim">改值请求头</td>
+      <td class="same">无</td>
+      <td class="diff"><code>x-goog-upload-file-name</code><br>A.mp4 → B.mp4</td>
+      <td class="same">无</td></tr>
+    <tr><td class="dim">删除请求头</td>
+      <td class="same">无</td><td class="same">无</td><td class="same">无</td></tr>
+    <tr><td class="dim">content-type</td>
+      <td colspan="3" class="u">原请求:record 未记录该头 &nbsp;|&nbsp; 重发请求统一带 <code>application/x-www-form-urlencoded</code>(buildResendHeaders 补)</td></tr>
+    <tr><td class="dim">响应 status</td>
+      <td class="same">200 · active</td>
+      <td class="same">200 · final</td>
+      <td class="same">200</td></tr>
+    <tr><td class="dim">额外响应行</td>
+      <td>多一条 <code>ERR_ABORTED</code><br><span class="u">(页面 fetch 未读 body)</span></td>
+      <td class="u">无</td><td class="u">无</td></tr>
+  </tbody>
+</table>
+<div class="note warn"><b>规则2 的 body 反差最典型</b>
+原始 A-finalize(<code>id=8</code>)在时间线里 <b>body=0</b>——回放时 A.mp4 的字节不是页面 <code>fetch</code> 提供的,Playwright <code>postData()</code> 取不到,record 记为空。
+而重发的 B-finalize(<code>id=26</code>)由工具用 <code>replaceWithFile</code> 主动读盘塞进 26.5 MB。这就是「原请求几乎没 body、重发请求才带真身」。</div>
+</div>
+
+<h2>五、createvideo 请求体字段级 diff</h2>
+<div class="card">
+  <p><code>id=9</code> 与 <code>id=27</code> 的 body 各含 <b>31 个叶子字段,只有 1 个不同</b>:</p>
+<table>
+  <thead><tr><th>字段路径</th><th class="col-o">原 id=9(A)</th><th class="col-r">重发 id=27(B)</th><th>判定</th></tr></thead>
+  <tbody>
+    <tr><td><code>resourceId.scottyResourceId.id</code></td>
+      <td class="col-o"><code>ACKujmyEDXmm0pZjQZznRoqo…</code></td>
+      <td class="col-r"><code>ACKujmzEF61vpLZHx/FxPbCQ…</code></td>
+      <td class="diff">改</td></tr>
+    <tr><td><code>frontendUploadId</code></td>
+      <td class="col-o" colspan="2"><code>innertube_studio:A3EC6B46-D7A3-4DB1-8A73-91981159716E:0</code>(两侧逐字相同)</td>
+      <td class="same">同</td></tr>
+    <tr><td><code>initialMetadata.title.newTitle</code></td>
+      <td class="col-o" colspan="2"><code>"A"</code>(两侧相同)</td>
+      <td class="same">同</td></tr>
+    <tr><td><code>initialMetadata.privacy.newPrivacy</code></td>
+      <td colspan="2" class="u"><code>PRIVATE</code></td><td class="same">同</td></tr>
+    <tr><td><code>channelId</code> / delegationContext / context.client.* …</td>
+      <td colspan="2" class="u">其余 27 个字段全部逐字相同</td><td class="same">同</td></tr>
+  </tbody>
+</table>
+  <p>规则3 的 <code>set</code> 只覆盖了顶层 <code>resourceId</code>,把 scottyResourceId 换成从 <code>id=24</code> 响应头提取的 B 视频资源 id;<b>其余 30 个字段原样继承录制时 A 的值</b>。</p>
+
+  <div class="note danger"><b>⚠️ 两个继承自 A 的字段值得警惕</b>
+  <ul>
+    <li><b>title 仍是 "A"</b> —— B 视频上传后<b>标题会显示为「A」而非「B」</b>,隐私(PRIVATE)、草稿态也全部继承 A。规则3 只换了底层视频资源,没碰任何元数据。若要 B 有自己的标题,需在规则3 的 <code>set</code> 里补 <code>initialMetadata</code>。</li>
+    <li><b>frontendUploadId 复用 A 的值</b> —— B 的 createvideo 用的是 <b>(A 的 frontendUploadId, B 的 scottyResourceId)</b> 混合配对。它返回 200 说明被接受,但若 YouTube 用它做去重,连传多个视频可能撞车。</li>
+  </ul></div>
+</div>
+
+<h2>六、系统性规律</h2>
+<div class="card">
+  <p><b>重发请求 = 原请求的「改造复制品」</b>,三处系统性差异:</p>
+  <ul>
+    <li><span class="kw">① 头必增不减</span>:每个重发都加 <code>x-macro-resend</code>(值=hop 跳数:规则1=1,规则2/3=2)+ 用户配的 <code>setHeaders</code>;其余业务头(Authorization/CSRF/cookie)逐字继承,登录态不丢。</li>
+    <li><span class="kw">② body 由工具重建</span>:文件字节(replaceWithFile)/ 改参(set·append·remove)/ 原样三选一;而原请求的大 body 在回放 record 里往往是空的。</li>
+    <li><span class="kw">③ URL/文件名仅按需改</span>:只有配了 <code>setUrl</code>、<code>x-goog-upload-file-name</code> 之类的规则才改,其余逐字继承。</li>
+    <li><span class="kw">④ 响应侧两者等效</span>:三对的有效响应 status 与 <code>x-goog-upload-status</code> 完全一致——这正是「重发能冒充真实请求跑通」的证明。</li>
+  </ul>
+</div>
+
+<div class="footer">
+  本文档由对 <code>timelines/timeline-replay-20260724-114903445.jsonl</code> 的逐条解析生成,所有数值(字节数、字段值、行号)均取自该文件实测,未作人为截断。<br>
+  相关文档:<code>YouTube上传流程分析.html</code>(frontendUploadId↔scottyResourceId 配对绑定逆向) · <code>拦截器规则配置手册.html</code>(request-rules.json 8 支路速查) · <code>config/request-rules.json</code>(本次 resend 配置)。
+</div>
+
+</div>
+</body>
+</html>
