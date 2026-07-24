@@ -20,6 +20,7 @@ import type { HooksConfig } from '../core/macro-types';
 // 类文件仍保留(供自检脚本 verify-request-intercept / verify-timeline-record 直接实例化)。
 import { generateExtract, fixSelector, listProfiles, loadAiConfig, getConfigPath, importAiConfig, type GenerateInput, type FixSelectorInput } from '../core/ai-extract';
 import { runPostProcessors, listPostProcessors } from '../core/post-processors';
+import { applyBankConfigToManifests } from '../core/post-processors/bank-integrate';
 import type {
     Macro,
     MacroCaptures,
@@ -501,9 +502,14 @@ function registerIpc(): void {
         }
     );
 
-    // 列出可用后处理器插件(驱动渲染进程的可选插件列表)
+    // 列出可用后处理器插件(驱动渲染进程的可选插件列表)。
+    // 银行整合工具的 description/examples 支持经 bank-integrate.json 各 mode 可选覆盖(缺省用内置文案)。
     ipcMain.handle('list-plugins', () => {
-        return listPostProcessors();
+        return applyBankConfigToManifests(
+            listPostProcessors(),
+            path.join(configDir, 'bank-integrate.json'),
+            bankTemplatePath
+        );
     });
 
     // 直接运行某插件:弹文件多选(zip/csv/xls/xlsx,默认定位 downloads/),对所选文件直接跑后处理,不回放宏。

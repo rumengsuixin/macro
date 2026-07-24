@@ -4,10 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-/** 单条业务线(mode):当前平台可执行文件路径 */
+/** 单条业务线(mode):当前平台可执行文件路径 + 可选 UI 文案覆盖 */
 export interface BankIntegrateMode {
     /** 当前平台可执行文件绝对路径(Windows exe / Mac 二进制) */
     executable: string;
+    /** 可选:覆盖该工具在「独立工具」面板的描述文案(缺省用代码内置描述) */
+    description?: string;
+    /** 可选:覆盖该工具的示例文件名列表(缺省用代码内置示例) */
+    examples?: string[];
 }
 
 /** bank-integrate 桥接配置 */
@@ -87,6 +91,20 @@ function expandPlaceholders(s: string): string {
     return s.replace(/\{HOME\}/g, os.homedir());
 }
 
+/** 归一化配置里可选的描述覆盖:非空字符串才算数,否则 undefined(交调用方回退内置) */
+function normDescription(v: unknown): string | undefined {
+    return typeof v === 'string' && v.trim() ? v : undefined;
+}
+
+/** 归一化配置里可选的示例覆盖:字符串数组、逐项去空,空数组视为未配置 */
+function normExamples(v: unknown): string[] | undefined {
+    if (!Array.isArray(v)) {
+        return undefined;
+    }
+    const arr = v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+    return arr.length ? arr : undefined;
+}
+
 /**
  * 读平台专属模板文件(打包 resources 或仓库 config-templates 里的 bank-integrate.<平台>.json),
  * 展开 {HOME} 占位符后作为首次生成内容。缺路径/文件不存在/坏 JSON/无 modes 返回 null,
@@ -111,6 +129,14 @@ function loadTemplateFile(templatePath?: string): BankIntegrateConfig | null {
                 executable:
                     typeof mm.executable === 'string' ? expandPlaceholders(mm.executable) : '',
             };
+            const d = normDescription(mm.description);
+            if (d) {
+                modes[type].description = d;
+            }
+            const ex = normExamples(mm.examples);
+            if (ex) {
+                modes[type].examples = ex;
+            }
         }
         return {
             timeoutMs:
@@ -160,6 +186,14 @@ export function loadBankIntegrateConfig(
                         ? mm.executable
                         : defaultExecutable(type, DEFAULT_XLSX_ROOT),
             };
+            const d = normDescription(mm.description);
+            if (d) {
+                modes[type].description = d;
+            }
+            const ex = normExamples(mm.examples);
+            if (ex) {
+                modes[type].examples = ex;
+            }
         }
         return {
             timeoutMs:

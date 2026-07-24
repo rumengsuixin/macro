@@ -10,7 +10,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import type { PostProcessSpec, PostProcessResult } from '../macro-types';
+import type { PostProcessSpec, PostProcessResult, PostProcessorManifest } from '../macro-types';
 import { logInfo, logError } from '../logger';
 import { registerPostProcessor, type PostProcessContext, type PostProcessHandler } from './index';
 import { loadBankIntegrateConfig } from './bank-integrate-config';
@@ -225,4 +225,36 @@ for (const r of REGISTRATIONS) {
         },
         handler
     );
+}
+
+/**
+ * 用 bank-integrate.json 里各 mode 的可选 `description`/`examples` 覆盖对应工具的内置文案。
+ * 只影响 cfg.modes 里出现的类型(即 bank-integrate-*),其它插件(如 merge)原样透传;
+ * 某工具未配置 description/examples 时保留代码内置默认(缺省=现状)。
+ * 由主进程 list-plugins 在返回 manifest 前调用(此时才知道 configDir)。
+ * @param configPath   bank-integrate.json 绝对路径(dataRoot/config/bank-integrate.json)
+ * @param templatePath 平台专属模板绝对路径(首次生成用),透传给 loadBankIntegrateConfig
+ */
+export function applyBankConfigToManifests(
+    manifests: PostProcessorManifest[],
+    configPath: string,
+    templatePath?: string
+): PostProcessorManifest[] {
+    let cfg;
+    try {
+        cfg = loadBankIntegrateConfig(configPath, templatePath);
+    } catch {
+        return manifests; // 配置读失败不阻塞插件列表,回退内置文案
+    }
+    return manifests.map((m) => {
+        const mode = cfg.modes[m.type];
+        if (!mode) {
+            return m;
+        }
+        return {
+            ...m,
+            description: mode.description ?? m.description,
+            examples: mode.examples ?? m.examples,
+        };
+    });
 }
