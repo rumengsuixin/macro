@@ -127,31 +127,88 @@ const handler: PostProcessHandler = async (
 };
 
 /** 各代号的插件元数据(type 须与 bank-integrate-config 的 EXE_NAMES 键一致);handler 共享 */
-const REGISTRATIONS: Array<{ type: string; label: string; description: string }> = [
+const REGISTRATIONS: Array<{
+    type: string;
+    label: string;
+    description: string;
+    /** 示例文件名(每个必需文件/平台前缀各一个,渲染成可点复制的 chip);仅示范,数字/后缀可改 */
+    examples: string[];
+}> = [
     {
         type: 'bank-integrate-domestic',
         label: '国内银行流水整合',
-        description: '接受 .xls/.xlsx/.csv;文件名须为「公司-银行.xlsx」(如「甲公司-招行.xlsx」)。整合一批国内银行流水成汇总 xlsx。',
+        description:
+            '格式:.xls / .xlsx / .csv\n' +
+            '命名:公司-银行全称.xlsx\n' +
+            '可用银行(须写全称):招商银行 / 建设银行 / 工商银行 / 中信银行 / 浦发银行 / 农业银行 / 中国银行\n' +
+            '提示:银行名须写全称(「招行」不识别)、区分大小写;公司名不能为空。',
+        examples: ['瑞泽商务-中信银行.xlsx', '甲公司-招商银行.xls'],
     },
     {
         type: 'bank-integrate-overseas',
         label: '海外银行流水整合',
-        description: '接受 .xls/.xlsx/.csv,华美银行额外支持 .pdf;文件名须为「公司-银行-币种」(如「甲公司-华美-USD.xlsx」)。整合海外银行流水成汇总 xlsx。',
+        description:
+            '格式:.xls / .xlsx / .csv;华美银行仅接受 .pdf(文本型 PDF)\n' +
+            '命名:公司-银行全称-币种.xlsx\n' +
+            '币种:2~4 位大写字母(USD / HKD / SGD)\n' +
+            '可用银行(全称):汇丰银行 / 东亚银行 / 华侨银行 / 渣打银行空中云汇 / 华美银行 / 大华银行（UOB) / 联昌国际银行（CIMB） / 招商银行 / 工商银行\n' +
+            '提示:银行名区分大小写、括号须原样(全/半角);华美银行只走 PDF。',
+        examples: ['A-东亚银行-HKD.csv', 'B-大华银行（UOB)-SGD.xlsx', '甲公司-华美银行-USD.pdf'],
     },
     {
         type: 'bank-integrate-order-match',
         label: '游戏订单匹配对账',
-        description: '接受 .xls/.xlsx/.csv;需 admin 订单文件 + Adyen/华为/Google/苹果 各平台文件,匹配对账产出订单匹配结果 xlsx。',
+        description:
+            '格式:.xls / .xlsx / .csv\n' +
+            '必需:admin 订单主表(文件名以 admin 开头)\n' +
+            '平台文件(文件名前缀,不分大小写):adyen- / 华为(月结算用「华为平台结算」)/ googol- 或 google- / 苹果\n' +
+            '提示:admin 缺失会中止;其它平台缺失则跳过。',
+        examples: [
+            'admin订单.xlsx',
+            'adyen-2026.xlsx',
+            '华为平台结算2026.xlsx',
+            'google-2026.csv',
+            '苹果2026.xlsx',
+        ],
     },
     {
         type: 'bank-integrate-payout',
         label: '代付订单对账',
-        description: '接受 .xls/.xlsx/.csv;需 admin 主表 + IBF/SUPERPAY/Wangupay/话费卡/EPIN 平台文件(EPIN 需成对),对账产出代付结果 xlsx。',
+        description:
+            '格式:仅 .xls / .xlsx(不接受 .csv / .pdf)\n' +
+            '必需:admin 主表(文件名以 admin- 开头)\n' +
+            '平台文件(文件名前缀,不分大小写):ibfpay- 或 ibf平台 / superpay- / wangupay- 或 wangguypay- / okey话费卡结算 / EPIN 三件套 epin_siparisler_ + epin_pinler_ + epin_odemeler_ / Binance:usdt奖品发放信息 或 binance- 或 merged-\n' +
+            '提示:只认 xls/xlsx;EPIN 需三个文件配套;admin 缺失会中止。',
+        examples: [
+            'admin-Okey兑换202604.xls',
+            'superpay-2026.xls',
+            'ibfpay-2026.xls',
+            'wangupay-2026.xls',
+            'okey话费卡结算2026.xls',
+            'epin_siparisler_2026.xls',
+            'epin_pinler_2026.xls',
+            'epin_odemeler_2026.xls',
+            'binance-2026.xls',
+        ],
     },
     {
         type: 'bank-integrate-collection-payout',
         label: '代收代付对账',
-        description: '接受 .xls/.xlsx/.csv;需 admin 收款/兑换主表 + betcat/Cashnewpay 平台文件,对账产出代收代付结果 xlsx。',
+        description:
+            '格式:.xls / .xlsx / .csv\n' +
+            '必需:两张 admin 主表——admin收款 + admin兑换(按前缀分收/付方向)\n' +
+            '平台文件(文件名前缀,收款/代付分开):betcat-payment / betcat-payout、cashnewpay收款 / cashnewpay兑换、goldenpay收款 / goldenpay兑换\n' +
+            '提示:收款用「…收款」或「-payment」,代付用「…兑换」或「-payout」;两张 admin 都缺会中止。',
+        examples: [
+            'admin收款202604.xlsx',
+            'admin兑换202604.xlsx',
+            'betcat-payment2026.csv',
+            'betcat-payout2026.csv',
+            'cashnewpay收款2026.xlsx',
+            'cashnewpay兑换2026.xlsx',
+            'goldenpay收款2026.xlsx',
+            'goldenpay兑换2026.xlsx',
+        ],
     },
 ];
 
@@ -159,7 +216,13 @@ for (const r of REGISTRATIONS) {
     // standalone: true —— 银行整合/对账本质是「独立工具」(输入是人工归集的银行/对账文件,
     // 非宏回放产物),前端渲染到独立工具板块、不带随宏勾选框,只走「直接运行(选文件)」通道。
     registerPostProcessor(
-        { type: r.type, label: r.label, description: r.description, standalone: true },
+        {
+            type: r.type,
+            label: r.label,
+            description: r.description,
+            standalone: true,
+            examples: r.examples,
+        },
         handler
     );
 }

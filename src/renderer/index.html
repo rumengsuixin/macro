@@ -735,6 +735,45 @@
             line-height: 1.5;
         }
 
+        /* 示例文件名 chip:点一下复制文件名(整行 flex 换行) */
+        .plugin-examples {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin: -2px 0 8px 24px;
+        }
+
+        .plugin-examples .ex-hint {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .plugin-example {
+            padding: 2px 8px;
+            font-size: 12px;
+            font-weight: 500;
+            font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+            color: var(--text-soft);
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .plugin-example:hover {
+            border-color: var(--accent);
+            color: var(--accent-strong);
+        }
+
+        .plugin-example.copied {
+            font-family: inherit;
+            color: #fff;
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
         .plugin-row {
             display: flex;
             align-items: center;
@@ -774,6 +813,11 @@
 
         .tool-panel .plugin-desc {
             margin-left: 0;
+            white-space: pre-line; /* 保留描述里的 \n 换行:命名说明按行显示 */
+        }
+
+        .tool-panel .plugin-examples {
+            margin-left: 0; /* 与独立工具描述左对齐 */
         }
 
         .tool-panel .plugin-run-now {

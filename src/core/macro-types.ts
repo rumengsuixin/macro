@@ -355,6 +355,8 @@ export interface PostProcessorManifest {
      * 前端渲染到独立工具板块且不带复选框;缺省 false = 随宏勾选、回放后自动执行的后处理器。
      */
     standalone?: boolean;
+    /** 示例文件名列表(供 UI 渲染成可点复制的示例 chip,方便用户照着命名输入文件);缺省则不展示 */
+    examples?: string[];
 }
 
 /** 宏定义 */

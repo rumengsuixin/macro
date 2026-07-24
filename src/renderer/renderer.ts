@@ -43,6 +43,8 @@ interface PostProcessorManifest {
     description: string;
     /** true=独立工具(渲染到独立工具板块、无复选框);缺省=随宏勾选的后处理器 */
     standalone?: boolean;
+    /** 示例文件名列表(渲染成可点复制的示例 chip);缺省则不展示 */
+    examples?: string[];
 }
 
 interface RunResult {
@@ -417,6 +419,34 @@ function appendLog(message: string, level: 'info' | 'error', time?: string): voi
 
 function logLocal(message: string, level: 'info' | 'error' = 'info'): void {
     appendLog(message, level);
+}
+
+/**
+ * 复制文本到剪贴板:优先 navigator.clipboard(file:// 安全上下文可用),
+ * 失败回退隐藏 textarea + execCommand('copy')。返回是否成功。
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch {
+        // 落到下面的 textarea 兜底
+    }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch {
+        return false;
+    }
 }
 
 // ===== 步骤展示(面向普通用户的「人话」文案) =====
@@ -2781,7 +2811,7 @@ void refreshToolOutputDir();
  */
 function renderPluginRow(
     container: HTMLElement,
-    p: { type: string; label: string; description: string },
+    p: { type: string; label: string; description: string; examples?: string[] },
     withCheckbox: boolean
 ): void {
     const row = document.createElement('div');
@@ -2822,6 +2852,39 @@ function renderPluginRow(
     desc.textContent = p.description;
     container.appendChild(row);
     container.appendChild(desc);
+    // 示例文件名:每个渲染成可点复制的 chip(点击复制文件名 → 按钮短暂显示「✓ 已复制」)
+    if (p.examples?.length) {
+        const box = document.createElement('div');
+        box.className = 'plugin-examples';
+        const hint = document.createElement('span');
+        hint.className = 'ex-hint';
+        hint.textContent = '示例(点复制):';
+        box.appendChild(hint);
+        for (const name of p.examples) {
+            const chip = document.createElement('button');
+            chip.className = 'plugin-example';
+            chip.title = '复制文件名:' + name;
+            chip.textContent = '📋 ' + name;
+            chip.addEventListener('click', () => {
+                void copyToClipboard(name).then((ok) => {
+                    if (ok) {
+                        const orig = chip.textContent;
+                        chip.textContent = '✓ 已复制';
+                        chip.classList.add('copied');
+                        setTimeout(() => {
+                            chip.textContent = orig;
+                            chip.classList.remove('copied');
+                        }, 1200);
+                        logLocal('已复制文件名:' + name);
+                    } else {
+                        logLocal('复制失败,请手动选中文件名复制:' + name, 'error');
+                    }
+                });
+            });
+            box.appendChild(chip);
+        }
+        container.appendChild(box);
+    }
 }
 
 /** 从后端注册表拉取可用插件,按 standalone 分流渲染到「附加处理」与「独立工具」两个板块 */
