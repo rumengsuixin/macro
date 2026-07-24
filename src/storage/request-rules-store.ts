@@ -12,12 +12,43 @@ import type {
     DumpRule,
     BodyReplaceRule,
     RequestRulesConfig,
+    RequestSectionToggles,
     TimelineRecordConfig,
 } from '../core/macro-types';
 
+/** 支路级分闸的默认值:全部启用(缺省 = 开)。 */
+function defaultSections(): Required<RequestSectionToggles> {
+    return {
+        rules: true,
+        resends: true,
+        responseRules: true,
+        requestHeaderRules: true,
+        blocks: true,
+        dumps: true,
+        bodyReplaces: true,
+    };
+}
+
+/**
+ * 归一化「支路级分闸」:返回全 7 键对象,默认全 true,仅当 raw 里对应键是显式布尔时才覆盖。
+ * 白名单式——忽略未知键 / 非布尔值。缺 raw / raw 非对象 → 全 true(向后兼容)。
+ */
+function normalizeSections(raw: unknown): Required<RequestSectionToggles> {
+    const out = defaultSections();
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const r = raw as Record<string, unknown>;
+        for (const k of Object.keys(out) as (keyof RequestSectionToggles)[]) {
+            if (typeof r[k] === 'boolean') {
+                out[k] = r[k] as boolean;
+            }
+        }
+    }
+    return out;
+}
+
 /** 空配置:不启用、无规则(加载失败或字段缺失时的兜底) */
 function emptyConfig(): RequestRulesConfig {
-    return { enabled: false, rules: [] };
+    return { enabled: false, rules: [], sections: defaultSections() };
 }
 
 /**
@@ -27,6 +58,18 @@ function emptyConfig(): RequestRulesConfig {
 function templateConfig(): RequestRulesConfig {
     return {
         enabled: false,
+        // sections:「支路级分闸」。enabled 是总闸,这里逐支路再启停(两者 AND)。缺某键 = 该支路启用。
+        // 想临时只关某一支路(如重发)而保留其规则、又不影响其它支路,把对应键设为 false 即可。
+        // record 支路不在此列——它用自己的 record.enabled(独立于 enabled 与 sections)。
+        sections: {
+            rules: true,
+            resends: true,
+            responseRules: true,
+            requestHeaderRules: true,
+            blocks: true,
+            dumps: true,
+            bodyReplaces: true,
+        },
         rules: [
             {
                 urlPattern: '*/api/example*',
@@ -483,6 +526,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
                 : undefined;
         return {
             enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
+            sections: normalizeSections(raw.sections),
             rules,
             ...(resends.length ? { resends } : {}),
             ...(responseRules.length ? { responseRules } : {}),

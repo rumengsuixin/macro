@@ -2,7 +2,8 @@
     "_说明": "录制端请求改写规则示例。把本文件内容拷到项目根(或打包态 userData)的 request-rules.json 并按需修改。首次运行程序也会自动在那里生成一份 enabled=false 的模板。数组值直接写真 JSON 数组(如 [\"a\",\"b\"]),不要外面加引号写成字符串。",
     "_字段": {
         "enabled": "总开关(仅管改写),true 才拦截并改写;改动本文件即时生效(fs.watchFile 热更新),无需重启",
-        "_热更新": "录制端与回放端都监听本文件:改 enabled/rules/record 都即时生效(约 1s 内),回放跑到一半改也立刻生效,无需重启/重跑",
+        "sections": "「支路级分闸」对象:键=支路名(rules/resends/responseRules/requestHeaderRules/blocks/dumps/bodyReplaces),值=布尔。缺该字段/缺某键=该支路启用(向后兼容)。与 enabled 是 AND——某支路生效需 enabled 为真 且 sections[该支路]!==false 且 该支路有规则。用于只关某一支路(如把 resends 设 false)而保留其规则数组、又不影响其它支路。record 不在此列(用自己的 record.enabled)",
+        "_热更新": "录制端与回放端都监听本文件:改 enabled/sections/rules/record 都即时生效(约 1s 内),回放跑到一半改也立刻生效,无需重启/重跑",
         "rules[].urlPattern": "CDP glob 匹配请求 URL,* 任意串、? 单字符,如 */api/search*",
         "rules[].bodyType": "可选 json | form;省略则按请求 Content-Type / body 内容自动嗅探",
         "rules[].set": "设置/覆盖 body 顶层字段(整体替换整个字段值)。json 保留原始类型(数组/对象/数字照写照留),form 转字符串。数组值就写真数组 [\"x\"]",
@@ -57,6 +58,15 @@
         "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
     },
     "enabled": false,
+    "sections": {
+        "rules": true,
+        "resends": true,
+        "responseRules": true,
+        "requestHeaderRules": true,
+        "blocks": true,
+        "dumps": true,
+        "bodyReplaces": true
+    },
     "record": { "enabled": false, "urlPattern": "*", "includeBody": true },
     "rules": [
         {

@@ -54,6 +54,7 @@ import {
     extractResendVars,
     renderResendActions,
     checkExprSyntax,
+    sectionEnabled,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { logInfo, logError } from './logger';
@@ -813,10 +814,14 @@ export class MacroRunner {
         if (!ctx || !this.rewriteHandler) {
             return;
         }
-        this.rewriteRules = cfg.rules ?? [];
-        this.responseHeaderRules = cfg.responseRules ?? [];
-        this.requestHeaderRules = cfg.requestHeaderRules ?? [];
-        this.blockRules = cfg.blocks ?? [];
+        // 支路分闸:某支路被 sections 关掉 → 该数组视作空,下游 want / matchRule 天然把它当无规则。
+        // 四支路共用同一个 route handler,故必须在此各自分闸,而非只在合并的 want 上关。
+        this.rewriteRules = sectionEnabled(cfg, 'rules') ? cfg.rules ?? [] : [];
+        this.responseHeaderRules = sectionEnabled(cfg, 'responseRules') ? cfg.responseRules ?? [] : [];
+        this.requestHeaderRules = sectionEnabled(cfg, 'requestHeaderRules')
+            ? cfg.requestHeaderRules ?? []
+            : [];
+        this.blockRules = sectionEnabled(cfg, 'blocks') ? cfg.blocks ?? [] : [];
         // 改写 body / 响应头 / 请求头 / 真拦截规则 任一非空即需注册 route(只配其中一类也要拦)
         const want =
             cfg.enabled &&
@@ -955,7 +960,8 @@ export class MacroRunner {
         ) {
             this.maxResendHops = Math.min(Math.floor(cfg.maxResendHops), 100);
         }
-        const all = cfg.resends ?? [];
+        // 支路分闸:resends 被 sections 关掉 → 请求触发 + 响应触发两组都视作空(一处覆盖两者)。
+        const all = sectionEnabled(cfg, 'resends') ? cfg.resends ?? [] : [];
         this.resendRules = all.filter((r) => !r.responseTrigger);
         this.responseResendRules = all.filter((r) => !!r.responseTrigger);
         // 加载期语法体检:带 when 的规则若表达式语法错,一次性中文告警(该规则将永不命中,避免静默失效)
@@ -1097,7 +1103,7 @@ export class MacroRunner {
      * enabled 且有落盘规则才处理;关→开/开→关各记一条日志。
      */
     private applyReplayDump(cfg: RequestRulesConfig): void {
-        this.dumpRules = cfg.dumps ?? [];
+        this.dumpRules = sectionEnabled(cfg, 'dumps') ? cfg.dumps ?? [] : [];
         const want = cfg.enabled && this.dumpRules.length > 0;
         if (this.dumpWant && !want) {
             logInfo('回放请求体落盘:已停用。');
@@ -1118,7 +1124,7 @@ export class MacroRunner {
      * enabled 且有替换规则才处理;关→开/开→关各记一条日志;尾部刷新 CDP(补挂/更新 patterns/卸载)。
      */
     private applyReplayBodyReplace(cfg: RequestRulesConfig): void {
-        this.replaceRules = cfg.bodyReplaces ?? [];
+        this.replaceRules = sectionEnabled(cfg, 'bodyReplaces') ? cfg.bodyReplaces ?? [] : [];
         const want = cfg.enabled && this.replaceRules.length > 0;
         if (this.replaceWant && !want) {
             logInfo('回放请求体替换:已停用。');

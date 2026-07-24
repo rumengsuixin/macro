@@ -677,10 +677,39 @@ export interface TimelineRecordConfig {
     includeBody?: boolean;
 }
 
+/**
+ * 「支路级分闸」开关映射:键 = 支路名,值 = 是否启用。**缺省 / 缺键 = true(启用)**,只有显式
+ * false 才关闭该支路。与顶层 enabled 是 **AND** 关系:enabled 是总闸、sections 是各支路分闸——
+ * 某支路生效需「enabled 为真 且 sections[该支路] !== false 且 该支路有规则」。
+ * 用于「关掉某一支路、但保留其规则数组、也不影响其它支路」。record 支路**不受此管**(用它自己的
+ * record.enabled,独立于 enabled 与 sections)。
+ */
+export interface RequestSectionToggles {
+    /** rules(请求体改写)支路开关;缺省 true */
+    rules?: boolean;
+    /** resends(重发)支路开关;缺省 true */
+    resends?: boolean;
+    /** responseRules(响应头改写)支路开关;缺省 true */
+    responseRules?: boolean;
+    /** requestHeaderRules(请求头改写)支路开关;缺省 true */
+    requestHeaderRules?: boolean;
+    /** blocks(硬阻断)支路开关;缺省 true */
+    blocks?: boolean;
+    /** dumps(请求体落盘)支路开关;缺省 true */
+    dumps?: boolean;
+    /** bodyReplaces(请求体整体替换)支路开关;缺省 true */
+    bodyReplaces?: boolean;
+}
+
 /** 录制端请求改写配置(存于 request-rules.json;默认 enabled=false 不干预) */
 export interface RequestRulesConfig {
     /** 总开关:false 时完全不拦截(改写) */
     enabled: boolean;
+    /**
+     * 支路级分闸(缺省视为全部启用)。与 enabled 是 AND:enabled 总闸开着时,再按 sections 逐支路启停。
+     * 缺该字段 / 缺某键 = 该支路启用(向后兼容)。record 不在此列(用 record.enabled)。
+     */
+    sections?: RequestSectionToggles;
     /** 规则列表(按序尝试匹配,命中即改写) */
     rules: RequestRule[];
     /** 重发规则列表(命中后延时改参重发一个新请求;受 enabled 总开关管);缺省视为无重发 */

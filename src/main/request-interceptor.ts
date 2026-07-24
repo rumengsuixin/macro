@@ -20,6 +20,7 @@ import {
     headerValue,
     isResendOrigin,
     buildResendHeaders,
+    sectionEnabled,
 } from '../core/request-rewrite';
 import { TimelineRecorder } from '../core/timeline-recorder';
 
@@ -197,10 +198,17 @@ export class RequestInterceptor {
         if (!wc || !wc.debugger.isAttached()) {
             return;
         }
-        const rewriteActive = this.config.enabled && this.config.rules.length > 0;
-        const resendActive = this.config.enabled && (this.config.resends?.length ?? 0) > 0;
+        // 支路分闸:总闸 enabled 之外,再各自 AND 上 sections 分闸(缺省=启用)。
+        const rewriteActive =
+            this.config.enabled && sectionEnabled(this.config, 'rules') && this.config.rules.length > 0;
+        const resendActive =
+            this.config.enabled &&
+            sectionEnabled(this.config, 'resends') &&
+            (this.config.resends?.length ?? 0) > 0;
         const responseRewriteActive =
-            this.config.enabled && (this.config.responseRules?.length ?? 0) > 0;
+            this.config.enabled &&
+            sectionEnabled(this.config, 'responseRules') &&
+            (this.config.responseRules?.length ?? 0) > 0;
         // 重发由开转关:清掉未触发的定时器(热关即时停)
         if (this.resendActive && !resendActive) {
             this.clearResendTimers();

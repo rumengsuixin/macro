@@ -9,6 +9,7 @@ import type {
     RequestHeaderRule,
     ResendRule,
     ResendResponseTrigger,
+    RequestSectionToggles,
 } from './macro-types';
 import { tryEvalTriggerWhen, checkExprSyntax, type ExprContext } from './expr-eval';
 
@@ -49,6 +50,17 @@ export function matchRule<T extends { urlPattern: string }>(rules: T[], url: str
         }
     }
     return null;
+}
+
+/**
+ * 支路级分闸判定:sections[name] 缺省 / 缺键视为启用,只有显式 false 才关闭。
+ * 与顶层 enabled 是 AND(此函数只判分闸,总闸由调用方另行 && enabled)。录制端 + 回放端共用。
+ */
+export function sectionEnabled(
+    cfg: { sections?: RequestSectionToggles },
+    name: keyof RequestSectionToggles
+): boolean {
+    return cfg.sections?.[name] !== false;
 }
 
 /** 判定 body 类型:规则显式 > Content-Type 嗅探 > 内容嗅探(兜底 form) */

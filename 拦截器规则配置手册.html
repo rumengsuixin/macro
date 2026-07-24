@@ -413,10 +413,11 @@
 
         <!-- ============ 总览 ============ -->
         <h2 id="overview"><span class="num">§</span>顶层结构总览</h2>
-        <p class="section-hint">配置根对象:8 个支路键 + 顶层 <code class="inline">maxResendHops</code>(响应触发连环的跳数上限)。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 总开关统管。</p>
+        <p class="section-hint">配置根对象:8 个支路键 + 顶层 <code class="inline">enabled</code> 总开关 + <code class="inline">sections</code> 支路级分闸 + <code class="inline">maxResendHops</code>(响应触发连环的跳数上限)。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 统管,并可再经 <code class="inline">sections</code> 逐支路启停。</p>
 
         <div class="overview-grid">
             <a class="ov-item" href="#concepts"><div class="k">enabled</div><div class="d">总开关,管所有改写/拦截支路(不含 record)</div></a>
+            <a class="ov-item" href="#concepts"><div class="k">sections</div><div class="d">支路级分闸:逐支路启停(缺省启用)</div></a>
             <a class="ov-item" href="#rules"><div class="k">rules[]</div><div class="d">改写请求 body 顶层字段</div></a>
             <a class="ov-item" href="#resends"><div class="k">resends[]</div><div class="d">命中后延时改参重发一个新请求</div></a>
             <a class="ov-item" href="#responseRules"><div class="k">responseRules[]</div><div class="d">按条件改写响应头</div></a>
@@ -438,6 +439,7 @@
                 <thead><tr><th>键</th><th>类型</th><th>必填</th><th>作用</th><th>缺省 / 空</th></tr></thead>
                 <tbody>
                     <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>总开关:false 时改写/重发/响应头/硬阻断/落盘/替换 六支路全部不生效</td><td>缺失视为 <code class="inline">false</code></td></tr>
+                    <tr><td class="field"><code>sections</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>支路级分闸</b>:键=支路名(rules/resends/responseRules/requestHeaderRules/blocks/dumps/bodyReplaces)→ 布尔。与 <code class="inline">enabled</code> 是 <b>AND</b>:某支路生效需 enabled 真 且 sections[支路]!==false 且 有规则。用于只关某一支路(如 <code class="inline">resends:false</code>)而保留其规则数组、不影响其它支路。<code class="inline">record</code> 不受此管</td><td>缺该键 / 缺某支路键 = 该支路<b>启用</b>(向后兼容)</td></tr>
                     <tr><td class="field"><code>rules</code></td><td class="type">RequestRule[]</td><td><span class="badge opt">可选</span></td><td>请求体改写规则列表</td><td><code class="inline">[]</code></td></tr>
                     <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应头改写规则列表</td><td>无</td></tr>
@@ -836,6 +838,7 @@
             <div class="note warn"><span class="nt">配了没反应?排查清单</span>
                 <ul>
                     <li>顶层 <code class="inline">enabled</code> 是否为 <code class="inline">true</code>?(record 除外)</li>
+                    <li>该支路在 <code class="inline">sections</code> 里是否被显式设成了 <code class="inline">false</code>?(缺键=启用;显式 false 会单独关掉该支路)</li>
                     <li><code class="inline">urlPattern</code> 前后是否各加了 <code class="inline">*</code>?(对完整 URL 匹配)</li>
                     <li>数组值是不是写成了字符串 <code class="inline">"['x']"</code>?应写真数组 <code class="inline">["x"]</code>。</li>
                     <li>是否在<b>录制阶段</b>期待改写生效?现只在<b>回放阶段</b>生效(record 除外)。</li>
@@ -846,7 +849,7 @@
         </div>
 
         <footer>
-            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-20
+            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-24(补 sections 支路级分闸)
         </footer>
     </main>
 </div>

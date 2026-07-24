@@ -12,6 +12,7 @@ import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
 import { loadRequestRules } from '../storage/request-rules-store';
+import { sectionEnabled } from '../core/request-rewrite';
 import { loadReplayProfile, resolveActiveProfile, setActiveProfile } from '../storage/replay-profile-store';
 import { loadHooksConfig, setHooksEnabled } from '../core/hooks-config';
 import { dispatchHooks } from '../core/hooks-dispatcher';
@@ -933,16 +934,35 @@ async function buildSessionOptions(): Promise<SessionOptions> {
     // 门槛放宽:改写(enabled+规则)或记录(record.enabled)任一开启,都把 config 带给 runner——
     // record-only(改写 enabled:false)也要能记录。两支路在 runner 内各自独立判断,互不启停。
     const requestRules = loadRequestRules(requestRulesPath);
-    const rewriteActive = requestRules.enabled && requestRules.rules.length > 0;
+    // 各支路 active = 总闸 enabled 且 支路分闸 sections[支路] 未显式关 且 该支路有规则。
+    // record 独立(不看 enabled、也不看 sections,用它自己的 record.enabled)。
+    const rewriteActive =
+        requestRules.enabled && sectionEnabled(requestRules, 'rules') && requestRules.rules.length > 0;
     const recordActive = requestRules.record?.enabled === true;
-    const resendActive = requestRules.enabled && (requestRules.resends?.length ?? 0) > 0;
+    const resendActive =
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'resends') &&
+        (requestRules.resends?.length ?? 0) > 0;
     const responseRuleActive =
-        requestRules.enabled && (requestRules.responseRules?.length ?? 0) > 0;
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'responseRules') &&
+        (requestRules.responseRules?.length ?? 0) > 0;
     const requestHeaderActive =
-        requestRules.enabled && (requestRules.requestHeaderRules?.length ?? 0) > 0;
-    const blockActive = requestRules.enabled && (requestRules.blocks?.length ?? 0) > 0;
-    const dumpActive = requestRules.enabled && (requestRules.dumps?.length ?? 0) > 0;
-    const replaceActive = requestRules.enabled && (requestRules.bodyReplaces?.length ?? 0) > 0;
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'requestHeaderRules') &&
+        (requestRules.requestHeaderRules?.length ?? 0) > 0;
+    const blockActive =
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'blocks') &&
+        (requestRules.blocks?.length ?? 0) > 0;
+    const dumpActive =
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'dumps') &&
+        (requestRules.dumps?.length ?? 0) > 0;
+    const replaceActive =
+        requestRules.enabled &&
+        sectionEnabled(requestRules, 'bodyReplaces') &&
+        (requestRules.bodyReplaces?.length ?? 0) > 0;
     if (
         rewriteActive ||
         recordActive ||
