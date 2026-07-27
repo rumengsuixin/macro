@@ -42,6 +42,7 @@
 - `配置文件位置总览.html` — 全部 7 个运行时配置(统一收于 `dataRoot/config/`)的位置/作用/加载方式/热更新/模板来源速查
 - `YouTube上传流程分析.html` — YouTube Studio 上传三阶段逆向(frontendUploadId↔scottyResourceId 配对绑定)
 - `YouTube重发链路对比分析.html` — 「录A自动补传B」实证:原请求↔重发请求逐维度差异 + createvideo 31字段仅 scottyResourceId 变(title/frontendUploadId 沿用A的隐患)
+- `YouTube视频生命周期与转码存储.html` — 上传流程分析的姊妹篇:补齐 API 边界外的后端(转码/存储/CDN)· 三层模型(blob/实体/渲染)· 转码流水线(分块并行+Argos VCU+按热度选 H.264/VP9/AV1)· 每条结论标证据级(抓包实证/协议公开/架构公开/合理推断)
 - `xlsxIntgration融合设计.html` — 与外部 Python 银行整合项目的融合评估(仅设计文档)
 - `打包指南.md` — Win/Mac 安装包打包(自带 Chromium;Mac 走 GitHub Actions `build-mac.yml`,未签名)
 - `examples/` — 演示宏 `demo-macro.json` / `demo-list-action.json` + `request-rules.example.json`

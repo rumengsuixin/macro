@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube 视频完整生命周期 · 从字节到播放:转码与存储深度分析</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --ok: #1a9d5a;
+        --warn: #d98a00;
+        --danger: #d64545;
+        --ai: #7c5cff;
+        --bg: #f4f8f9;
+        --card: #ffffff;
+        --line: #d9e4e7;
+        --text: #16323a;
+        --muted: #5c7681;
+        --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        --body: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 0 0 80px; background: var(--bg); color: var(--text);
+        font-family: var(--body); line-height: 1.7; font-size: 15px;
+    }
+    header {
+        background: linear-gradient(135deg, var(--deep), #123f4b);
+        color: #fff; padding: 40px 6% 32px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 27px; }
+    header .sub { color: #a9d4d8; font-size: 14px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 6%; }
+    section { margin-top: 40px; }
+    h2 {
+        font-size: 21px; color: var(--deep); border-left: 5px solid var(--primary);
+        padding-left: 12px; margin: 0 0 16px;
+    }
+    h3 { font-size: 17px; color: var(--deep); margin: 24px 0 10px; }
+    .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 20px 24px; box-shadow: 0 2px 10px rgba(14,42,51,.05); margin-bottom: 18px;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef6f7; color: var(--deep); font-weight: 600; }
+    tr:nth-child(even) td { background: #fafcfc; }
+    code { font-family: var(--mono); background: #eef3f4; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; word-break: break-all; }
+    pre {
+        background: var(--deep); color: #d6ecef; font-family: var(--mono); font-size: 12.5px;
+        padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.55;
+    }
+    pre .k { color: #7fd4dc; } pre .s { color: #ffb38a; } pre .c { color: #6f8b93; }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 20px; color: #fff; font-weight: 600; }
+    .t-req { background: var(--primary); } .t-res { background: var(--ai); }
+    .t-cli { background: var(--muted); } .t-srv { background: var(--accent); }
+    .badge { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #eef3f4; color: var(--deep); }
+    .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .step-num {
+        width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex: 0 0 auto;
+    }
+    .callout { border-radius: 10px; padding: 14px 18px; margin: 14px 0; border-left: 4px solid; }
+    .c-key { background: #fff6f2; border-color: var(--accent); }
+    .c-ok { background: #eefaf2; border-color: var(--ok); }
+    .c-warn { background: #fff8e8; border-color: var(--warn); }
+    .c-info { background: #eef6fb; border-color: #2f8fd6; }
+    .kv { display: grid; grid-template-columns: 190px 1fr; gap: 6px 16px; font-size: 13.5px; }
+    .kv .lbl { color: var(--muted); }
+    .timeline { position: relative; margin: 10px 0 0 6px; padding-left: 22px; border-left: 2px dashed var(--line); }
+    .tl-item { position: relative; padding: 4px 0 14px; }
+    .tl-item::before {
+        content: ''; position: absolute; left: -29px; top: 8px; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--card); border: 3px solid var(--primary);
+    }
+    .tl-item.hi::before { border-color: var(--accent); }
+    .tl-item.aux::before { border-color: var(--line); width: 8px; height: 8px; left: -27px; }
+    .tl-t { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .arrow { text-align: center; color: var(--primary); font-size: 20px; margin: -6px 0; }
+    ul.tight { margin: 6px 0; padding-left: 22px; }
+    ul.tight li { margin: 3px 0; }
+    .foot { margin-top: 50px; text-align: center; color: var(--muted); font-size: 12.5px; }
+    /* 证据层级徽标 */
+    .ev { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 20px; margin-right: 4px; white-space: nowrap; }
+    .ev-cap { background: #d7f5e3; color: #0d6b3b; }   /* 抓包实证 */
+    .ev-proto { background: #d9edfb; color: #17557f; }  /* 协议公开 */
+    .ev-arch { background: #eae2ff; color: #4a32a6; }   /* 架构公开知识 */
+    .ev-inf { background: #ffe9cf; color: #96530a; }     /* 合理推断 */
+    .layer-box { display:grid; grid-template-columns: 1fr; gap:0; margin:14px 0; border-radius:12px; overflow:hidden; border:1px solid var(--line); }
+    .layer { padding:14px 18px; }
+    .layer h4 { margin:0 0 4px; font-size:15px; }
+    .layer.l1 { background:#eefaf2; border-bottom:1px solid var(--line); }
+    .layer.l2 { background:#eef6fb; border-bottom:1px solid var(--line); }
+    .layer.l3 { background:#fff6f2; }
+    .legend { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 0; font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+    <div class="wrap" style="padding:0;">
+        <h1>🎞️ YouTube 视频完整生命周期 —— 从字节到播放:转码与存储深度分析</h1>
+        <div class="sub">《YouTube上传流程分析.html》的姊妹篇 · 前者只到「客户端 API 边界」;本篇把边界之外的<b>后端转码 / 存储 / CDN</b> 补齐,并严格标注每条结论的证据等级</div>
+    </div>
+</header>
+
+<div class="wrap">
+
+<!-- ========== 阅读前必读:证据分级 ========== -->
+<section>
+    <h2>零、阅读前必读 —— 本文的证据分级</h2>
+    <div class="callout c-warn">
+        <b>为什么必须分级?</b> 姊妹文书《YouTube上传流程分析.html》有一条铁律:<b>只写抓包逐字实证的东西</b>,并明言「不记录响应体、转码由后端异步、时间线看不到内部」。本篇要回答的「转码 / 存储」<u>绝大部分发生在抓包看不到的后端</u>。若不分级,就会把「行业公开知识」冒充成「本仓库抓包实证」——那正是原文书极力避免的。<b>故本文每条关键结论前都挂一枚徽标,标明它的可信来源:</b>
+        <div class="legend" style="margin-top:10px;">
+            <span><span class="ev ev-cap">抓包实证</span>取自本仓库 <code>timelines/</code> 时间线或 <code>dumps/</code> 落盘响应体,逐字可查</span>
+            <span><span class="ev ev-proto">协议公开</span>Google 官方文档记载的 <code>x-goog-upload-*</code> / InnerTube / DASH 协议行为</span>
+            <span><span class="ev ev-arch">架构公开</span>Google/YouTube 论文·工程博客·大会演讲披露的内部架构(Argos VCU、编解码策略等)</span>
+            <span><span class="ev ev-inf">合理推断</span>把上面几层串起来的逻辑推断,非直接证据</span>
+        </div>
+    </div>
+    <div class="callout c-info" style="margin-bottom:0;">
+        <b>一句话定位:</b> 抓包实证只覆盖<b>「客户端 ↔ 上传前端(Scotty)/ InnerTube」这层握手</b>(start → 字节上传 → createvideo → feedback 轮询 → delete)。「字节进了 Scotty 之后如何被转码、分段、复制、推到 CDN」是<b>架构公开 + 合理推断</b>——本文会在每处讲明「抓包止于此,以下是公开架构」。
+    </div>
+</section>
+
+<!-- ========== 三层模型 ========== -->
+<section>
+    <h2>一、核心心智模型:视频在 YouTube 是「三层叠加的对象」</h2>
+    <p>原文书 §八 的结论里已埋下这条线索——「blob 层 ↔ 实体层 ↔ 渲染/CDN 层」。把它展开,就是理解整个生命周期的钥匙:<b>一个「视频」不是一个文件,而是三层各自独立、各自寻址、各自可增删的对象叠加。</b>上传是自下而上逐层点亮,删除是自上而下逐层回收。</p>
+
+    <div class="layer-box">
+        <div class="layer l1">
+            <h4>🟩 第 1 层 · Blob 层(字节)—— <code>scottyResourceId</code> 寻址</h4>
+            <div class="muted" style="color:#0d6b3b;">存的是<b>原始上传字节</b>,以及后来<b>转码产出的每一路 rendition 分段字节</b>。句柄 = <code>scottyResourceId</code>(上传时)/ 内部 blob id(转码后)。<span class="ev ev-cap">抓包实证</span>:start 响应头 <code>x-goog-upload-header-scotty-resource-id</code>(376 字符)即此层的资源槽位句柄。</div>
+        </div>
+        <div class="layer l2">
+            <h4>🟦 第 2 层 · 实体层(元数据)—— <code>videoId</code> 寻址</h4>
+            <div class="muted" style="color:#17557f;">存的是<b>这条视频作为一个业务对象</b>的元数据行:标题 / 隐私 / 草稿态 / 处理进度 / 频道归属 / 转码结果指针。主键 = 11 字符 <code>videoId</code>。<span class="ev ev-cap">抓包实证</span>:delete 响应体的 <code>entityKey</code> 解出明文 <code>creator_video_data_&lt;videoId&gt;</code>——实体层<b>确以 videoId 建主键</b>。</div>
+        </div>
+        <div class="layer l3">
+            <h4>🟧 第 3 层 · 渲染 / CDN 层(可播放流)—— <code>googlevideo.com</code> 寻址</h4>
+            <div class="muted" style="color:#96530a;">存的是<b>面向播放器的自适应流</b>:DASH manifest + 各 rendition/codec 的分段,复制到边缘缓存(Google Global Cache)。播放时由 <code>*.googlevideo.com/videoplayback?...</code> 提供字节。<span class="ev ev-inf">合理推断</span>:本仓库抓包是「上传/删除」流,未含播放流,故此层无本地抓包,取自公开架构。</div>
+        </div>
+    </div>
+
+    <div class="callout c-key" style="margin-bottom:0;">
+        <b>三层解耦是理解一切「异步」现象的根:</b>
+        <ul class="tight" style="margin:6px 0 0;">
+            <li><b>上传</b>:先点亮 Blob 层(字节灌进 Scotty),再点亮实体层(<code>createvideo</code> 建 videoId 草稿),渲染层由后端异步补(转码)。<span class="ev ev-cap">抓包实证</span>:createvideo 在字节还没传完时(早 30 秒)就返回 200——因为它只登记<b>实体层</b>,不等 Blob 层就位、更不等渲染层。</li>
+            <li><b>删除</b>:<code>video/delete</code> 只对<b>实体层</b>发一条 <code>ENTITY_MUTATION_TYPE_DELETE</code>(硬删),完全不碰 Blob 层的 scottyResourceId / frontendUploadId。Blob 与渲染层的字节由后端<b>异步垃圾回收</b>。<span class="ev ev-cap">抓包实证</span> + <span class="ev ev-inf">合理推断</span>(GC 属后端,抓包不可见)。</li>
+        </ul>
+    </div>
+</section>
+
+<!-- ========== 完整时间轴 ========== -->
+<section>
+    <h2>二、完整生命周期时间轴(13 步)</h2>
+    <p class="muted">左侧徽标 = 该步的证据来源。前 4 步与最后 1 步有本仓库抓包实证;中间的转码/存储/CDN 步是后端行为,取自公开架构。</p>
+
+    <div class="card">
+        <div class="timeline">
+            <div class="tl-item aux"><span class="ev ev-cap">抓包实证</span> <b>Step 0 · 客户端准备</b>:浏览器用 <code>GET blob:…</code> 读本地选中文件,与上传前端协商分片粒度。<span class="muted">时间线 t+18.33s 的 blob 读取。</span></div>
+
+            <div class="tl-item hi"><span class="ev ev-cap">抓包实证</span><span class="ev ev-proto">协议公开</span> <b>Step 1 · 会话初始化(start)</b>:<code>POST upload.youtube.com/upload/studio</code>,报文件大小 + <code>frontendUploadId</code>;Scotty 在响应头回 <code>scottyResourceId</code>(资源槽位)+ <code>upload_id</code>(上传地址)+ 分片粒度 256KB。<span class="muted">→ 853ms。<b>Blob 层槽位在此分配。</b></span></div>
+
+            <div class="tl-item hi"><span class="ev ev-cap">抓包实证</span> <b>Step 2 · 字节上传(upload+finalize)</b>:<code>POST upload.youtube.com/?upload_id=…</code>,28MB 灌入 Scotty,<code>x-goog-upload-status: final</code>。<span class="muted">→ 32,228ms(真正耗时)。<b>Blob 层字节落库。</b></span></div>
+
+            <div class="tl-item hi"><span class="ev ev-cap">抓包实证</span> <b>Step 3 · 创建视频(createvideo)</b>:<code>POST /youtubei/v1/upload/createvideo</code>,提交 <code>(frontendUploadId, scottyResourceId)</code> + 元数据;响应回 <b>videoId</b>,草稿 <code>PROCESSING</code>。<span class="muted">→ 2,136ms,<b>字节还没传完就返回</b>(早 30s)。<b>实体层行建立。</b></span></div>
+
+            <div class="arrow">┈┈┈ 以下进入抓包看不见的后端(feedback 轮询是唯一探针) ┈┈┈</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span><span class="ev ev-inf">合理推断</span> <b>Step 4 · 摄取与校验</b>:Scotty 确认 blob 完整,后端解析容器(mp4/webm)、探测编解码/分辨率/时长/帧率,做完整性与格式校验。校验失败 → 实体转 <code>FAILED</code>。</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span> <b>Step 5 · 转码(核心耗时)</b>:原片被<b>切成 GOP 对齐的分块</b>,分发到集群里的<b>专用 VCU 机器(Argos ASIC)并行转码</b>,产出一整条<b>rendition ladder</b>(144p→8K)× 多编解码器(H.264 基线 / VP9 / AV1)。转码结果写回 Blob 层。详见 §四。</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span><span class="ev ev-proto">协议公开</span> <b>Step 6 · 打包(packaging)</b>:各 rendition 切成流式分段(fMP4 / WebM),生成 <b>DASH manifest(MPD)</b> 描述可用清晰度/码率/编解码组合,供播放器自适应选择。</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span> <b>Step 7 · 内容分析(并行)</b>:<b>Content ID</b> 版权指纹比对、策略/安全分类器、自动字幕、缩略图抽帧(<code>i.ytimg.com</code> 封面即此产物)、语言检测等,与转码并行推进。</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span><span class="ev ev-inf">合理推断</span> <b>Step 8 · 存储与复制</b>:所有 rendition 分段写入分布式存储(公开代号 Colossus / Blobstore),跨数据中心多副本;实体层元数据落 YouTube 的元数据库(Vitess/MySQL 谱系,起源于 YouTube)。</div>
+
+            <div class="tl-item"><span class="ev ev-arch">架构公开</span> <b>Step 9 · CDN 分发</b>:可播放分段推/拉到边缘缓存 <b>Google Global Cache</b>(部分部署在 ISP 内),播放经 <code>*.googlevideo.com</code> 就近取字节。</div>
+
+            <div class="tl-item hi"><span class="ev ev-cap">抓包实证</span> <b>Step 10 · 渐进可用(feedback 轮询在追这个)</b>:清晰度<b>由低到高逐路上线</b>——SD 先可播,HD/4K/AV1 陆续补齐。<span class="muted">时间线里 <b>28 次</b> <code>upload/feedback</code> 正是前端在轮询「这一次上传」的转码/处理进度(continuation token 里编码了 frontendUploadId)。</span></div>
+
+            <div class="tl-item"><span class="ev ev-cap">抓包实证</span><span class="ev ev-inf">合理推断</span> <b>Step 11 · 稳态</b>:视频成为频道内一个以 <code>videoId</code> 寻址的实体;<code>get_creator_videos</code> 可查其状态,播放走 CDN。<span class="muted">delete 时间线里 <code>get_creator_videos</code> 单查 videoId 即证实体可独立寻址。</span></div>
+
+            <div class="tl-item hi"><span class="ev ev-cap">抓包实证</span> <b>Step 12 · 删除</b>:<code>POST /youtubei/v1/video/delete</code>,只凭 videoId 对<b>实体层</b>发 <code>ENTITY_MUTATION_TYPE_DELETE</code>(<b>硬删、无回收站、无 undoToken</b>);Blob/渲染层字节由后端异步 GC。<span class="muted">→ 响应体 <code>success:true</code> + 单条 DELETE 变更(saveBodies 落盘实证)。</span></div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== 为什么解耦 ========== -->
+<section>
+    <h2>三、抓包给出的三条「后端行为」硬证据</h2>
+    <p>虽然抓包看不到转码内部,但时间线里有<b>三处间接证据</b>,反向印证了后端的异步流水线存在。这三条是「架构公开知识」在本仓库数据里的落地锚点:</p>
+
+    <div class="card">
+        <h3>证据 A · createvideo 早于字节 finalize 30 秒返回 200</h3>
+        <div class="callout c-ok" style="margin-top:6px;">
+            <span class="ev ev-cap">抓包实证</span> ③ createvideo 于 t+23.35s(2.1s)返回 200,② 字节上传 t+53.44s 才 finalize。<b>createvideo 当场不校验字节是否就位</b>,只登记实体层草稿。<br>
+            <span class="ev ev-inf">合理推断</span> ⟹ 证明「实体登记」与「Blob 落库 / 转码」是<b>两条独立的异步管线</b>,前者秒级、后者分钟级。这正是三层解耦的直接观测。
+        </div>
+
+        <h3>证据 B · 28 次 feedback 轮询</h3>
+        <div class="callout c-ok" style="margin-top:6px;">
+            <span class="ev ev-cap">抓包实证</span> 时间线 28 条 <code>/youtubei/v1/upload/feedback</code>,continuation token base64 解出含 <code>innertube_studio</code> = 本次 frontendUploadId。<br>
+            <span class="ev ev-inf">合理推断</span> ⟹ 前端明知服务端要「处理一段时间」,才需要持续轮询进度条。<b>轮询的对象就是 Step 5~10 的转码/渐进可用进度</b>——这是抓包能触到的、最接近转码流水线的一根探针。
+        </div>
+
+        <h3>证据 C · createvideo 返回 200 ≠ 视频最终成功</h3>
+        <div class="callout c-warn" style="margin-top:6px;">
+            <span class="ev ev-cap">抓包实证</span>(原文书 §4 阶段③)createvideo 只凭 scottyResourceId 句柄 + 配对 + 会话令牌即登记草稿;<b>若后端异步去取的 blob 已过期/被清理,会「草稿建成、转码失败、视频变错误态」</b>。<br>
+            <span class="ev ev-inf">合理推断</span> ⟹ 反证 Blob 层与实体层<b>生命周期不同步</b>:实体可以先于(甚至脱离)有效字节而存在。这对「复用旧资源对」方案是关键风险点。
+        </div>
+    </div>
+</section>
+
+<!-- ========== 转码流水线深挖 ========== -->
+<section>
+    <h2>四、转码流水线深挖(Step 5 展开)—— 架构公开知识</h2>
+    <div class="callout c-info">
+        <b>本节全部为 <span class="ev ev-arch">架构公开</span>:</b>取自 Google 的 ASPLOS 2021 论文《Warehouse-scale video acceleration》、YouTube 工程博客与公开技术分享。<b>本仓库抓包对这些细节零覆盖</b>(时间线止于 feedback 轮询)。列在此是为了让「转码」这一步不再是黑箱。
+    </div>
+
+    <div class="card">
+        <h3>4.1 为什么转码必须异步、且是最大的时间/成本开销</h3>
+        <p>一条上传要被转成<b>十几路版本</b>,以覆盖从手机到 4K/8K 电视的各种设备、各种带宽。全球每分钟有<b>数百小时</b>视频上传,传统 CPU 转码算力早已跟不上。所以:</p>
+        <ul class="tight">
+            <li><b>分块并行</b>:单条视频按 GOP(画面组)对齐<b>切成多个 chunk</b>,分散到集群里许多台机器<b>同时转</b>,转完再拼接。这样即便长视频也能在可接受时间内出片。</li>
+            <li><b>专用硬件 Argos VCU</b>:YouTube 自研了 <b>VCU(Video Coding Unit)</b> ASIC(内部代号 <b>Argos</b>),形态是插满两颗 Argos 芯片的全长 PCI-E 卡,每个编码核可实时编 <b>2160p@60fps</b>。相比优化过的软件转码,<b>算力性价比提升 20–33 倍</b>——正是它让昂贵的 VP9/AV1 能在全站规模跑得起。</li>
+            <li><b>部署方式</b>:每个计算集群里放一批专用「VCU 机器」,而非给每台服务器都插卡。</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h3>4.2 Rendition Ladder —— 一片变十几路</h3>
+        <p>转码产出一条「清晰度 × 编解码器」的矩阵(rendition ladder / 编码梯):</p>
+        <table>
+            <tr><th>维度</th><th>取值(典型)</th><th>说明</th></tr>
+            <tr><td>清晰度(itag 分档)</td><td>144p · 240p · 360p · 480p · 720p · 1080p · 1440p · 2160p(4K)· 4320p(8K)</td><td>每档一路,播放器按带宽自适应切换</td></tr>
+            <tr><td>视频编解码器</td><td><b>H.264/AVC</b>(通用兜底)· <b>VP9</b>(4K/桌面主力)· <b>AV1</b>(热门/超高清)</td><td>见 4.3 的「按热度选码」策略</td></tr>
+            <tr><td>音频编解码器</td><td><b>AAC</b>(通用)· <b>Opus</b>(配 VP9/AV1)</td><td>音轨与视频轨分离,DASH 里独立选择</td></tr>
+            <tr><td>Per-title 编码</td><td>逐片定制码率</td><td>按内容复杂度给每片单独定各档码率,省带宽</td></tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>4.3 关键策略:编解码器「按视频热度」分级投入</h3>
+        <div class="callout c-key" style="margin-top:6px;">
+            <span class="ev ev-arch">架构公开</span> 转码是有成本的,YouTube 不会一上来就把每片都编成最贵的 AV1。真实策略是<b>分级</b>:
+            <ul class="tight" style="margin:6px 0 0;">
+                <li><b>刚上传</b>:先出 <b>H.264</b>(快、全设备兼容)——这解释了为什么新片「先能看,但清晰度档位少」。</li>
+                <li><b>有一定播放量</b>:补 <b>VP9</b>(4K 与桌面主力,同画质更省带宽)。</li>
+                <li><b>热门 / 超高清</b>:再投 <b>AV1</b>(比 VP9 再省约 30%,比 H.264 省约 50%;<b>8K 仅 AV1</b>)。观看量越大,每次播放省下的带宽越能摊平昂贵的编码成本。</li>
+                <li><b>冷门视频</b>:可能<b>长期只保留 H.264</b>,不值得投更贵的编码。</li>
+            </ul>
+            <span class="ev ev-inf">合理推断</span> ⟹ 一个视频的「渲染层」是<b>随时间/热度演进的活体</b>,不是上传后就定死的静态产物。删除时要回收的 rendition 数量,取决于它这辈子被投过多少路编码。
+        </div>
+        <h3>4.4 播放时怎么选</h3>
+        <p><span class="ev ev-proto">协议公开</span> 播放器把自己支持的编解码器能力告诉 YouTube,平台在 DASH manifest 里给出<b>它这台设备能高效解的最优组合</b>;分辨率越高越倾向新码(H.264 在高清下文件太大不划算)。用户也可在「播放和性能」里手动「始终优先 AV1」。</p>
+    </div>
+</section>
+
+<!-- ========== 存储层 ========== -->
+<section>
+    <h2>五、存储方式(Step 8 展开)—— 三层各自的存储介质</h2>
+    <div class="card">
+        <table>
+            <tr><th style="width:110px;">层</th><th>存什么</th><th>存储介质(公开代号)</th><th>寻址键</th><th>删除时</th></tr>
+            <tr>
+                <td>🟩 Blob 层</td>
+                <td>原始上传字节 + 各 rendition 分段字节</td>
+                <td><span class="ev ev-arch">架构公开</span> 经 <b>Scotty</b> 上传前端落入分布式对象/文件存储(公开代号 <b>Colossus</b>——GFS 的后继 / <b>Blobstore</b>)</td>
+                <td><code>scottyResourceId</code> → 内部 blob id</td>
+                <td>异步 GC 回收字节</td>
+            </tr>
+            <tr>
+                <td>🟦 实体层</td>
+                <td>标题/隐私/草稿态/处理进度/频道归属/指向各 rendition 的指针</td>
+                <td><span class="ev ev-arch">架构公开</span> YouTube 元数据库(<b>Vitess</b> —— 起源于 YouTube 的 MySQL 水平扩展方案;Google 谱系另有 Spanner)</td>
+                <td><code>videoId</code>(11 字符)</td>
+                <td><span class="ev ev-cap">抓包实证</span> 立即 <code>ENTITY_MUTATION_TYPE_DELETE</code></td>
+            </tr>
+            <tr>
+                <td>🟧 渲染/CDN 层</td>
+                <td>DASH manifest + 面向播放的分段,多地边缘副本</td>
+                <td><span class="ev ev-arch">架构公开</span> <b>Google Global Cache(GGC)</b> 边缘缓存,经 <code>*.googlevideo.com</code> 提供</td>
+                <td>URL 内签名 token</td>
+                <td>边缘副本随源失效/过期自然淘汰</td>
+            </tr>
+        </table>
+        <div class="callout c-warn" style="margin-bottom:0;">
+            <b>诚实边界:</b> <code>Scotty</code> / <code>Colossus</code> / <code>Blobstore</code> / <code>Vitess</code> / <code>GGC</code> 均为 Google <b>内部系统代号</b>,<b>不出现在官方 API 文档</b>——它们来自 Google 的论文、大会与工程博客(<span class="ev ev-arch">架构公开</span>)。官方文档只到 <code>x-goog-upload-*</code> 这层<b>协议边界</b>(<span class="ev ev-proto">协议公开</span>)。<b>本仓库抓包能证的,只有实体层以 videoId 建主键这一条</b>(delete 响应体的 entityKey);Blob 层与 CDN 层的存储介质属架构公开,非本地实证。
+        </div>
+    </div>
+</section>
+
+<!-- ========== 一图流 ========== -->
+<section>
+    <h2>六、一图流:上传点亮三层,删除只熄实体层</h2>
+    <div class="card">
+<pre><span class="c">        客户端(YouTube Studio 前端)</span>
+             │
+   ┌─────────┼──────────────────────────────────────────┐
+   │ Step1 start        →  <span class="s">scottyResourceId</span> + upload_id   <span class="c"># 分配 Blob 槽位</span>
+   │ Step2 upload/final →  28MB 字节灌入 Scotty(32s)     <span class="c"># 🟩 Blob 层点亮</span>
+   │ Step3 createvideo  →  返回 <span class="s">videoId</span>,草稿 PROCESSING  <span class="c"># 🟦 实体层点亮(不等字节)</span>
+   └─────────┼──────────────────────────────────────────┘
+             │  feedback ×28 轮询 ▼(前端能看到的唯一进度)
+   ┌─────────┴──────────── 后端异步(抓包不可见) ────────────┐
+   │ Step4 摄取校验  Step5 <b>分块并行转码(Argos VCU)</b>            │
+   │ Step6 DASH 打包  Step7 ContentID/缩略图  Step8 Colossus 落盘 │
+   │ Step9 推 GGC 边缘  Step10 SD→HD→4K/AV1 <b>渐进可用</b>          <span class="c"># 🟧 渲染/CDN 层点亮</span>
+   └─────────┬──────────────────────────────────────────┘
+             │  稳态:videoId 寻址实体,播放走 *.googlevideo.com
+             ▼
+   Step12 delete(videoId)→ <b>只对 🟦 实体层发 DELETE(硬删)</b>
+                          🟩 Blob / 🟧 渲染层字节 → 后端异步 GC
+</pre>
+        <p class="muted" style="margin-bottom:0;">读法:🟩🟦🟧 三层<b>上传时自下而上逐层点亮、删除时只熄灭实体层</b>;实体层是「视频存不存在」的唯一判据(所以删除只认 videoId),字节层的回收是后端自己的事。</p>
+    </div>
+</section>
+
+<!-- ========== 回答用户问题 ========== -->
+<section>
+    <h2>七、直接回答:「一段视频在 YouTube 的完整经历」</h2>
+    <div class="card">
+        <ol class="tight">
+            <li><b>选片</b>:浏览器读本地文件,与 Scotty 协商 256KB 分片粒度。<span class="ev ev-cap">抓包实证</span></li>
+            <li><b>开会话</b>:前端报「要传一个 28MB 的 B.mp4」+ frontendUploadId;Scotty 立刻回一个<b>空的资源槽位</b> scottyResourceId + 上传地址。<span class="ev ev-cap">抓包实证</span></li>
+            <li><b>灌字节</b>:28MB 走 resumable 协议一次性灌进槽位,<code>status:final</code> 表示<b>原始字节已落 Blob 层</b>(约 32 秒,这是全程唯一的大头耗时)。<span class="ev ev-cap">抓包实证</span></li>
+            <li><b>建实体</b>:createvideo 把 (frontendUploadId, scottyResourceId) 提交,后端秒级<b>建一条 videoId 实体行、置 PROCESSING 草稿</b>——此刻 Studio 就出现「处理中」条目,但<b>字节可能都还没传完</b>。<span class="ev ev-cap">抓包实证</span></li>
+            <li><b>后端摄取</b>:Scotty 确认 blob 完整,解析容器、探测编解码/分辨率/时长。<span class="ev ev-arch">架构公开</span></li>
+            <li><b>并行转码</b>:原片<b>切块</b>,散到集群的 <b>Argos VCU</b> 专用硬件<b>并行转</b>,产出一条 <b>144p→8K × H.264/VP9/AV1</b> 的 rendition 梯——<b>先出 H.264 保可播,VP9/AV1 按热度后补</b>。<span class="ev ev-arch">架构公开</span></li>
+            <li><b>打包分发</b>:切成 DASH 分段 + 生成 manifest,写入 <b>Colossus</b> 多副本,推到 <b>Google Global Cache</b> 边缘。<span class="ev ev-arch">架构公开</span></li>
+            <li><b>并行内容分析</b>:Content ID 版权比对、缩略图抽帧(<code>i.ytimg.com</code> 封面)、字幕、安全分类。<span class="ev ev-arch">架构公开</span></li>
+            <li><b>渐进可用</b>:清晰度<b>由低到高逐路上线</b>;前端<b>28 次 feedback 轮询</b>就在追这个进度。<span class="ev ev-cap">抓包实证</span>(轮询)+ <span class="ev ev-arch">架构公开</span>(渐进机制)</li>
+            <li><b>稳态播放</b>:视频成为 videoId 寻址的实体,播放器按设备能力从 <code>*.googlevideo.com</code> 取最优 codec/清晰度的分段。<span class="ev ev-arch">架构公开</span></li>
+            <li><b>删除</b>:只凭 videoId 对<b>实体层硬删</b>(单条 DELETE 变更、<b>无回收站</b>);Blob 与渲染层字节由后端异步 GC。<span class="ev ev-cap">抓包实证</span>(硬删)+ <span class="ev ev-inf">合理推断</span>(GC)</li>
+        </ol>
+        <div class="callout c-info" style="margin-bottom:0;">
+            <b>一句话总括:</b> 上传的 32 秒只是把<b>原始字节</b>塞进 Blob 层;真正把它变成「能在任何设备流畅播放的视频」的,是后端<b>看不见的分块并行转码流水线</b>——切块 → Argos VCU 转出十几路(H.264 兜底、VP9/AV1 按热度追加)→ DASH 打包 → Colossus 存储 → GGC 边缘分发 → 由低到高渐进上线。视频「存在与否」由<b>实体层(videoId)</b>说了算,字节存储和 CDN 副本是它下面异步维护的两层。
+        </div>
+    </div>
+</section>
+
+<!-- ========== 与既有文书衔接 ========== -->
+<section>
+    <h2>八、与既有文书的衔接</h2>
+    <div class="card">
+        <table>
+            <tr><th>文书</th><th>覆盖范围</th><th>证据强度</th></tr>
+            <tr><td><code>YouTube上传流程分析.html</code></td><td>客户端 API 三阶段(start/upload/createvideo)+ 删除接口 + 两个核心标识配对</td><td>几乎全为 <span class="ev ev-cap">抓包实证</span>(逐字比对)</td></tr>
+            <tr><td><code>YouTube重发链路对比分析.html</code></td><td>「录A补传B」重发链路逐维度差异</td><td><span class="ev ev-cap">抓包实证</span></td></tr>
+            <tr><td><b>本篇</b> <code>YouTube视频生命周期与转码存储.html</code></td><td>API 边界<b>之外</b>的后端:转码/存储/CDN/三层模型</td><td>抓包锚点 + <span class="ev ev-arch">架构公开</span> 为主,<b>逐条标级</b></td></tr>
+        </table>
+        <div class="callout c-warn" style="margin-bottom:0;">
+            <b>为什么本篇不能像姊妹篇那样「逐字实证」?</b> 因为姊妹篇的题目(上传 API 握手)恰好完整落在抓包可见范围内;而本篇的题目(转码/存储)<b>本质发生在后端</b>,抓包物理上只能触到 feedback 轮询这一根探针。本篇的价值不在「新抓到了什么」,而在<b>把抓包的几个锚点(createvideo 早返回、28 次轮询、entityKey 明文、硬删)与公开架构正确地缝合成一条完整生命周期</b>,并诚实标明每一针的线是从哪来的。
+        </div>
+    </div>
+</section>
+
+<div class="foot">
+    抓包锚点取自本仓库 <code>timelines/</code> 与 <code>dumps/</code> · 转码/存储/CDN 细节为 Google 公开架构资料(ASPLOS 2021《Warehouse-scale video acceleration》、YouTube 工程博客、公开技术分享)· 内部系统代号(Scotty/Colossus/Vitess/GGC/Argos)不见于官方 API 文档 · 生成于 2026-07-27
+</div>
+
+</div>
+</body>
+</html>
