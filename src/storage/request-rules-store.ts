@@ -340,6 +340,15 @@ function normalizeResendExtract(
     return Object.keys(out).length ? out : undefined;
 }
 
+/** 归一化响应状态码覆盖值:取整并要求落在 [100,599];非法(NaN/越界/非数字)返回 null。 */
+function normalizeStatusField(raw: unknown): number | null {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+        return null;
+    }
+    const s = Math.trunc(raw);
+    return s >= 100 && s <= 599 ? s : null;
+}
+
 /** 把原始对象归一化成 string→string 映射(仅保留值为 string 的键);空/非对象返回 undefined */
 function normalizeStringMap(raw: unknown): Record<string, string> | undefined {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -374,6 +383,20 @@ function normalizeResponseHeaderRule(raw: unknown): ResponseHeaderRule | null {
     }
     if (Array.isArray(r.removeHeaders)) {
         rule.removeHeaders = r.removeHeaders.filter((x): x is string => typeof x === 'string');
+    }
+    // ── 响应体/状态码/mock 动作(P0-1;均可选,缺则该维度不介入,行为与旧配置一致)──
+    const status = normalizeStatusField(r.setStatus);
+    if (status !== null) {
+        rule.setStatus = status;
+    }
+    if (typeof r.setBody === 'string') {
+        rule.setBody = r.setBody; // 空串是合法的「空体覆盖」,保留
+    }
+    if (typeof r.bodyReplaceFile === 'string' && r.bodyReplaceFile.trim()) {
+        rule.bodyReplaceFile = r.bodyReplaceFile.trim();
+    }
+    if (r.mock === true) {
+        rule.mock = true;
     }
     return rule;
 }

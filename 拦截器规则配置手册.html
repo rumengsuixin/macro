@@ -442,7 +442,7 @@
                     <tr><td class="field"><code>sections</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>支路级分闸</b>:键=支路名(rules/resends/responseRules/requestHeaderRules/blocks/dumps/bodyReplaces)→ 布尔。与 <code class="inline">enabled</code> 是 <b>AND</b>:某支路生效需 enabled 真 且 sections[支路]!==false 且 有规则。用于只关某一支路(如 <code class="inline">resends:false</code>)而保留其规则数组、不影响其它支路。<code class="inline">record</code> 不受此管</td><td>缺该键 / 缺某支路键 = 该支路<b>启用</b>(向后兼容)</td></tr>
                     <tr><td class="field"><code>rules</code></td><td class="type">RequestRule[]</td><td><span class="badge opt">可选</span></td><td>请求体改写规则列表</td><td><code class="inline">[]</code></td></tr>
                     <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
-                    <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应头改写规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应条件改写规则列表(头 / 状态码 / 响应体 / mock)</td><td>无</td></tr>
                     <tr><td class="field"><code>requestHeaderRules</code></td><td class="type">RequestHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>请求头改写规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>真拦截规则列表(mode:abort 硬阻断 / hold 挂起放行)</td><td>无</td></tr>
                     <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
@@ -510,6 +510,8 @@
                     <tr><td>等某个响应满足条件(如上传完成)后才重发</td><td><code>resends</code> + responseTrigger</td><td>triggerUrl / bodyContains</td></tr>
                     <tr><td>重发时换整个 body 成一个本地文件(换视频)</td><td><code>resends</code></td><td>replaceWithFile</td></tr>
                     <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
+                    <tr><td>改某响应的<b>响应体 / 状态码</b>(让前端以为成功 / 失败、删响应某项)</td><td><code>responseRules</code></td><td>setBody / bodyReplaceFile / setStatus</td></tr>
+                    <tr><td><b>mock 一个接口</b>(不打后端,直接返回构造响应 / 桩接口)</td><td><code>responseRules</code>(mock:true)</td><td>mock / setStatus / setBody / setHeaders</td></tr>
                     <tr><td>改某请求的请求头(换 Authorization / 删探针头)</td><td><code>requestHeaderRules</code></td><td>when / setHeaders / removeHeaders</td></tr>
                     <tr><td>让某些请求根本发不出去(屏蔽埋点 / 上报)</td><td><code>blocks</code></td><td>urlPattern / method / requestHeaders / query / bodyJson / bodyContains / when</td></tr>
                     <tr><td>同一 URL 只拦其中一类(按请求头 / 参数 / body 区分)</td><td><code>blocks</code></td><td>requestHeaders / query / bodyJson / bodyContains / when</td></tr>
@@ -668,26 +670,44 @@
         </div>
 
         <!-- ============ 3. responseRules ============ -->
-        <h2 id="responseRules"><span class="num">3</span><span class="key">responseRules[]</span>&nbsp;响应头条件改写</h2>
-        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的响应,当其响应头满足 <code class="inline">when</code> 条件时,改写响应头。<b>条件读的是响应头、动作改的也是响应头。</b></p>
+        <h2 id="responseRules"><span class="num">3</span><span class="key">responseRules[]</span>&nbsp;响应条件改写(头 / 状态码 / 响应体 / mock)</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code> 的响应,当其响应头满足 <code class="inline">when</code> 条件时,改写响应<b>头 / 状态码 / 响应体</b>;或用 <code class="inline">mock:true</code> <b>直接返回一个假响应、不打后端</b>。改头/状态/体三类动作可组合(mock 除外)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
             <table>
                 <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
                 <tbody>
                     <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配响应对应的请求 URL</td><td>与 method 无关,GET 也能改;缺失整条丢弃</td></tr>
-                    <tr><td class="field"><code>when</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>这些响应头需全部相等才改(AND)</td><td>头名大小写不敏感;<b>缺省=无条件总是改</b></td></tr>
-                    <tr><td class="field"><code>setHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖响应头</td><td>大小写不敏感覆盖,不产生重复键</td></tr>
-                    <tr><td class="field"><code>removeHeaders</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除响应头</td><td>大小写不敏感</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>这些响应头需全部相等才改(AND);<b>同时门控 头/状态/体三类改写</b></td><td>头名大小写不敏感;<b>缺省=无条件总是改</b>;<code class="inline">mock:true</code> 时忽略</td></tr>
+                    <tr><td class="field"><code>setHeaders</code></td><td class="type">object(string→string)</td><td><span class="badge opt">可选</span></td><td>设置 / 覆盖响应头(mock 时=假响应的头)</td><td>大小写不敏感覆盖,不产生重复键</td></tr>
+                    <tr><td class="field"><code>removeHeaders</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>删除响应头</td><td>大小写不敏感;<code class="inline">mock:true</code> 时忽略</td></tr>
+                    <tr><td class="field"><code>setStatus</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>覆盖响应<b>状态码</b>(如 403 / 500);mock 时=假响应状态码(缺省 200)</td><td>取整并 clamp 到 [100,599];非法忽略</td></tr>
+                    <tr><td class="field"><code>setBody</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td><b>整体替换响应体</b>为此字符串;空串=空体</td><td>与 bodyReplaceFile 二选一(setBody 优先);仅整体替换,深层字段级改由后续 setPath 提供</td></tr>
+                    <tr><td class="field"><code>bodyReplaceFile</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>用本地文件<b>完整字节</b>整体替换响应体(二进制安全)</td><td>绝对路径;读失败→用原响应体(失败即安全)</td></tr>
+                    <tr><td class="field"><code>mock</code></td><td class="type">boolean</td><td><span class="badge opt">可选</span></td><td><b>mock 模式</b>:命中即不发真实请求,直接用 setStatus/setBody/bodyReplaceFile/setHeaders 构造假响应</td><td>缺省 false;true 时 when/removeHeaders 忽略</td></tr>
                 </tbody>
             </table>
-            <div class="note limit"><span class="nt">限制</span>命中的请求由浏览器直连改为 Node 侧 <code class="inline">route.fetch()</code> 代发(有开销,只作用命中 URL,其余请求零成本);多个合法重复头(如多个 <code class="inline">set-cookie</code>)中不在名单内的会被保留。</div>
-<pre><span class="c">// 响应头 xx=1 时,把 cc 设为 1 并删掉 x-drop 头</span>
+            <div class="note limit"><span class="nt">限制</span>非 mock:命中的请求由浏览器直连改为 Node 侧 <code class="inline">route.fetch()</code> 代发(有开销,只作用命中 URL);<b>覆盖响应体时自动剥离 content-length</b>,交回放引擎按新体重算。多个合法重复头(如多个 <code class="inline">set-cookie</code>)中不在名单内的会被保留。mock:不 fetch,后端零命中。</div>
+<pre><span class="c">// a) 响应头 xx=1 时,把 cc 设为 1 并删掉 x-drop 头</span>
 {
   <span class="k">"urlPattern"</span>: <span class="s">"*/api/data*"</span>,
   <span class="k">"when"</span>: { <span class="k">"xx"</span>: <span class="s">"1"</span> },
   <span class="k">"setHeaders"</span>: { <span class="k">"cc"</span>: <span class="s">"1"</span> },
   <span class="k">"removeHeaders"</span>: [<span class="s">"x-drop"</span>]
+}
+<span class="c">// b) 改真实响应体 + 覆盖状态码(让前端以为失败)</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/order/submit*"</span>,
+  <span class="k">"setStatus"</span>: <span class="n">403</span>,
+  <span class="k">"setBody"</span>: <span class="s">"{\"ok\":false,\"msg\":\"blocked\"}"</span>
+}
+<span class="c">// c) mock 假响应(桩接口:不打后端,直接返回构造 JSON)</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"*/api/flags*"</span>,
+  <span class="k">"mock"</span>: <span class="kw">true</span>,
+  <span class="k">"setStatus"</span>: <span class="n">200</span>,
+  <span class="k">"setBody"</span>: <span class="s">"{\"featureX\":true}"</span>,
+  <span class="k">"setHeaders"</span>: { <span class="k">"content-type"</span>: <span class="s">"application/json"</span> }
 }</pre>
         </div>
 

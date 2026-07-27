@@ -603,22 +603,50 @@ export interface ResendRule {
 }
 
 /**
- * 「响应头条件改写」规则:命中 urlPattern 的响应,当其响应头满足 when 条件时,
- * 按 setHeaders / removeHeaders 改写响应头。与改写 rules[]、重发 resends[] 物理分开存
+ * 「响应条件改写」规则:命中 urlPattern 的响应,当其响应头满足 when 条件时,按下述动作改写响应
+ * (响应头 / 状态码 / 响应体),或直接 mock 一个假响应。与改写 rules[]、重发 resends[] 物理分开存
  * responseRules[](matchRule「首个命中即返回」,混数组会互抢首命中)。受 RequestRulesConfig.enabled
  * 总开关统管(enabled=true 且有 responseRules 才生效)。
  * 与请求侧改写机制不同:必须在**响应返回后**介入——录制端走 CDP Fetch 响应阶段(continueResponse)、
  * 回放端走 Playwright route.fetch()+route.fulfill()。
+ *
+ * 动作分两类,同一条规则可组合(mock 除外):
+ * - **改真实响应**(缺省):先 route.fetch 拿到真实响应,再按 setHeaders/removeHeaders/setStatus/setBody
+ *   /bodyReplaceFile 覆盖后 fulfill。改响应体/状态码同样受 when 门槛(与改头一致);覆盖响应体时自动
+ *   剥离 content-length,交回放引擎按新体重算,避免「声明长度≠实际体」。
+ * - **mock 假响应**(mock:true):**不发真实请求**,直接用 setStatus(缺省 200)+ setBody/bodyReplaceFile
+ *   (缺省空体)+ setHeaders 构造一个响应返回。此时 when / removeHeaders 忽略(没有真实响应可判/可删)。
  */
 export interface ResponseHeaderRule {
     /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
     urlPattern: string;
-    /** 条件:这些响应头需**全部相等**才改(AND,头名大小写不敏感);缺省=无条件总是改 */
+    /** 条件:这些响应头需**全部相等**才改(AND,头名大小写不敏感);缺省=无条件总是改。mock:true 时忽略 */
     when?: Record<string, string>;
     /** 设置/覆盖的响应头(如 cc=1);同名头大小写不敏感覆盖,不产生重复键 */
     setHeaders?: Record<string, string>;
-    /** 删除的响应头名(大小写不敏感) */
+    /** 删除的响应头名(大小写不敏感);mock:true 时忽略(无真实响应头可删) */
     removeHeaders?: string[];
+    /**
+     * 可选:覆盖响应**状态码**(如 200 / 403 / 500)。归一化后取整、clamp 到 [100,599];非法则忽略。
+     * 改真实响应时:when 满足才覆盖。mock 时:缺省 200。仅回放端生效。
+     */
+    setStatus?: number;
+    /**
+     * 可选:**整体替换响应体**为此字符串(如注入一段 JSON)。空串 = 空响应体(合法)。
+     * 与 bodyReplaceFile 二选一,同时给时 setBody 优先。改真实响应时受 when 门槛。仅回放端生效。
+     * 注:P0-1 只支持整体替换;深层字段级改响应体(点路径)由后续 setPath 机制统一提供。
+     */
+    setBody?: string;
+    /**
+     * 可选,本地文件**绝对路径**:用该文件完整字节整体替换响应体(二进制安全,如换一张图/一个 json)。
+     * 与 setBody 二选一(setBody 优先)。读文件失败 → **跳过响应体替换、用原响应体**(失败即安全)。仅回放端生效。
+     */
+    bodyReplaceFile?: string;
+    /**
+     * 可选:true = **mock 模式**,命中即**不发真实请求**,直接用 setStatus/setBody/bodyReplaceFile/setHeaders
+     * 构造并返回一个假响应(典型:桩接口、断网仿真、强制某状态)。缺省 false=改真实响应。仅回放端生效。
+     */
+    mock?: boolean;
 }
 
 /**

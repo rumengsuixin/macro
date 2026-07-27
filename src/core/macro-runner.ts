@@ -10,6 +10,7 @@ import {
     type Route,
     type Request,
     type Response,
+    type APIResponse,
     type CDPSession,
 } from 'playwright';
 import path from 'node:path';
@@ -47,6 +48,9 @@ import {
     decideBodyType,
     rewritePostBody,
     rewriteResponseHeaderRecord,
+    responseRuleHasBodyAction,
+    resolveResponseOverride,
+    resolveMockStatus,
     rewriteRequestHeaderRecord,
     headerValue,
     isResendOrigin,
@@ -916,9 +920,14 @@ export class MacroRunner {
     }
 
     /**
-     * 回放端响应头改写:实际发出请求(route.fetch;若同一 POST 也命中 body 改写规则则带上改后的 body,
-     * 若命中请求头改写规则则带上改后的请求头),拿到真实响应后按规则改响应头,route.fulfill 回填。
-     * 一旦 fetch 就已消费该请求,故后续统一 fulfill;仅 fetch 前出错才回退 route.continue(保持「每条必放行」铁律)。
+     * 回放端响应条件改写:命中 responseRules 的请求,按规则改写响应(头 / 状态码 / 响应体),或 mock 假响应。
+     * 两条路径:
+     * - **mock:true**:不发真实请求,直接用 setStatus/setBody/bodyReplaceFile/setHeaders 构造响应 fulfill;
+     * - 缺省:route.fetch 拿真实响应(若同一 POST 也命中 body 改写 / 请求头改写规则则一并带上发出),
+     *   再按 when 门槛叠加 响应头 / 状态码 / 响应体 覆盖后 fulfill。
+     * 一旦 fetch 就已消费该请求,故后续统一 fulfill;仅出错才回退 route.continue(保持「每条必放行」铁律 I1)。
+     * 改响应体时:显式重发头并**剥离 content-length**,交回放引擎按新体重算;只改头/状态时保留原响应体不动。
+     * 任一步失败(读文件 / 解析)一律**失败即安全**——退回原响应,绝不悬空请求。
      * @param reqHeaders 请求头改写结果(null=不改;非 null 则作为 route.fetch 的 headers 入参一并发出)
      */
     private async handleResponseHeaderRoute(
@@ -927,7 +936,38 @@ export class MacroRunner {
         respRule: ResponseHeaderRule,
         reqHeaders: Record<string, string> | null
     ): Promise<void> {
+        // 剥离 content-length(大小写不敏感):覆盖/构造响应体后交引擎按新体重算,避免声明长度≠实际体
+        const stripCL = (h: Record<string, string>): Record<string, string> => {
+            const out: Record<string, string> = {};
+            for (const [k, v] of Object.entries(h || {})) {
+                if (k.toLowerCase() !== 'content-length') {
+                    out[k] = v;
+                }
+            }
+            return out;
+        };
         try {
+            // ── mock:不发真实请求,直接构造假响应 ──
+            if (respRule.mock === true) {
+                const status = resolveMockStatus(respRule);
+                let body: string | Buffer = typeof respRule.setBody === 'string' ? respRule.setBody : '';
+                if (typeof respRule.setBody !== 'string' && respRule.bodyReplaceFile) {
+                    try {
+                        body = fs.readFileSync(respRule.bodyReplaceFile);
+                    } catch (err) {
+                        logError(
+                            `回放响应改写器:mock 读响应体文件失败(用空体):${(err as Error).message}`
+                        );
+                        body = '';
+                    }
+                }
+                const bodyLen = typeof body === 'string' ? Buffer.byteLength(body) : body.length;
+                logInfo(
+                    `回放响应改写器:mock 假响应 [${request.url()}];status=${status};body=${bodyLen} 字节`
+                );
+                await route.fulfill({ status, headers: stripCL(respRule.setHeaders ?? {}), body });
+                return;
+            }
             // 若同一请求也命中 body 改写规则(POST),先算改后的 body 一并发出(两种改写可组合)
             const fetchOptions: { postData?: string; headers?: Record<string, string> } = {};
             if (request.method().toUpperCase() === 'POST') {
@@ -943,7 +983,7 @@ export class MacroRunner {
                         }
                     } catch (err) {
                         logError(
-                            `回放响应头改写器:附带的 body 改写失败(用原 body 发出):${(err as Error).message}`
+                            `回放响应改写器:附带的 body 改写失败(用原 body 发出):${(err as Error).message}`
                         );
                     }
                 }
@@ -954,20 +994,59 @@ export class MacroRunner {
             }
             const response = await route.fetch(fetchOptions);
             const headers = response.headers();
-            const newHeaders = rewriteResponseHeaderRecord(headers, respRule);
-            if (newHeaders !== null) {
+            const newHeaders = rewriteResponseHeaderRecord(headers, respRule); // 头覆盖(null=不改/条件不满足)
+            // 响应体/状态码覆盖:与改头共用同一 when 门槛(resolveResponseOverride 判定)
+            let bodyOverride: string | Buffer | null = null;
+            let statusOverride: number | null = null;
+            if (responseRuleHasBodyAction(respRule)) {
+                const ov = resolveResponseOverride(headers, respRule);
+                statusOverride = ov.status;
+                if (ov.body !== null) {
+                    bodyOverride = ov.body; // setBody 整体替换(优先,允许空串)
+                } else if (ov.condMet && respRule.bodyReplaceFile) {
+                    try {
+                        bodyOverride = fs.readFileSync(respRule.bodyReplaceFile); // 文件字节整体替换
+                    } catch (err) {
+                        logError(
+                            `回放响应改写器:读响应体文件失败(用原响应体):${(err as Error).message}`
+                        );
+                        bodyOverride = null; // 失败即安全
+                    }
+                }
+            }
+            if (bodyOverride !== null) {
+                // 覆盖响应体:显式重发头(剥 content-length)+ 状态(未指定则保留原状态)+ 新体,不再带 response
+                const baseHeaders = newHeaders ?? headers;
+                const finalStatus = statusOverride !== null ? statusOverride : response.status();
+                const bodyLen =
+                    typeof bodyOverride === 'string' ? Buffer.byteLength(bodyOverride) : bodyOverride.length;
                 logInfo(
-                    `回放响应头改写器:已改写响应头 [${request.url()}];` +
+                    `回放响应改写器:已改写响应体 [${request.url()}];status=${finalStatus};body=${bodyLen} 字节`
+                );
+                await route.fulfill({ status: finalStatus, headers: stripCL(baseHeaders), body: bodyOverride });
+            } else if (newHeaders !== null || statusOverride !== null) {
+                // 只改头 / 状态,不改体:以真实响应为基覆盖(响应体不变,content-length 无需动)
+                const opts: { response: APIResponse; headers?: Record<string, string>; status?: number } = {
+                    response,
+                };
+                if (newHeaders !== null) {
+                    opts.headers = newHeaders;
+                }
+                if (statusOverride !== null) {
+                    opts.status = statusOverride;
+                }
+                logInfo(
+                    `回放响应改写器:已改写响应${newHeaders !== null ? '头' : ''}${statusOverride !== null ? '状态码=' + statusOverride : ''} [${request.url()}];` +
                         `set=${Object.keys(respRule.setHeaders ?? {}).join(',') || '无'};` +
                         `remove=${(respRule.removeHeaders ?? []).join(',') || '无'}`
                 );
-                await route.fulfill({ response, headers: newHeaders });
+                await route.fulfill(opts);
             } else {
                 // 条件不满足 / 无动作:用原响应回填(请求已被 fetch 消费,必须 fulfill 而非 continue)
                 await route.fulfill({ response });
             }
         } catch (err) {
-            logError(`回放响应头改写器:处理响应头出错(原样放行):${(err as Error).message}`);
+            logError(`回放响应改写器:处理响应出错(原样放行):${(err as Error).message}`);
             try {
                 await route.continue();
             } catch {

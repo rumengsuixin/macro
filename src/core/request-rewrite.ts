@@ -753,6 +753,64 @@ export function rewriteResponseHeaderRecord(
     return out;
 }
 
+// ── 「响应体/状态码/mock」改写的共享纯逻辑(仅回放端调用;文件读取/route.fulfill 属 IO 机械管线,不在此)──
+
+/**
+ * 判断响应规则是否含「响应体 / 状态码 / mock」动作(即需在 fulfill 阶段介入,而不只改响应头)。
+ * 用于回放端决定这条命中规则是走「改真实响应体/状态」还是「纯改头」路径。
+ */
+export function responseRuleHasBodyAction(rule: ResponseHeaderRule): boolean {
+    return (
+        rule.mock === true ||
+        typeof rule.setStatus === 'number' ||
+        typeof rule.setBody === 'string' ||
+        (typeof rule.bodyReplaceFile === 'string' && rule.bodyReplaceFile.trim().length > 0)
+    );
+}
+
+/**
+ * 归一化状态码覆盖值:取整并要求落在 [100,599];非法(NaN/越界/非数字)返回 null(=不覆盖)。
+ */
+export function normalizeStatusOverride(status: unknown): number | null {
+    if (typeof status !== 'number' || !Number.isFinite(status)) {
+        return null;
+    }
+    const s = Math.trunc(status);
+    return s >= 100 && s <= 599 ? s : null;
+}
+
+/**
+ * 纯逻辑:对**非 mock** 的真实响应,按规则算出要覆盖的 status / body(仅来自 setStatus / setBody 的部分;
+ * bodyReplaceFile 的文件读取是 IO,由调用方读到内容后自行覆盖 body——但同样服从这里返回的 `condMet`)。
+ * 与响应头改写共用同一 `when` 门槛(responseConditionMet):when 不满足 → 不覆盖(status/body 均 null)。
+ * 返回:
+ * - condMet:when 是否满足(调用方据此决定要不要读 bodyReplaceFile);
+ * - status:number=覆盖为该码 / null=保持原状态;
+ * - body:string=整体替换响应体 / null=不由 setBody 覆盖(可能仍由文件覆盖)。
+ * setBody 优先于 bodyReplaceFile(与类型注释一致);setBody 为 '' 是合法的空体覆盖。
+ */
+export function resolveResponseOverride(
+    headers: Record<string, string>,
+    rule: ResponseHeaderRule
+): { condMet: boolean; status: number | null; body: string | null } {
+    if (!responseConditionMet(headers, rule)) {
+        return { condMet: false, status: null, body: null };
+    }
+    return {
+        condMet: true,
+        status: normalizeStatusOverride(rule.setStatus),
+        body: typeof rule.setBody === 'string' ? rule.setBody : null,
+    };
+}
+
+/**
+ * 纯逻辑:mock 模式下构造假响应的 status(不含 body——body 可能来自文件读取,由调用方定)。
+ * mock 恒生效(不判 when,无真实响应可判);状态码缺省 200,非法 setStatus 回退 200。
+ */
+export function resolveMockStatus(rule: ResponseHeaderRule): number {
+    return normalizeStatusOverride(rule.setStatus) ?? 200;
+}
+
 /**
  * 回放端(Playwright)用:按规则改写**请求头** Record,返回新 Record(全量,供 route.continue({headers})
  * / route.fetch({headers}) 整体替换请求头);无 setHeaders/removeHeaders 动作、或 when 不满足 → 返回 null。
