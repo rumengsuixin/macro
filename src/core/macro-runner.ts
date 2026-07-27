@@ -61,6 +61,7 @@ import {
     sectionEnabled,
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
+import { RecordBodyIndex } from './record-body-index';
 import { logInfo, logError } from './logger';
 
 /** CDP Fetch.requestPaused 事件里的 request 结构(取用到的字段;Playwright CDPSession 事件为弱类型) */
@@ -241,6 +242,10 @@ export class MacroRunner {
     private recordBodyRules: BodySaveRule[] = [];
     /** 是否启用 body 落盘(record.enabled 且有 saveBodies 规则) */
     private recordBodyWant = false;
+    /** CDP 同源精确索引:每落一个 body 文件追加一行,同 requestId 串联 req/res;开→关建/停(新文件) */
+    private recordBodyIndex: RecordBodyIndex | null = null;
+    /** requestId → 请求阶段落盘时刻(ms),供响应阶段算 timingMs;响应阶段取用后删除 */
+    private readonly recordBodyStart = new Map<string, number>();
 
     constructor(
         errorDir: string,
@@ -1045,13 +1050,20 @@ export class MacroRunner {
         this.recordBodyRules = want ? rec?.saveBodies ?? [] : [];
         const bodyWant = this.recordBodyRules.length > 0;
         if (this.recordBodyWant !== bodyWant) {
-            logInfo(
-                bodyWant
-                    ? `record 体落盘:已启用,共 ${this.recordBodyRules.length} 条规则,` +
-                          `匹配 URL:${this.recordBodyRules.map((r) => r.urlPattern).join(' | ')};` +
-                          `输出目录:${this.dumpsDir}`
-                    : 'record 体落盘:已停用。'
-            );
+            if (bodyWant) {
+                // 关→开:建**新**精确索引文件(与 body 文件同目录);随后落盘时每文件追加一行
+                this.recordBodyIndex = new RecordBodyIndex(this.dumpsDir);
+                logInfo(
+                    `record 体落盘:已启用,共 ${this.recordBodyRules.length} 条规则,` +
+                        `匹配 URL:${this.recordBodyRules.map((r) => r.urlPattern).join(' | ')};` +
+                        `输出目录:${this.dumpsDir};精确索引:${this.recordBodyIndex.file}`
+                );
+            } else {
+                // 开→关:停写索引 + 清空计时 map
+                this.recordBodyIndex = null;
+                this.recordBodyStart.clear();
+                logInfo('record 体落盘:已停用。');
+            }
         }
         this.recordBodyWant = bodyWant;
         // 开启则对所有已知 page 补挂/更新 patterns,关闭则全部卸载(与 applyReplayDump 同构的热更新)
@@ -1283,7 +1295,7 @@ export class MacroRunner {
         requestId: string,
         kind: 'req' | 'res',
         contentType?: string
-    ): void {
+    ): string | null {
         try {
             if (!this.dumpsReady) {
                 fs.mkdirSync(this.dumpsDir, { recursive: true });
@@ -1292,15 +1304,18 @@ export class MacroRunner {
             const explicit = kind === 'req' ? rule.requestExt : rule.responseExt;
             const ext = (explicit || extFromContentType(contentType) || 'bin').replace(/^\./, '');
             const safeId = requestId.replace(/[^A-Za-z0-9_]/g, '_'); // 消毒:仅留字母数字下划线,使文件名可按 '-' 稳定分段(req/res 配对)
-            const file = path.join(this.dumpsDir, `rec-${Date.now()}-${safeId}-${kind}.${ext}`);
+            const name = `rec-${Date.now()}-${safeId}-${kind}.${ext}`;
+            const file = path.join(this.dumpsDir, name);
             fs.writeFileSync(file, buf); // 一次性写完整字节,不做任何大小上限/截断
             logInfo(
                 `record ${kind === 'req' ? '请求' : '响应'}体落盘:已保存 ${buf.length} 字节 [${url}] → ${file}`
             );
+            return name; // 返回 basename,供 onDumpRequestPaused 写进精确索引
         } catch (err) {
             logError(
                 `record ${kind === 'req' ? '请求' : '响应'}体落盘:写文件失败(不影响回放):${(err as Error).message}`
             );
+            return null;
         }
     }
 
@@ -1421,14 +1436,34 @@ export class MacroRunner {
                             };
                             const buf = Buffer.from(r.body, r.base64Encoded ? 'base64' : 'utf8');
                             if (buf.length > 0) {
-                                this.writeRecordBodyFile(
+                                const mimeType = headerListValue(
+                                    params.responseHeaders,
+                                    'content-type'
+                                );
+                                const file = this.writeRecordBodyFile(
                                     rule,
                                     buf,
                                     request.url,
                                     requestId,
                                     'res',
-                                    headerListValue(params.responseHeaders, 'content-type')
+                                    mimeType
                                 );
+                                if (file) {
+                                    const start = this.recordBodyStart.get(requestId);
+                                    if (start !== undefined) {
+                                        this.recordBodyStart.delete(requestId);
+                                    }
+                                    this.recordBodyIndex?.writeResponse({
+                                        requestId,
+                                        method: request.method,
+                                        url: request.url,
+                                        file,
+                                        status: params.responseStatusCode,
+                                        mimeType,
+                                        timingMs:
+                                            start !== undefined ? Date.now() - start : undefined,
+                                    });
+                                }
                             }
                         } catch (err) {
                             logError(
@@ -1469,7 +1504,7 @@ export class MacroRunner {
                 ) {
                     const buf = this.reassemblePostData(request);
                     if (buf && buf.length > 0) {
-                        this.writeRecordBodyFile(
+                        const file = this.writeRecordBodyFile(
                             recRule,
                             buf,
                             request.url,
@@ -1477,6 +1512,15 @@ export class MacroRunner {
                             'req',
                             headerValue(request.headers, 'content-type')
                         );
+                        if (file) {
+                            this.recordBodyStart.set(requestId, Date.now()); // 供响应阶段算 timingMs
+                            this.recordBodyIndex?.writeRequest({
+                                requestId,
+                                method: request.method,
+                                url: request.url,
+                                file,
+                            });
+                        }
                     }
                 }
                 // ② 整体替换:命中则用本地文件字节整体替换请求体后放行(读文件失败落到末尾原样放行)

@@ -825,6 +825,7 @@
                     </tbody>
                 </table>
                 <div class="note info"><span class="nt">文件名与配对</span>落 <code class="inline">dumps/</code>(与 dumps 支路共用目录),名 <code class="inline">rec-&lt;毫秒戳&gt;-&lt;requestId&gt;-&lt;req|res&gt;.&lt;后缀&gt;</code>;同一请求的请求体/响应体文件 <code class="inline">requestId</code> 相同即为一对。</div>
+                <div class="note ok"><span class="nt">精确索引 rec-index-*.jsonl</span>每次回放另在 <code class="inline">dumps/</code> 输出一份 <code class="inline">rec-index-&lt;毫秒戳&gt;.jsonl</code>:每落一个 body 文件追加一行 <code class="inline">{t, requestId, kind, method, url, file, status?, mimeType?, timingMs?}</code>,同一 <code class="inline">requestId</code> 串联请求体行与响应体行——读这一份即可精确定位每个 body 属于哪个请求(多个请求 URL 相同也靠各自 requestId 区分),不必和走 Playwright 自增 id 的 record 时间线对齐。</div>
                 <div class="note limit"><span class="nt">二进制保真</span>二进制/gzip 响应体请让服务端用非文本 content-type(如 <code class="inline">application/octet-stream</code>)——声称文本类型时 CDP 按文本解码会损坏无效 UTF-8 字节。分块/resumable 上传会落多个请求体文件需自行拼接。</div>
             </div>
         </div>

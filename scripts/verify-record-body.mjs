@@ -159,6 +159,32 @@ async function runCase(label, saveBodiesExtra, expectReqExt, expectResExt) {
         );
     }
 
+    // 精确索引:dumps/rec-index-<戳>.jsonl —— 每个 body 文件一行,同 requestId 串联 req/res
+    const idxFiles = fs
+        .readdirSync(dumpsDir)
+        .filter((f) => f.startsWith('rec-index-') && f.endsWith('.jsonl'));
+    assert(idxFiles.length === 1, `[${label}] 恰好生成 1 个精确索引文件(实际 ${idxFiles.length})`);
+    if (idxFiles.length === 1 && reqFiles.length === 1 && resFiles.length === 1) {
+        const idx = fs
+            .readFileSync(path.join(dumpsDir, idxFiles[0]), 'utf-8')
+            .split('\n')
+            .filter((l) => l.trim())
+            .map((l) => JSON.parse(l));
+        const idxReq = idx.find((e) => e.kind === 'request');
+        const idxRes = idx.find((e) => e.kind === 'response');
+        assert(!!idxReq && !!idxRes, `[${label}] 索引含 request + response 各一行`);
+        assert(idxReq && idxReq.file === reqFiles[0].name, `[${label}] 索引 request 行 file = 实际请求体文件名`);
+        assert(idxRes && idxRes.file === resFiles[0].name, `[${label}] 索引 response 行 file = 实际响应体文件名`);
+        assert(
+            idxReq && idxRes && idxReq.requestId === idxRes.requestId,
+            `[${label}] 索引 req/res 同 requestId 精确串联(id=${idxReq && idxReq.requestId})`
+        );
+        assert(
+            idxRes && idxRes.status === 200 && idxRes.url.endsWith('/api/echo') && idxRes.method === 'POST',
+            `[${label}] 索引 response 行 status/url/method 正确`
+        );
+    }
+
     try {
         fs.rmSync(dumpsDir, { recursive: true, force: true });
     } catch {

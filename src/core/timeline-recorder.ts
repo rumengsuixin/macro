@@ -67,7 +67,7 @@ export interface ResponseFields {
  * 项目既有 timestamp() 只到秒——两端写同一 timelines/ 目录,同秒开一次录制 + 一次回放会撞名混行,
  * 故这里用毫秒级 + phase 入名规避(运行时代码,可用 Date)。
  */
-function fileStamp(): string {
+export function fileStamp(): string {
     const d = new Date();
     const pad = (n: number, w = 2): string => String(n).padStart(w, '0');
     return (
