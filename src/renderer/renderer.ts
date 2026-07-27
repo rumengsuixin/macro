@@ -1464,8 +1464,8 @@ const heldRequests = new Map<number, HeldRequestEvent>();
 function syncPauseOverlay(): void {
     const pauseOn = currentPauseRunId !== null;
     const holdOn = heldRequests.size > 0;
-    pauseSection.style.display = pauseOn ? '' : 'none';
-    holdSection.style.display = holdOn ? '' : 'none';
+    pauseSection.style.display = pauseOn ? 'block' : 'none';
+    holdSection.style.display = holdOn ? 'block' : 'none';
     pauseOverlay.classList.toggle('show', pauseOn || holdOn);
 }
 
