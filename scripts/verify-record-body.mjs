@@ -86,6 +86,7 @@ function parseRec(name) {
 // expectReqExt/expectResExt 为期望后缀。断言:回放成功 + req/res 各 1 文件且逐字节保真 + 后缀符合 + requestId 配对。
 async function runCase(label, saveBodiesExtra, expectReqExt, expectResExt) {
     const dumpsDir = fs.mkdtempSync(path.join(os.tmpdir(), `macro-recbody-${label}-`));
+    const timelinesDir = fs.mkdtempSync(path.join(os.tmpdir(), `macro-recbody-tl-${label}-`));
     fs.mkdirSync(path.join(root, 'errors'), { recursive: true });
     const sessionOptions = {
         requestRules: {
@@ -106,7 +107,7 @@ async function runCase(label, saveBodiesExtra, expectReqExt, expectResExt) {
         undefined,
         sessionOptions,
         undefined,
-        undefined,
+        timelinesDir, // 第 6 参:record 时间线目录(验证与 body 索引精确 join)
         dumpsDir // 第 7 参:落盘目录(record body 与 dump 共用)
     );
     const macro = {
@@ -183,10 +184,35 @@ async function runCase(label, saveBodiesExtra, expectReqExt, expectResExt) {
             idxRes && idxRes.status === 200 && idxRes.url.endsWith('/api/echo') && idxRes.method === 'POST',
             `[${label}] 索引 response 行 status/url/method 正确`
         );
+        // 精确 join:rec-index 的 networkId 应能在 record 时间线(CDP Network,与 saveBodies 同 session)找到 id 相等的记录
+        const tlFiles = fs
+            .readdirSync(timelinesDir)
+            .filter((f) => f.startsWith('timeline-replay-') && f.endsWith('.jsonl'));
+        const tl = tlFiles.flatMap((f) =>
+            fs
+                .readFileSync(path.join(timelinesDir, f), 'utf-8')
+                .split('\n')
+                .filter((l) => l.trim())
+                .map((l) => JSON.parse(l))
+        );
+        assert(tl.length > 0, `[${label}] 生成 record 时间线(CDP Network)`);
+        assert(!!(idxReq && idxReq.networkId), `[${label}] rec-index 行带 networkId(join 键)`);
+        if (idxReq && idxReq.networkId) {
+            const joined = tl.find((e) => e.id === idxReq.networkId);
+            assert(
+                !!joined,
+                `[${label}] rec-index.networkId 精确 join 到时间线记录(networkId=${idxReq.networkId})`
+            );
+            assert(
+                !!(joined && /\/api\/echo/.test(joined.url)),
+                `[${label}] join 到的时间线记录 url 命中 /api/echo`
+            );
+        }
     }
 
     try {
         fs.rmSync(dumpsDir, { recursive: true, force: true });
+        fs.rmSync(timelinesDir, { recursive: true, force: true });
     } catch {
         /* 忽略 */
     }

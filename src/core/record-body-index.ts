@@ -2,9 +2,12 @@
 //
 // saveBodies 把命中请求的请求体/响应体各写成独立文件(dumps/rec-<戳>-<requestId>-<req|res>.<ext>);
 // 本模块在**同一 CDP 拦截回调里**同源再写一份 JSONL 索引(dumps/rec-index-<戳>.jsonl):每落一个 body 文件
-// 追加一行,含该请求的 CDP requestId + method/url + 文件名(响应行另带 status/mimeType/耗时)。同一 requestId
-// 的 request 行与 response 行天然可 join —— 于是「哪个 body 文件属于哪个请求」是精确的(即便多个请求 URL 相同,
-// CDP requestId 各不相同,也能各自区分),不必再和走 Playwright 自增 id 的 record 时间线对齐。
+// 追加一行,含该请求的 `networkId`(join 键)+ Fetch `requestId`(文件唯一标识)+ method/url + 文件名。
+//
+// join:`networkId` = CDP `Fetch.requestPaused.networkId`(== 同 session 的 `Network.requestWillBeSent.requestId`,
+// 见 Playwright protocol),而 record 时间线(回放端已迁 CDP Network 域)的每条 `id` 也用同一个 networkId 值 ——
+// 于是 **rec-index.networkId === timeline.id**,「哪个 body 文件属于哪个请求」可与 record 时间线精确 join;
+// 同一 networkId 的多份 body(CDP Fetch 对一个网络请求可能拦多次)天然归并到同一条 record。
 //
 // 铁律(同 timeline-recorder):写失败即熔断(disabled),后续静默不写不抛,绝不拖垮回放主流程。
 import fs from 'node:fs';
@@ -16,7 +19,9 @@ import { logError } from './logger';
 export interface RecordBodyIndexEntry {
     /** ISO 时间戳(内部打) */
     t: string;
-    /** CDP Fetch requestId —— 串联同一请求的 request/response 行与 body 文件的键(原样,不消毒) */
+    /** join 键:CDP networkId(== record 时间线的 id);缺省(拿不到 networkId)时省略 */
+    networkId?: string;
+    /** CDP Fetch requestId —— 串联同一请求请求/响应行的键、也进 body 文件名,保文件唯一(原样,不消毒) */
     requestId: string;
     /** 请求行 or 响应行 */
     kind: 'request' | 'response';
@@ -34,6 +39,7 @@ export interface RecordBodyIndexEntry {
 /** writeRequest 入参 */
 export interface RecordBodyRequestFields {
     requestId: string;
+    networkId?: string;
     method: string;
     url: string;
     file: string;
@@ -42,6 +48,7 @@ export interface RecordBodyRequestFields {
 /** writeResponse 入参 */
 export interface RecordBodyResponseFields {
     requestId: string;
+    networkId?: string;
     method: string;
     url: string;
     file: string;
@@ -78,6 +85,7 @@ export class RecordBodyIndex {
     writeRequest(f: RecordBodyRequestFields): void {
         this.append({
             t: new Date().toISOString(),
+            networkId: f.networkId,
             requestId: f.requestId,
             kind: 'request',
             method: f.method,
@@ -90,6 +98,7 @@ export class RecordBodyIndex {
     writeResponse(f: RecordBodyResponseFields): void {
         this.append({
             t: new Date().toISOString(),
+            networkId: f.networkId,
             requestId: f.requestId,
             kind: 'response',
             method: f.method,

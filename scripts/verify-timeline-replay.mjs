@@ -1,5 +1,5 @@
-// 回放端「只记录不修改」支路端到端自检:验证 context.on('request'/'requestfinished') 真能把
-// 回放时发出的请求+响应记录进时间线 JSONL 文件。
+// 回放端「只记录不修改」支路端到端自检:验证 record(现走 per-page CDP Network 域)真能把
+// 回放时发出的请求+响应记录进时间线 JSONL 文件(id = CDP Network requestId,与 saveBodies 的 networkId 可 join)。
 // 起本地 http echo 服务(同源提供测试页,免 CORS):页面自动 fetch('POST /echo', json) 后插 #done。
 // session 故意设 enabled:false、rules:[](证明 record 支路独立于改写门槛),仅开 record.enabled;
 // MacroRunner 第 6 参传临时 timelinesDir;跑 [goto, waitForSelector('#done')] 后读时间线文件,

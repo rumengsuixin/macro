@@ -37,12 +37,14 @@ console.log('1) 写 request+response,同 requestId 可 join,字段齐备');
     const idx = new RecordBodyIndex(path.join(tmpRoot, 'a'));
     idx.writeRequest({
         requestId: 'interception_job_91_0',
+        networkId: '0#12345.6',
         method: 'POST',
         url: 'https://x.com/video/delete',
         file: 'rec-1-interception_job_91_0-req.json',
     });
     idx.writeResponse({
         requestId: 'interception_job_91_0',
+        networkId: '0#12345.6',
         method: 'POST',
         url: 'https://x.com/video/delete',
         file: 'rec-2-interception_job_91_0-res.json',
@@ -58,6 +60,10 @@ console.log('1) 写 request+response,同 requestId 可 join,字段齐备');
     assert(
         req.requestId === resp.requestId && req.requestId === 'interception_job_91_0',
         '同 requestId 可 join(串联 req/res)'
+    );
+    assert(
+        req.networkId === '0#12345.6' && resp.networkId === '0#12345.6',
+        'networkId(join 键)写入 req/res 两行,== record 时间线 id'
     );
     assert(typeof req.t === 'string' && typeof resp.t === 'string', 't 为 ISO 时间戳字符串');
     assert(

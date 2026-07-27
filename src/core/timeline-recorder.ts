@@ -23,7 +23,8 @@ export interface TimelineEntry {
     phase: TimelinePhase;
     /** 请求行 or 响应行 */
     kind: TimelineKind;
-    /** 请求↔响应关联 id(record 端=CDP requestId;replay 端=自增计数) */
+    /** 请求↔响应关联 id;两端均为 CDP requestId(录制端 = CDP Network requestId;回放端 = 同一 per-page
+     *  CDP session 的 Network requestId,== saveBodies 的 Fetch networkId,故与 rec-index 精确 join) */
     id: string;
     method: string;
     url: string;

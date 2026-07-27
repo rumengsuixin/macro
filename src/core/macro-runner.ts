@@ -84,6 +84,19 @@ interface CdpRequestPaused {
     responseStatusCode?: number;
     /** 响应头(仅响应阶段带;用于按 content-type 推断落盘文件后缀) */
     responseHeaders?: Array<{ name: string; value: string }>;
+    /** 底层网络请求 id;== 同 session `Network.requestWillBeSent` 的 requestId,作 record↔body 的 join 键 */
+    networkId?: string;
+}
+
+/** CDP Network.requestWillBeSent 事件里的 request 结构(取用到的字段) */
+interface CdpNetworkRequest {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    /** 是否带请求体(带才去 Network.getRequestPostData 取完整 body) */
+    hasPostData?: boolean;
+    /** 事件自带的 body(可能被截断;完整 body 走 getRequestPostData) */
+    postData?: string;
 }
 
 /** content-type → 落盘文件后缀(取主类型,仅覆盖常见类型;推不出返回 null,交调用方回退 bin) */
@@ -246,6 +259,13 @@ export class MacroRunner {
     private recordBodyIndex: RecordBodyIndex | null = null;
     /** requestId → 请求阶段落盘时刻(ms),供响应阶段算 timingMs;响应阶段取用后删除 */
     private readonly recordBodyStart = new Map<string, number>();
+    // --- 「record 时间线走 CDP Network 域」运行期状态(回放端记录源;与 saveBodies 共用 per-page CDP session)---
+    /** per-page CDP session 编号:作 record id / rec-index networkId 的前缀,避免跨 session requestId 撞号 */
+    private cdpSessionSeq = 0;
+    /** page → 该 session 的编号前缀(热更新补挂 Network 时复用) */
+    private readonly cdpSessionIds = new Map<Page, string>();
+    /** 已 enable Network 域(record)的 session:去重防重复 enable / 重复挂 handler */
+    private readonly networkEnabledSessions = new Set<CDPSession>();
 
     constructor(
         errorDir: string,
@@ -468,9 +488,10 @@ export class MacroRunner {
             // 初始页已创建完毕(挂监听前),故此后每次 page 事件都是弹窗。
             activePage = page;
             this.activePage = page;
-            // 请求体落盘:CDP session 是 per-page,给初始页挂一个(dumpWant 时才真正 attach)
+            // per-page CDP session(record 走 Network 域 + saveBodies 走 Fetch 域):给初始页挂一个。
+            // **await**:必须在第一个 goto 前完成 enable,否则 record 会漏掉页面早期请求(全站覆盖红线)。
             this.dumpPages.add(page);
-            void this.attachDumpCdp(page);
+            await this.attachDumpCdp(page);
             context.on('page', (popup) => {
                 activePage = popup;
                 this.activePage = popup;
@@ -751,77 +772,10 @@ export class MacroRunner {
             }
         };
 
-        // ② 记录监听:一次性常挂(被动本地事件、开销可忽略),靠 this.recorder 是否存在决定写不写。
-        // Playwright 无 CDP requestId,用 WeakMap 记住每个请求的关联 id/起始时刻/记录它的 recorder
-        //(响应写回同一 recorder,保证请求行与响应行落在同一文件、并能完成中途关闭前已开始的交换)。
-        const meta = new WeakMap<Request, { id: string; start: number; recorder: TimelineRecorder }>();
-        let seq = 0;
-
-        context.on('request', (req: Request) => {
-            try {
-                const recorder = this.recorder;
-                if (!recorder || !recorder.matches(req.url())) {
-                    return;
-                }
-                seq += 1;
-                const id = String(seq);
-                meta.set(req, { id, start: Date.now(), recorder });
-                // Playwright 直接给完整 body(不截断);recordWantBody=false 时跳过
-                const reqBody = this.recordWantBody ? req.postData() ?? undefined : undefined;
-                recorder.writeRequest({
-                    id,
-                    method: req.method(),
-                    url: req.url(),
-                    reqHeaders: req.headers(),
-                    reqBody,
-                });
-            } catch {
-                /* 记录支路不得影响主流程 */
-            }
-        });
-
-        // 用 response 事件(而非 requestfinished)写响应行:响应头到达即触发,早于 body 完成与 context 关闭,
-        // 且 status/headers 同步可取——避免「宏结束后 context 立即关闭,异步 req.response() 来不及」的竞态。
-        context.on('response', (resp) => {
-            try {
-                const m = meta.get(resp.request());
-                if (!m) {
-                    return; // 未记录该请求(记录关闭时发出 / matches 未过)
-                }
-                const req = resp.request();
-                const respHeaders = resp.headers();
-                const mimeType = headerValue(respHeaders, 'content-type');
-                m.recorder.writeResponse({
-                    id: m.id,
-                    method: req.method(),
-                    url: req.url(),
-                    status: resp.status(),
-                    timingMs: Date.now() - m.start, // 墙钟耗时(足够分析用)
-                    respHeaders,
-                    mimeType: mimeType || undefined,
-                });
-            } catch {
-                /* 记录支路不得影响主流程 */
-            }
-        });
-
-        context.on('requestfailed', (req: Request) => {
-            try {
-                const m = meta.get(req);
-                if (!m) {
-                    return;
-                }
-                m.recorder.writeResponse({
-                    id: m.id,
-                    method: req.method(),
-                    url: req.url(),
-                    timingMs: Date.now() - m.start,
-                    error: req.failure()?.errorText,
-                });
-            } catch {
-                /* 记录支路不得影响主流程 */
-            }
-        });
+        // ② 记录支路(record):已从 Playwright context.on 迁到 **per-page CDP Network 域**(见 attachRecordNetwork,
+        //    在 attachDumpCdp 里与 saveBodies 的 Fetch 共用同一 session)。这样 record 的 Network requestId 与
+        //    saveBodies 的 Fetch networkId 天然一致 → 时间线与 body 索引可精确 join。CDP Network 同样全站被动
+        //    (不暂停)、有 loadingFailed 记失败;此处不再挂 context.on 记录监听。
 
         // ④ 重发观察监听:常挂、被动(不改原请求)。两支:
         //    A. 请求触发(resendWant,仅 POST):命中 resends 规则 → 延时改参、主动发新请求;
@@ -1361,6 +1315,11 @@ export class MacroRunner {
         );
     }
 
+    /** 是否需要 per-page CDP session:Fetch(saveBodies/dump/整体替换)或 Network(record 时间线)任一需要 */
+    private cdpSessionWant(): boolean {
+        return this.cdpFetchWant() || this.recorder !== null;
+    }
+
     /**
      * 从 CDP 暂停请求里重组**完整二进制**请求体:优先 postDataEntries(base64 分块,对 File/Blob 保真)
      * 逐块 Buffer.concat;为空则回退事件自带 postData 字符串(小文本 body);都无返回 null。禁止截断。
@@ -1385,11 +1344,12 @@ export class MacroRunner {
     }
 
     /**
-     * 给一个 page 挂 CDP Fetch 拦截:命中 dump/替换 规则的请求在发出前暂停,落盘/整体替换后立即放行。
-     * 幂等;不需要 CDP(dump 与替换都关)或已挂则跳过;attach 失败记告警、该页不生效、不致命。
+     * 给一个 page 挂 per-page CDP session:按需启用 Fetch 域(saveBodies/dump/整体替换,请求阶段暂停)与
+     * Network 域(record 时间线,被动全站不暂停)。幂等;都不需要或已挂则跳过;挂载失败记告警、该页不生效、不致命。
+     * 每个 session 分配一个编号前缀 sid,使 record id / rec-index networkId 跨 session 不撞号。
      */
     private async attachDumpCdp(page: Page): Promise<void> {
-        if (!this.cdpFetchWant() || this.dumpCdpSessions.has(page)) {
+        if (!this.cdpSessionWant() || this.dumpCdpSessions.has(page)) {
             return;
         }
         const ctx = this.activeContext;
@@ -1399,25 +1359,161 @@ export class MacroRunner {
         try {
             const cdp = await ctx.newCDPSession(page);
             this.dumpCdpSessions.set(page, cdp);
-            // 注:dump(独立 CDP Fetch)与改写/真拦截(Playwright route,底层亦 CDP Fetch)命中同一 URL 时,
-            // 两者各自拦截同一请求(实测共存不冲突、都生效);dump 抓到的 body 时序上可能是改写前或改写后。
-            cdp.on('Fetch.requestPaused', (params: CdpRequestPaused) => {
-                void this.onDumpRequestPaused(cdp, params);
-            });
-            await cdp.send('Fetch.enable', { patterns: this.dumpFetchPatterns() });
+            const sid = String(this.cdpSessionSeq++);
+            this.cdpSessionIds.set(page, sid);
+            // Network 域(record 时间线)**先** enable:确保不漏该页任何请求的 requestWillBeSent(全站覆盖红线);
+            // 被动监听、不暂停、含 loadingFailed 记失败。若 Fetch 先 enable 会暂停请求、抢在 Network 之前,
+            // record 可能错过该请求的 requestWillBeSent(实测首次冷启动会漏)。
+            if (this.recorder) {
+                await this.attachRecordNetwork(cdp, sid);
+            }
+            // Fetch 域(saveBodies/dump/整体替换)**后** enable:请求阶段暂停命中 URL。注:dump(CDP Fetch)与
+            // 改写/真拦截(Playwright route,底层亦 CDP Fetch)命中同一 URL 各自拦截同一请求,实测共存不冲突。
+            if (this.cdpFetchWant()) {
+                cdp.on('Fetch.requestPaused', (params: CdpRequestPaused) => {
+                    void this.onDumpRequestPaused(cdp, sid, params);
+                });
+                await cdp.send('Fetch.enable', { patterns: this.dumpFetchPatterns() });
+            }
         } catch (err) {
             this.dumpCdpSessions.delete(page);
-            logError(`回放请求体落盘:CDP 挂载失败(该页不落盘,不影响回放):${(err as Error).message}`);
+            this.cdpSessionIds.delete(page);
+            logError(`回放 CDP 会话挂载失败(该页不落盘/不记录,不影响回放):${(err as Error).message}`);
         }
+    }
+
+    /**
+     * 在给定 CDP session 上启用 Network 域并挂 record 时间线监听(被动、全站、不暂停;含 loadingFailed 记失败)。
+     * 幂等(networkEnabledSessions 去重)。移植自录制端 request-interceptor 的 onNetworkEvent,差异:
+     * **响应行在 responseReceived 就写**(不等 loadingFinished),规避「宏结束 context 立即关闭、异步来不及」竞态。
+     * 每条 id = `${sid}#${Network requestId}`,与 saveBodies rec-index 的 networkId 一致 → 精确 join。
+     */
+    private async attachRecordNetwork(cdp: CDPSession, sid: string): Promise<void> {
+        if (this.networkEnabledSessions.has(cdp)) {
+            return;
+        }
+        this.networkEnabledSessions.add(cdp);
+        // per-session 暂存:Network requestId → 请求元数据 + 起始时刻(等响应/失败事件补齐后写响应行)
+        const pending = new Map<string, { id: string; url: string; method: string; startTs: number }>();
+        cdp.on(
+            'Network.requestWillBeSent',
+            (p: { requestId: string; request: CdpNetworkRequest; timestamp: number }) => {
+                try {
+                    const rec = this.recorder;
+                    if (!rec || !rec.matches(p.request.url)) {
+                        return;
+                    }
+                    pending.set(p.requestId, {
+                        id: `${sid}#${p.requestId}`,
+                        url: p.request.url,
+                        method: p.request.method,
+                        startTs: p.timestamp,
+                    });
+                    void this.emitRecordRequestLine(cdp, sid, p.requestId, p.request);
+                } catch {
+                    /* 记录支路不得影响主流程 */
+                }
+            }
+        );
+        cdp.on(
+            'Network.responseReceived',
+            (p: {
+                requestId: string;
+                timestamp: number;
+                response: { status: number; mimeType?: string; headers?: Record<string, string> };
+            }) => {
+                try {
+                    const rec = this.recorder;
+                    const m = pending.get(p.requestId);
+                    if (!rec || !m) {
+                        return;
+                    }
+                    // 红线⑥:响应头到达即写响应行(不等 loadingFinished),规避 context 关闭竞态
+                    rec.writeResponse({
+                        id: m.id,
+                        method: m.method,
+                        url: m.url,
+                        status: p.response.status,
+                        timingMs: Math.round((p.timestamp - m.startTs) * 1000),
+                        respHeaders: p.response.headers,
+                        mimeType: p.response.mimeType || undefined,
+                    });
+                    pending.delete(p.requestId);
+                } catch {
+                    /* 记录支路不得影响主流程 */
+                }
+            }
+        );
+        cdp.on(
+            'Network.loadingFailed',
+            (p: { requestId: string; timestamp: number; errorText?: string }) => {
+                try {
+                    const rec = this.recorder;
+                    const m = pending.get(p.requestId);
+                    if (!rec || !m) {
+                        return; // 无 responseReceived 的失败(DNS/连接/被拦)才走这里
+                    }
+                    rec.writeResponse({
+                        id: m.id,
+                        method: m.method,
+                        url: m.url,
+                        timingMs: Math.round((p.timestamp - m.startTs) * 1000),
+                        error: p.errorText,
+                    });
+                    pending.delete(p.requestId);
+                } catch {
+                    /* 记录支路不得影响主流程 */
+                }
+            }
+        );
+        await cdp.send('Network.enable');
+    }
+
+    /** 写一条 record 请求行:includeBody 时用 Network.getRequestPostData 取**完整** body(禁止截断) */
+    private async emitRecordRequestLine(
+        cdp: CDPSession,
+        sid: string,
+        requestId: string,
+        request: CdpNetworkRequest
+    ): Promise<void> {
+        const rec = this.recorder;
+        if (!rec) {
+            return;
+        }
+        let reqBody: string | undefined;
+        if (this.recordWantBody && request.hasPostData) {
+            try {
+                const r = (await cdp.send('Network.getRequestPostData', { requestId })) as {
+                    postData?: string;
+                };
+                reqBody = typeof r.postData === 'string' ? r.postData : request.postData;
+            } catch {
+                reqBody = request.postData; // 无 body / 请求已失效:回退事件自带值(可能 undefined)
+            }
+        }
+        rec.writeRequest({
+            id: `${sid}#${requestId}`,
+            method: request.method,
+            url: request.url,
+            reqHeaders: request.headers,
+            reqBody,
+        });
     }
 
     /**
      * CDP Fetch.requestPaused 处理:先按 dump 规则落盘原始 body,再按替换规则用文件字节整体替换后放行。
      * dump 读旧、替换发新,可同时命中。**每条路径恰好放行一次**(替换命中即带 postData 放行并 return)。
      */
-    private async onDumpRequestPaused(cdp: CDPSession, params: CdpRequestPaused): Promise<void> {
+    private async onDumpRequestPaused(
+        cdp: CDPSession,
+        sid: string,
+        params: CdpRequestPaused
+    ): Promise<void> {
         const { requestId, request } = params;
         const isResponseStage = params.responseStatusCode !== undefined;
+        // join 键:与 record 时间线的 id 同构(`${sid}#${networkId}`);拿不到 networkId 则省略
+        const joinKey =
+            typeof params.networkId === 'string' ? `${sid}#${params.networkId}` : undefined;
         try {
             if (isResponseStage) {
                 // 响应阶段:只可能因 record.saveBodies 的 Response pattern 到这里。命中且要落响应体则取体落盘。
@@ -1455,6 +1551,7 @@ export class MacroRunner {
                                     }
                                     this.recordBodyIndex?.writeResponse({
                                         requestId,
+                                        networkId: joinKey,
                                         method: request.method,
                                         url: request.url,
                                         file,
@@ -1516,6 +1613,7 @@ export class MacroRunner {
                             this.recordBodyStart.set(requestId, Date.now()); // 供响应阶段算 timingMs
                             this.recordBodyIndex?.writeRequest({
                                 requestId,
+                                networkId: joinKey,
                                 method: request.method,
                                 url: request.url,
                                 file,
@@ -1558,20 +1656,33 @@ export class MacroRunner {
     }
 
     /**
-     * 落盘热更新:开启则对所有已知 page 补挂(未挂的)/重下发 patterns(已挂的),关闭则全部卸载。
-     * 与录制端 applyPatterns、回放端 applyReplay* 同构;在 applyReplayDump 与 page 生命周期处驱动。
+     * CDP session 热更新:需要(Fetch 或 record Network 任一)则对所有已知 page 补挂(未挂的)/更新(已挂的:
+     * 重下发 Fetch patterns + record 后来才开则补挂 Network),都不需要则全部卸载。在 applyReplayDump/Record 与
+     * page 生命周期处驱动。
      */
     private async refreshDumpCdp(): Promise<void> {
-        if (this.cdpFetchWant()) {
+        if (this.cdpSessionWant()) {
             for (const page of this.dumpPages) {
                 const existing = this.dumpCdpSessions.get(page);
                 if (!existing) {
                     await this.attachDumpCdp(page);
-                } else {
+                    continue;
+                }
+                if (this.cdpFetchWant()) {
                     try {
                         await existing.send('Fetch.enable', { patterns: this.dumpFetchPatterns() });
                     } catch {
                         /* 会话可能已失效,下次 attach 重建 */
+                    }
+                }
+                // record 后来才开(session 因 saveBodies 先挂)→ 补挂 Network(幂等)
+                if (this.recorder && !this.networkEnabledSessions.has(existing)) {
+                    const sid = this.cdpSessionIds.get(page) ?? String(this.cdpSessionSeq++);
+                    this.cdpSessionIds.set(page, sid);
+                    try {
+                        await this.attachRecordNetwork(existing, sid);
+                    } catch {
+                        /* 补挂失败该页不记录,不致命 */
                     }
                 }
             }
@@ -1580,9 +1691,14 @@ export class MacroRunner {
         }
     }
 
-    /** 卸载所有 dump CDP 会话(Fetch.disable + detach;context 关闭后 transport 已断会抛,全 try/catch)。 */
+    /** 卸载所有 per-page CDP 会话(Network/Fetch.disable + detach;context 关闭后 transport 已断会抛,全 try/catch)。 */
     private async detachAllDumpCdp(): Promise<void> {
         for (const cdp of this.dumpCdpSessions.values()) {
+            try {
+                await cdp.send('Network.disable');
+            } catch {
+                /* 忽略(可能未 enable Network) */
+            }
             try {
                 await cdp.send('Fetch.disable');
             } catch {
@@ -1595,6 +1711,8 @@ export class MacroRunner {
             }
         }
         this.dumpCdpSessions.clear();
+        this.cdpSessionIds.clear();
+        this.networkEnabledSessions.clear();
     }
 
     /**
