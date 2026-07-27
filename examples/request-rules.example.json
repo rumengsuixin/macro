@@ -55,7 +55,15 @@
         "bodyReplaces[].replaceWithFile": "本地文件**绝对路径**;命中即用其完整字节整体替换请求体(Windows 路径反斜杠要转义,如 D:\\\\videos\\\\new.mp4)",
         "_生效阶段": "请求拦截模块(改写 rules / 重发 resends / 响应头 responseRules / 真拦截 blocks / 请求体落盘 dumps / 请求体替换 bodyReplaces)现**仅在回放阶段生效**——录制时不拦截、不改写、不落盘、不替换,抓到真实未改动的流量。record 只记录支路两端仍可用",
         "record": "「只记录不修改」支路,独立开关(与 enabled 无关):record.enabled=true 即拦截所有请求(不限 method)+ 响应,写入 timelines/timeline-*.jsonl(每行一条 JSON,含 url/method/headers/请求body/状态码/耗时),供事后分析。不改写任何请求。录制端(CDP Network)与回放端(Playwright)共用本段。urlPattern 缺省/* 记录所有;includeBody=false 则不记请求 body",
-        "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)"
+        "record.saveBodies[]": "可选(仅回放端,随 record.enabled 走、独立于 enabled):对命中 urlPattern 的请求,把其**完整请求体**和/或**完整响应体**各写成一个独立文件到 dumps/(禁止截断)。走 CDP Fetch 请求阶段(postDataEntries 重组,对 File/Blob 上传保真)+ 响应阶段(getResponseBody,含二进制/解压后)。同一请求的 req/res 文件按同一 CDP requestId 天然配对,名 rec-<毫秒戳>-<requestId>-<req|res>.<后缀>。与 record.urlPattern(JSONL 记录范围)解耦,各条自带 urlPattern",
+        "record.saveBodies[].urlPattern": "CDP glob 匹配请求 URL(同 dumps;如 */api/upload* 或 *upload.youtube.com*)",
+        "record.saveBodies[].method": "可选,只落指定 HTTP 方法(大小写不敏感);缺省=命中 URL 的所有方法",
+        "record.saveBodies[].request": "可选布尔,是否落请求体;缺省 true",
+        "record.saveBodies[].response": "可选布尔,是否落响应体;缺省 true",
+        "record.saveBodies[].requestExt": "可选,请求体文件后缀(可含/不含前导点);缺省按请求 content-type 推断(json/html/png/mp4… 推不出用 bin)",
+        "record.saveBodies[].responseExt": "可选,响应体文件后缀(可含/不含前导点);缺省按响应 content-type 推断,推不出用 bin",
+        "_record.提示": "record 与 enabled 各自独立:可只开 record(enabled:false)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)。saveBodies 也随 record.enabled 走(与改写 enabled 无关)",
+        "_record.saveBodies.提示": "二进制/gzip 响应体请让服务端用非文本 content-type(如 application/octet-stream)以确保逐字节保真——声称文本类型时 CDP 按文本解码会损坏无效 UTF-8 字节。文件落 dumps/(与 dumps 支路共用目录)"
     },
     "enabled": false,
     "sections": {
@@ -67,7 +75,15 @@
         "dumps": true,
         "bodyReplaces": true
     },
-    "record": { "enabled": false, "urlPattern": "*", "includeBody": true },
+    "record": {
+        "enabled": false,
+        "urlPattern": "*",
+        "includeBody": true,
+        "saveBodies": [
+            { "_注": "对命中 /api/upload 的请求,把请求体与响应体各落成一个文件到 dumps/(后缀按 content-type 推断)", "urlPattern": "*/api/upload*", "request": true, "response": true },
+            { "_注": "只落响应体、显式后缀 json(如抓某接口返回的 JSON)", "urlPattern": "*/api/detail*", "request": false, "response": true, "responseExt": "json" }
+        ]
+    },
     "rules": [
         {
             "_注": "json:覆盖数值字段 + 把 videoIds 整体设成一个真数组 + 删除 debugFlag",

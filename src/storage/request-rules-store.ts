@@ -11,6 +11,7 @@ import type {
     BlockRule,
     DumpRule,
     BodyReplaceRule,
+    BodySaveRule,
     RequestRulesConfig,
     RequestSectionToggles,
     TimelineRecordConfig,
@@ -486,6 +487,34 @@ function normalizeBodyReplaceRule(raw: unknown): BodyReplaceRule | null {
     return rule;
 }
 
+/** 校验并归一化单条「请求/响应体独立落盘」规则;非法(缺 urlPattern)返回 null(过滤掉) */
+function normalizeBodySaveRule(raw: unknown): BodySaveRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    const rule: BodySaveRule = { urlPattern: r.urlPattern };
+    if (typeof r.method === 'string' && r.method.trim()) {
+        rule.method = r.method;
+    }
+    if (typeof r.request === 'boolean') {
+        rule.request = r.request;
+    }
+    if (typeof r.response === 'boolean') {
+        rule.response = r.response;
+    }
+    if (typeof r.requestExt === 'string' && r.requestExt.trim()) {
+        rule.requestExt = r.requestExt;
+    }
+    if (typeof r.responseExt === 'string' && r.responseExt.trim()) {
+        rule.responseExt = r.responseExt;
+    }
+    return rule;
+}
+
 /** 校验并归一化 record 段(config 级,非 per-rule);非对象/缺省返回 undefined */
 function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     if (!raw || typeof raw !== 'object') {
@@ -500,6 +529,14 @@ function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     }
     if (typeof r.includeBody === 'boolean') {
         record.includeBody = r.includeBody;
+    }
+    if (Array.isArray(r.saveBodies)) {
+        const saveBodies = r.saveBodies
+            .map(normalizeBodySaveRule)
+            .filter((x): x is BodySaveRule => x !== null);
+        if (saveBodies.length) {
+            record.saveBodies = saveBodies;
+        }
     }
     return record;
 }

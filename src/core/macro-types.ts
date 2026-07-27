@@ -717,6 +717,29 @@ export interface BodyReplaceRule {
 }
 
 /**
+ * 「请求体 + 响应体独立落盘」规则(record 支路的 saveBodies 子项)。命中 urlPattern(可选限 method)的
+ * 请求,把其**完整请求体**和/或**完整响应体**各写成一个独立文件(禁止截断),供事后分析。走 CDP Fetch
+ * 「请求阶段 + 响应阶段」两次暂停:请求阶段用 postDataEntries 重组(对 File/Blob 上传保真)、响应阶段用
+ * Fetch.getResponseBody 取(含二进制/解压后)。同一请求的 req/res 文件按 CDP requestId 天然配对。
+ * 随 record 走(**独立于 RequestRulesConfig.enabled**),**仅回放端生效**;与 record.urlPattern(JSONL 记录
+ * 范围)解耦——各条自带 urlPattern,通常只对特定上传/接口 URL 落盘。文件落 dumps/ 目录,名 rec-<戳>-<id>-<req|res>.<ext>。
+ */
+export interface BodySaveRule {
+    /** URL 匹配模式(CDP glob,`*` 通配);唯一必填 */
+    urlPattern: string;
+    /** 可选,仅落盘指定 HTTP 方法(大小写不敏感,如 PUT/POST);缺省=命中 URL 的所有方法 */
+    method?: string;
+    /** 是否落请求体(缺省视为 true) */
+    request?: boolean;
+    /** 是否落响应体(缺省视为 true) */
+    response?: boolean;
+    /** 请求体文件后缀(可含/不含前导点);缺省按请求 content-type 推断,推不出用 'bin' */
+    requestExt?: string;
+    /** 响应体文件后缀(可含/不含前导点);缺省按响应 content-type 推断,推不出用 'bin' */
+    responseExt?: string;
+}
+
+/**
  * 「只记录不修改」支路配置(存于 request-rules.json 的 record 段)。
  * 独立于 RequestRulesConfig.enabled——即便改写关闭,只要 record.enabled 就记录。
  * 记录所有请求(不限 method)+ 响应到 timelines/ 下的 JSONL 时间线文件,供事后分析。
@@ -728,6 +751,11 @@ export interface TimelineRecordConfig {
     urlPattern?: string;
     /** 是否记录完整请求 body(缺省视为 true;禁止截断) */
     includeBody?: boolean;
+    /**
+     * 「请求体 + 响应体独立落盘」规则列表(仅回放端;随 record 走、独立于 enabled)。命中即把完整请求/响应体
+     * 各写成一个文件(走 CDP Fetch 响应阶段)。缺省/空 = 不落盘 body,record 仍只写 JSONL 时间线。
+     */
+    saveBodies?: BodySaveRule[];
 }
 
 /**

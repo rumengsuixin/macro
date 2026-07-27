@@ -35,6 +35,7 @@ import type {
     BlockRule,
     DumpRule,
     BodyReplaceRule,
+    BodySaveRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -78,8 +79,58 @@ interface CdpPausedRequest {
 interface CdpRequestPaused {
     requestId: string;
     request: CdpPausedRequest;
-    /** 有值=响应阶段(dump 只配 Request 阶段,理论不出现) */
+    /** 有值=响应阶段(dump 只配 Request 阶段;record 的 saveBodies 会另配 Response 阶段) */
     responseStatusCode?: number;
+    /** 响应头(仅响应阶段带;用于按 content-type 推断落盘文件后缀) */
+    responseHeaders?: Array<{ name: string; value: string }>;
+}
+
+/** content-type → 落盘文件后缀(取主类型,仅覆盖常见类型;推不出返回 null,交调用方回退 bin) */
+function extFromContentType(ct?: string): string | null {
+    if (!ct) {
+        return null;
+    }
+    const mime = ct.split(';')[0].trim().toLowerCase();
+    const map: Record<string, string> = {
+        'application/json': 'json',
+        'text/json': 'json',
+        'text/html': 'html',
+        'text/plain': 'txt',
+        'text/css': 'css',
+        'text/csv': 'csv',
+        'application/javascript': 'js',
+        'text/javascript': 'js',
+        'application/xml': 'xml',
+        'text/xml': 'xml',
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/svg+xml': 'svg',
+        'video/mp4': 'mp4',
+        'audio/mpeg': 'mp3',
+        'application/pdf': 'pdf',
+        'application/zip': 'zip',
+        'application/octet-stream': 'bin',
+    };
+    return map[mime] ?? null;
+}
+
+/** 从 CDP 头数组([{name,value}])里大小写不敏感取值;取不到返回 undefined */
+function headerListValue(
+    headers: Array<{ name: string; value: string }> | undefined,
+    name: string
+): string | undefined {
+    if (!headers) {
+        return undefined;
+    }
+    const lower = name.toLowerCase();
+    for (const h of headers) {
+        if (h.name.toLowerCase() === lower) {
+            return h.value;
+        }
+    }
+    return undefined;
 }
 
 /** 现状写死值构成的默认回放档:无 session.replayProfile(无头/单测)时兜底,保证行为与历史一致 */
@@ -185,6 +236,11 @@ export class MacroRunner {
     private replaceRules: BodyReplaceRule[] = [];
     /** 是否启用整体替换(enabled 且有替换规则) */
     private replaceWant = false;
+    // --- 「record 支路:请求/响应体独立落盘(saveBodies)」运行期状态(随 record 走,独立于 enabled;共用 per-page CDP Fetch) ---
+    /** 当前生效的 body 落盘规则(命中即把完整请求体/响应体各写成一个文件;走 CDP 请求+响应阶段) */
+    private recordBodyRules: BodySaveRule[] = [];
+    /** 是否启用 body 落盘(record.enabled 且有 saveBodies 规则) */
+    private recordBodyWant = false;
 
     constructor(
         errorDir: string,
@@ -985,6 +1041,21 @@ export class MacroRunner {
             this.recordCfgKey = '';
             logInfo('回放请求记录:已停用。');
         }
+        // record.saveBodies:请求/响应体独立落盘(随 record.enabled 走,独立于 cfg.enabled;走 per-page CDP Fetch)。
+        this.recordBodyRules = want ? rec?.saveBodies ?? [] : [];
+        const bodyWant = this.recordBodyRules.length > 0;
+        if (this.recordBodyWant !== bodyWant) {
+            logInfo(
+                bodyWant
+                    ? `record 体落盘:已启用,共 ${this.recordBodyRules.length} 条规则,` +
+                          `匹配 URL:${this.recordBodyRules.map((r) => r.urlPattern).join(' | ')};` +
+                          `输出目录:${this.dumpsDir}`
+                    : 'record 体落盘:已停用。'
+            );
+        }
+        this.recordBodyWant = bodyWant;
+        // 开启则对所有已知 page 补挂/更新 patterns,关闭则全部卸载(与 applyReplayDump 同构的热更新)
+        void this.refreshDumpCdp();
     }
 
     /**
@@ -1199,25 +1270,79 @@ export class MacroRunner {
         }
     }
 
-    // ===== 请求体落盘的 CDP Fetch 拦截(抓 File/Blob 上传体;Playwright postDataBuffer 对 Blob 返回 null)=====
-
-    /** dump ∪ 整体替换 规则 URL → CDP Fetch.enable 的 patterns(只暂停命中 URL 的请求阶段,降开销) */
-    private dumpFetchPatterns(): Array<{ urlPattern: string; requestStage: 'Request' }> {
-        const urls = new Set<string>();
-        for (const r of this.dumpRules) {
-            urls.add(r.urlPattern);
+    /**
+     * record.saveBodies:把命中请求的完整请求体/响应体写成一个独立文件(**完整字节、禁止截断**)。
+     * 文件名 rec-<毫秒戳>-<safeId>-<req|res>.<ext>——同一 CDP requestId 使请求体/响应体文件天然配对;
+     * 后缀优先规则显式配(requestExt/responseExt),否则按 content-type 推断,推不出用 bin。
+     * 复用 dumpsDir + dumpsReady 懒建;写失败只记日志不抛(落盘支路不得影响回放)。
+     */
+    private writeRecordBodyFile(
+        rule: BodySaveRule,
+        buf: Buffer,
+        url: string,
+        requestId: string,
+        kind: 'req' | 'res',
+        contentType?: string
+    ): void {
+        try {
+            if (!this.dumpsReady) {
+                fs.mkdirSync(this.dumpsDir, { recursive: true });
+                this.dumpsReady = true;
+            }
+            const explicit = kind === 'req' ? rule.requestExt : rule.responseExt;
+            const ext = (explicit || extFromContentType(contentType) || 'bin').replace(/^\./, '');
+            const safeId = requestId.replace(/[^A-Za-z0-9_]/g, '_'); // 消毒:仅留字母数字下划线,使文件名可按 '-' 稳定分段(req/res 配对)
+            const file = path.join(this.dumpsDir, `rec-${Date.now()}-${safeId}-${kind}.${ext}`);
+            fs.writeFileSync(file, buf); // 一次性写完整字节,不做任何大小上限/截断
+            logInfo(
+                `record ${kind === 'req' ? '请求' : '响应'}体落盘:已保存 ${buf.length} 字节 [${url}] → ${file}`
+            );
+        } catch (err) {
+            logError(
+                `record ${kind === 'req' ? '请求' : '响应'}体落盘:写文件失败(不影响回放):${(err as Error).message}`
+            );
         }
-        for (const r of this.replaceRules) {
-            urls.add(r.urlPattern);
-        }
-        return [...urls].map((urlPattern) => ({ urlPattern, requestStage: 'Request' }));
     }
 
-    /** dump 或整体替换 任一启用(决定是否需要挂 CDP Fetch 拦截) */
+    // ===== 请求体落盘的 CDP Fetch 拦截(抓 File/Blob 上传体;Playwright postDataBuffer 对 Blob 返回 null)=====
+
+    /**
+     * dump/整体替换/record 落请求体 → 请求阶段 pattern;record 落响应体 → 响应阶段 pattern。
+     * 只暂停命中 URL 的对应阶段,降开销。同一 URL 既落请求体又落响应体则出两条 pattern(各一阶段)。
+     */
+    private dumpFetchPatterns(): Array<{ urlPattern: string; requestStage: 'Request' | 'Response' }> {
+        const reqUrls = new Set<string>(); // 需在请求阶段暂停的 URL
+        const resUrls = new Set<string>(); // 需在响应阶段暂停的 URL
+        for (const r of this.dumpRules) {
+            reqUrls.add(r.urlPattern);
+        }
+        for (const r of this.replaceRules) {
+            reqUrls.add(r.urlPattern);
+        }
+        for (const r of this.recordBodyRules) {
+            if (r.request !== false) {
+                reqUrls.add(r.urlPattern);
+            }
+            if (r.response !== false) {
+                resUrls.add(r.urlPattern);
+            }
+        }
+        const patterns: Array<{ urlPattern: string; requestStage: 'Request' | 'Response' }> = [];
+        for (const urlPattern of reqUrls) {
+            patterns.push({ urlPattern, requestStage: 'Request' });
+        }
+        for (const urlPattern of resUrls) {
+            patterns.push({ urlPattern, requestStage: 'Response' });
+        }
+        return patterns;
+    }
+
+    /** dump / 整体替换 / record 落 body 任一启用(决定是否需要挂 CDP Fetch 拦截) */
     private cdpFetchWant(): boolean {
         return (
             (this.dumpWant && this.dumpRules.length > 0) ||
-            (this.replaceWant && this.replaceRules.length > 0)
+            (this.replaceWant && this.replaceRules.length > 0) ||
+            (this.recordBodyWant && this.recordBodyRules.length > 0)
         );
     }
 
@@ -1277,9 +1402,51 @@ export class MacroRunner {
      */
     private async onDumpRequestPaused(cdp: CDPSession, params: CdpRequestPaused): Promise<void> {
         const { requestId, request } = params;
+        const isResponseStage = params.responseStatusCode !== undefined;
         try {
-            // 只处理请求阶段(patterns 只配了 Request,响应阶段带 responseStatusCode,理论不会到这里,保险跳过)
-            if (params.responseStatusCode === undefined && !isResendOrigin(request.headers)) {
+            if (isResponseStage) {
+                // 响应阶段:只可能因 record.saveBodies 的 Response pattern 到这里。命中且要落响应体则取体落盘。
+                if (!isResendOrigin(request.headers)) {
+                    const rule = matchRule(this.recordBodyRules, request.url);
+                    if (
+                        rule &&
+                        rule.response !== false &&
+                        (!rule.method ||
+                            rule.method.toUpperCase() === request.method.toUpperCase())
+                    ) {
+                        try {
+                            const r = (await cdp.send('Fetch.getResponseBody', { requestId })) as {
+                                body: string;
+                                base64Encoded: boolean;
+                            };
+                            const buf = Buffer.from(r.body, r.base64Encoded ? 'base64' : 'utf8');
+                            if (buf.length > 0) {
+                                this.writeRecordBodyFile(
+                                    rule,
+                                    buf,
+                                    request.url,
+                                    requestId,
+                                    'res',
+                                    headerListValue(params.responseHeaders, 'content-type')
+                                );
+                            }
+                        } catch (err) {
+                            logError(
+                                `record 响应体落盘:取响应体失败(不影响回放):${(err as Error).message}`
+                            );
+                        }
+                    }
+                }
+                // 铁律:响应阶段必须用 continueResponse 放行(continueRequest 在响应阶段无效,会挂起页面)
+                try {
+                    await cdp.send('Fetch.continueResponse', { requestId });
+                } catch {
+                    /* 请求/会话可能已失效,忽略 */
+                }
+                return;
+            }
+            // ↓ 请求阶段
+            if (!isResendOrigin(request.headers)) {
                 // ① dump:命中则重组完整原始 body 落盘(落的是替换前的原始字节)
                 const dumpRule = matchRule(this.dumpRules, request.url);
                 if (
@@ -1290,6 +1457,26 @@ export class MacroRunner {
                     const buf = this.reassemblePostData(request);
                     if (buf && buf.length > 0) {
                         this.writeDumpFile(dumpRule, buf, request.url);
+                    }
+                }
+                // ①b record.saveBodies:命中且要落请求体则重组原始 body 落盘(与 dump 并列,落替换前字节)
+                const recRule = matchRule(this.recordBodyRules, request.url);
+                if (
+                    recRule &&
+                    recRule.request !== false &&
+                    (!recRule.method ||
+                        recRule.method.toUpperCase() === request.method.toUpperCase())
+                ) {
+                    const buf = this.reassemblePostData(request);
+                    if (buf && buf.length > 0) {
+                        this.writeRecordBodyFile(
+                            recRule,
+                            buf,
+                            request.url,
+                            requestId,
+                            'req',
+                            headerValue(request.headers, 'content-type')
+                        );
                     }
                 }
                 // ② 整体替换:命中则用本地文件字节整体替换请求体后放行(读文件失败落到末尾原样放行)
@@ -1318,7 +1505,7 @@ export class MacroRunner {
         } catch (err) {
             logError(`回放请求体拦截:CDP 处理请求出错:${(err as Error).message}`);
         }
-        // 铁律:每个暂停请求都必须放行,否则页面卡死(未命中替换/替换失败走这里原样放行)
+        // 铁律:请求阶段每个暂停请求都必须放行,否则页面卡死(未命中替换/替换失败走这里原样放行)
         try {
             await cdp.send('Fetch.continueRequest', { requestId });
         } catch {

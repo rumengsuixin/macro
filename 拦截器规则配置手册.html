@@ -803,10 +803,30 @@
                     <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>true 即开启记录</td><td><b>与顶层 enabled 无关</b>,即便改写关闭也照记</td></tr>
                     <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只记录命中的 URL</td><td><b>缺省 / <code class="inline">*</code> = 记录所有</b></td></tr>
                     <tr><td class="field"><code>includeBody</code></td><td class="type">boolean</td><td><span class="badge opt">可选</span></td><td>是否记录完整请求 body</td><td>缺省 true(禁止截断);false 则不记 body</td></tr>
+                    <tr><td class="field"><code>saveBodies[]</code></td><td class="type">BodySaveRule[]</td><td><span class="badge opt">可选</span></td><td>把命中 URL 的请求体/响应体各落成独立文件(见下表)</td><td>仅回放端;随 record.enabled 走(独立于 enabled);缺省/空=不落盘 body</td></tr>
                 </tbody>
             </table>
-            <div class="note limit"><span class="nt">限制</span>响应只记 <code class="inline">status</code> / 耗时 / <code class="inline">mimeType</code>,<b>不记响应体</b>;流式 / SSE 若不发 <code class="inline">loadingFinished</code> 则无响应行。文件名 <code class="inline">timeline-&lt;record|replay&gt;-&lt;毫秒戳&gt;.jsonl</code>,每行一条 JSON,含 <code class="inline">url/method/headers/请求body/status/耗时</code>。</div>
+            <div class="note limit"><span class="nt">JSONL 时间线里不含响应体</span>时间线响应行只记 <code class="inline">status</code> / 耗时 / <code class="inline">mimeType</code>;<b>要完整请求/响应体请用下方 <code class="inline">saveBodies</code></b> 各落成独立文件。流式 / SSE 若不发 <code class="inline">loadingFinished</code> 则无响应行。文件名 <code class="inline">timeline-&lt;record|replay&gt;-&lt;毫秒戳&gt;.jsonl</code>,每行一条 JSON,含 <code class="inline">url/method/headers/请求body/status/耗时</code>。</div>
             <div class="note ok"><span class="nt">与 enabled 各自独立</span>可只开 record(<code class="inline">enabled:false</code>)纯记录、也可两者同开(改写命中的 POST + 记录所有请求,记录到的是改写前原始 body)。</div>
+
+            <h3 style="margin:18px 0 8px;font-size:15px;">record.saveBodies[] — 请求 / 响应体独立落盘</h3>
+            <p class="section-hint">对命中 <code class="inline">urlPattern</code> 的请求,把其<b>完整请求体</b>和/或<b>完整响应体</b>各写成一个独立文件到 <code class="inline">dumps/</code>(禁止截断)。走 CDP Fetch <b>请求阶段</b>(<code class="inline">postDataEntries</code> 重组,对 File/Blob 上传保真)+ <b>响应阶段</b>(<code class="inline">Fetch.getResponseBody</code>,含二进制/解压后)。同一请求的 req/res 文件按同一 CDP <code class="inline">requestId</code> 天然配对。</p>
+            <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">随 record.enabled 走</span></div>
+            <div class="card">
+                <table>
+                    <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                    <tbody>
+                        <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配请求 URL</td><td>缺失整条丢弃;与 record.urlPattern(JSONL 范围)解耦</td></tr>
+                        <tr><td class="field"><code>method</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>只落指定方法</td><td>大小写不敏感;缺省=所有方法</td></tr>
+                        <tr><td class="field"><code>request</code></td><td class="type">boolean</td><td><span class="badge opt">可选</span></td><td>是否落请求体</td><td>缺省 true</td></tr>
+                        <tr><td class="field"><code>response</code></td><td class="type">boolean</td><td><span class="badge opt">可选</span></td><td>是否落响应体</td><td>缺省 true</td></tr>
+                        <tr><td class="field"><code>requestExt</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>请求体文件后缀</td><td>可含/不含前导点;缺省按请求 content-type 推断,推不出用 <code class="inline">bin</code></td></tr>
+                        <tr><td class="field"><code>responseExt</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>响应体文件后缀</td><td>可含/不含前导点;缺省按响应 content-type 推断,推不出用 <code class="inline">bin</code></td></tr>
+                    </tbody>
+                </table>
+                <div class="note info"><span class="nt">文件名与配对</span>落 <code class="inline">dumps/</code>(与 dumps 支路共用目录),名 <code class="inline">rec-&lt;毫秒戳&gt;-&lt;requestId&gt;-&lt;req|res&gt;.&lt;后缀&gt;</code>;同一请求的请求体/响应体文件 <code class="inline">requestId</code> 相同即为一对。</div>
+                <div class="note limit"><span class="nt">二进制保真</span>二进制/gzip 响应体请让服务端用非文本 content-type(如 <code class="inline">application/octet-stream</code>)——声称文本类型时 CDP 按文本解码会损坏无效 UTF-8 字节。分块/resumable 上传会落多个请求体文件需自行拼接。</div>
+            </div>
         </div>
 
         <!-- ============ 完整示例 ============ -->
@@ -865,7 +885,7 @@
         </div>
 
         <footer>
-            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-24(补 sections 支路级分闸)
+            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-27(补 record.saveBodies 请求/响应体独立落盘)
         </footer>
     </main>
 </div>

@@ -1058,6 +1058,11 @@ async function buildSessionOptions(): Promise<SessionOptions> {
             logInfo(
                 `回放将记录请求时间线(只记录不修改),匹配 URL:${requestRules.record?.urlPattern || '全部'}。`
             );
+            if (requestRules.record?.saveBodies?.length) {
+                logInfo(
+                    `回放将按 ${requestRules.record.saveBodies.length} 条 saveBodies 规则把命中请求的请求/响应体各落盘成独立文件(dumps/)。`
+                );
+            }
         }
     }
     // 回放行为档:每次回放开始读一次(next-run 生效,与 browser-config 同类),取当前档带给 runner。
