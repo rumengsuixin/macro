@@ -398,6 +398,7 @@
 
         <div class="nav-group">记录支路(两端)</div>
         <a href="#record"><span class="idx">8</span>record 只记录不修改</a>
+        <a href="#jsHooks"><span class="idx">9</span>jsHooks JS Hook 探针</a>
 
         <div class="nav-group">附录</div>
         <a href="#full-example"><span class="idx">§</span>完整示例</a>
@@ -426,6 +427,7 @@
             <a class="ov-item" href="#dumps"><div class="k">dumps[]</div><div class="d">把请求体完整字节落成文件</div></a>
             <a class="ov-item" href="#bodyReplaces"><div class="k">bodyReplaces[]</div><div class="d">用本地文件整体替换请求体</div></a>
             <a class="ov-item" href="#record"><div class="k">record</div><div class="d">只记录不修改,独立开关</div></a>
+            <a class="ov-item" href="#jsHooks"><div class="k">jsHooks</div><div class="d">主世界注入抓明文↔密文,独立开关</div></a>
             <a class="ov-item" href="#resends"><div class="k">maxResendHops</div><div class="d">响应触发连环的跳数上限(缺省5熔断)</div></a>
         </div>
 
@@ -448,6 +450,7 @@
                     <tr><td class="field"><code>dumps</code></td><td class="type">DumpRule[]</td><td><span class="badge opt">可选</span></td><td>请求体落盘规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>bodyReplaces</code></td><td class="type">BodyReplaceRule[]</td><td><span class="badge opt">可选</span></td><td>请求体整体替换规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>record</code></td><td class="type">TimelineRecordConfig</td><td><span class="badge opt">可选</span></td><td>只记录不修改支路(独立开关)</td><td>不记录</td></tr>
+                    <tr><td class="field"><code>jsHooks</code></td><td class="type">JsHookConfig</td><td><span class="badge opt">可选</span></td><td>JS Hook 探针(主世界注入抓明文↔密文,独立开关)</td><td>不启用</td></tr>
                     <tr><td class="field"><code>maxResendHops</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>响应触发重发的<b>链式跳数上限</b>:一条重发的响应可再触发下一条规则(连环),达此跳数即熔断防无限</td><td>缺省 <code class="inline">5</code>;clamp[1,100]</td></tr>
                 </tbody>
             </table>
@@ -851,6 +854,37 @@
             </div>
         </div>
 
+        <!-- ============ 9. jsHooks ============ -->
+        <h2 id="jsHooks"><span class="num">9</span><span class="key">jsHooks</span>&nbsp;JS Hook 探针(抓明文↔密文)</h2>
+        <p class="section-hint">向页面<b>主世界</b>注入 hook 脚本,拦截网络出口(fetch/XHR)、标准加密库(CryptoJS/crypto.subtle/btoa/JSON.stringify)与<b>平台自定义签名/加密函数</b>,抓「明文入参 ↔ 密文出参 + 调用栈」。<b>网络层只看得到密文,这里看得到明文</b>——用于逆向前端签名/加密。被动观察、全透传、不改页面行为。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">独立开关,与 enabled 无关</span></div>
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>true 即注入抓取</td><td><b>与顶层 enabled 无关</b>(像 record);可热更新(注入恒装、此开关控落盘)</td></tr>
+                    <tr><td class="field"><code>rules[]</code></td><td class="type">JsHookRule[]</td><td><span class="badge opt">可选</span></td><td>抓取规则(见下表)</td><td>缺省/空 = 默认基础集全抓</td></tr>
+                </tbody>
+            </table>
+            <div class="note ok"><span class="nt">独立于网络改写</span>即便顶层 <code class="inline">enabled:false</code>(不开任何拦截改写),只要 <code class="inline">jsHooks.enabled:true</code> 就注入抓取——纯观察前端加密场景友好。</div>
+
+            <h3 style="margin:18px 0 8px;font-size:15px;">jsHooks.rules[] — 抓取规则</h3>
+            <div class="tag-row"><span class="badge replay">仅回放端</span></div>
+            <div class="card">
+                <table>
+                    <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                    <tbody>
+                        <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>按页面 <code class="inline">location.href</code> 过滤才落盘</td><td>CDP glob;缺省=所有页面。<b>逐条</b>过滤(命中任一条即落盘)</td></tr>
+                        <tr><td class="field"><code>apis</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>包裹哪些基础集</td><td>取值 <code class="inline">fetch|xhr|btoa|subtle|json|cryptojs</code>;<b>全局并集</b>;缺省(都不写)=<code class="inline">fetch/xhr/btoa/subtle</code>(json 高频、cryptojs 按需须显式开)</td></tr>
+                        <tr><td class="field"><code>hookPaths</code></td><td class="type">string[]</td><td><span class="badge opt">可选</span></td><td>自定义全局函数点路径</td><td>如 <code class="inline">byted_acrawler.sign</code>;按路径惰性包裹(赋值即拦);<b>全局并集</b></td></tr>
+                        <tr><td class="field"><code>maxInline</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>明文/密文内联阈值(字节)</td><td>超则旁落独立文件(完整不截断);缺省 2048</td></tr>
+                    </tbody>
+                </table>
+                <div class="note info"><span class="nt">输出:索引 + 旁落文件</span>落 <code class="inline">dumps/</code>:每次命中追加一行 <code class="inline">jshook-index-&lt;毫秒戳&gt;.jsonl</code>,含 <code class="inline">{t, api, url, input?/inputFile?, output?/outputFile?, stack}</code>;短值内联、超 <code class="inline">maxInline</code> 或二进制的 payload 旁落 <code class="inline">jshook-&lt;戳&gt;-&lt;seq&gt;-&lt;in|out&gt;.&lt;txt|bin&gt;</code>。<code class="inline">api</code> 形如 <code class="inline">fetch</code> / <code class="inline">json</code> / <code class="inline">btoa</code> / <code class="inline">subtle.digest</code> / <code class="inline">cryptojs.HmacSHA256</code> / <code class="inline">custom:byted_acrawler.sign</code>。</div>
+                <div class="note limit"><span class="nt">局限</span>「包裹哪些 api/函数」在回放<b>启动时</b>定(注入不可撤销),增删 <code class="inline">apis</code>/<code class="inline">hookPaths</code> 需重启回放(<code class="inline">enabled</code> 本身可热更新);函数在包裹前已被缓存引用则可能漏包。算法的最终还原(反混淆/脱 VMP)不在本工具范围——它只负责抓「明文↔密文配对 + 定位到函数」。</div>
+            </div>
+        </div>
+
         <!-- ============ 完整示例 ============ -->
         <h2 id="full-example"><span class="num">§</span>完整示例（可整份拷贝改用）</h2>
         <p class="section-hint">完整带注释的示例见项目 <code class="inline">examples/request-rules.example.json</code>。下面是一份最小可用骨架:</p>
@@ -891,7 +925,11 @@
       <span class="k">"replaceWithFile"</span>: <span class="s">"D:\\videos\\new.mp4"</span> }
   ],
 
-  <span class="k">"record"</span>: { <span class="k">"enabled"</span>: <span class="n">false</span>, <span class="k">"urlPattern"</span>: <span class="s">"*"</span>, <span class="k">"includeBody"</span>: <span class="n">true</span> }
+  <span class="k">"record"</span>: { <span class="k">"enabled"</span>: <span class="n">false</span>, <span class="k">"urlPattern"</span>: <span class="s">"*"</span>, <span class="k">"includeBody"</span>: <span class="n">true</span> },
+
+  <span class="k">"jsHooks"</span>: { <span class="k">"enabled"</span>: <span class="n">false</span>, <span class="k">"rules"</span>: [
+    { <span class="k">"apis"</span>: [<span class="s">"fetch"</span>, <span class="s">"btoa"</span>, <span class="s">"subtle"</span>], <span class="k">"hookPaths"</span>: [<span class="s">"byted_acrawler.sign"</span>] }
+  ] }
 }</pre>
             <div class="note warn"><span class="nt">配了没反应?排查清单</span>
                 <ul>
@@ -907,7 +945,7 @@
         </div>
 
         <footer>
-            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-27(record.saveBodies 请求/响应体独立落盘 + rec-index 索引经 networkId 与 record 时间线精确 join)
+            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-27(新增 jsHooks:主世界注入 hook 探针,抓 fetch/加密库/自定义签名函数的明文↔密文+调用栈,输出 jshook-index-*.jsonl)
         </footer>
     </main>
 </div>

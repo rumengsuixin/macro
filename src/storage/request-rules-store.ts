@@ -15,6 +15,8 @@ import type {
     RequestRulesConfig,
     RequestSectionToggles,
     TimelineRecordConfig,
+    JsHookConfig,
+    JsHookRule,
 } from '../core/macro-types';
 
 /** 支路级分闸的默认值:全部启用(缺省 = 开)。 */
@@ -159,6 +161,23 @@ function templateConfig(): RequestRulesConfig {
         // record:「只记录不修改」支路(独立于 enabled)。改成 enabled:true 即拦截并记录所有请求
         // (不限 method)+ 响应到 timelines/timeline-*.jsonl,供事后分析;不改写任何请求。
         record: { enabled: false, urlPattern: '*', includeBody: true },
+        // jsHooks:「JS Hook 探针」支路(独立于 enabled,仅回放端)。改成 enabled:true 即向页面主世界注入 hook 脚本,
+        // 拦截网络出口(fetch/XHR)、标准加密库(btoa/crypto.subtle,可选 JSON.stringify/CryptoJS)与**平台自定义
+        // 签名/加密函数**(rules[].hookPaths 指定的全局点路径,如 byted_acrawler.sign),抓「明文入参↔密文出参+调用栈」,
+        // 落 dumps/jshook-index-<戳>.jsonl(大体旁落独立文件)。网络层只看得到密文,这里看得到明文——用于逆向前端签名/加密。
+        // apis 取值:fetch|xhr|btoa|subtle|json|cryptojs(全局并集;缺省=fetch/xhr/btoa/subtle,json 高频/cryptojs 按需须显式开);
+        // urlPattern 缺省=所有页面;maxInline=明文/密文内联进索引的字节阈值(超则旁落文件、完整不截断),缺省 2048。
+        jsHooks: {
+            enabled: false,
+            rules: [
+                {
+                    urlPattern: '*',
+                    apis: ['fetch', 'xhr', 'btoa', 'subtle', 'json', 'cryptojs'],
+                    hookPaths: ['byted_acrawler.sign'],
+                    maxInline: 2048,
+                },
+            ],
+        },
         // maxResendHops:响应触发重发的「链式跳数上限」。允许一条重发的响应再触发下一条规则(连环触发),
         // 真实请求算第 0 跳、每重发一次 +1;当触发源已达此跳数就熔断,不再继续——兜底防无限自环/互环。
         // 缺省 5(clamp 到 [1,100])。想让 A→B→C… 更长的连环走通就调大;只想单发把它设成 1。
@@ -564,6 +583,56 @@ function normalizeRecord(raw: unknown): TimelineRecordConfig | undefined {
     return record;
 }
 
+/** 校验并归一化单条 jsHooks 规则;非对象返回 null(过滤掉);字段全可选,全空也保留(=默认基础集全抓) */
+function normalizeJsHookRule(raw: unknown): JsHookRule | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    const rule: JsHookRule = {};
+    if (typeof r.urlPattern === 'string' && r.urlPattern.trim()) {
+        rule.urlPattern = r.urlPattern;
+    }
+    if (Array.isArray(r.apis)) {
+        const apis = r.apis.filter(
+            (a): a is string => typeof a === 'string' && a.trim().length > 0
+        );
+        if (apis.length) {
+            rule.apis = apis;
+        }
+    }
+    if (Array.isArray(r.hookPaths)) {
+        const hookPaths = r.hookPaths.filter(
+            (p): p is string => typeof p === 'string' && p.trim().length > 0
+        );
+        if (hookPaths.length) {
+            rule.hookPaths = hookPaths;
+        }
+    }
+    if (typeof r.maxInline === 'number' && Number.isFinite(r.maxInline) && r.maxInline >= 0) {
+        rule.maxInline = Math.floor(r.maxInline);
+    }
+    return rule;
+}
+
+/** 校验并归一化 jsHooks 段(config 级,像 record 自带 enabled);非对象/缺省返回 undefined */
+function normalizeJsHookConfig(raw: unknown): JsHookConfig | undefined {
+    if (!raw || typeof raw !== 'object') {
+        return undefined;
+    }
+    const r = raw as Record<string, unknown>;
+    const cfg: JsHookConfig = { enabled: r.enabled === true };
+    if (Array.isArray(r.rules)) {
+        const rules = r.rules
+            .map(normalizeJsHookRule)
+            .filter((x): x is JsHookRule => x !== null);
+        if (rules.length) {
+            cfg.rules = rules;
+        }
+    }
+    return cfg;
+}
+
 /**
  * 加载请求改写配置。
  * - 文件不存在:写入 inert 模板并返回它(enabled=false,不干预录制)。
@@ -586,6 +655,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             ? raw.rules.map(normalizeRule).filter((x): x is RequestRule => x !== null)
             : [];
         const record = normalizeRecord(raw.record);
+        const jsHooks = normalizeJsHookConfig(raw.jsHooks);
         const resends = Array.isArray(raw.resends)
             ? raw.resends.map(normalizeResendRule).filter((x): x is ResendRule => x !== null)
             : [];
@@ -628,6 +698,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             ...(dumps.length ? { dumps } : {}),
             ...(bodyReplaces.length ? { bodyReplaces } : {}),
             ...(record ? { record } : {}),
+            ...(jsHooks ? { jsHooks } : {}),
             ...(maxResendHops !== undefined ? { maxResendHops } : {}),
         };
     } catch {

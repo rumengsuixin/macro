@@ -787,6 +787,41 @@ export interface TimelineRecordConfig {
 }
 
 /**
+ * 「JS Hook 探针」单条规则(jsHooks 支路)。回放端向页面**主世界**注入 hook 脚本,拦截网络出口
+ * (fetch/XHR)、标准加密库(CryptoJS/crypto.subtle/btoa/JSON.stringify)与**平台自定义签名/加密函数**
+ * (hookPaths 指定的全局点路径,如 byted_acrawler.sign),抓「明文入参 ↔ 密文出参 + 调用栈」。
+ * 注意:apis / hookPaths 是**全局并集**(注入脚本装载时一次性决定包裹哪些目标,不可撤销);urlPattern 才是
+ * **逐条**的落盘过滤(命中任一条规则的 urlPattern 才落盘)。**仅回放端生效**,被动观察、不改页面行为。
+ */
+export interface JsHookRule {
+    /** 页面 URL 匹配模式(CDP glob,`*` 通配);缺省 = 匹配所有页面(按 location.href 判定) */
+    urlPattern?: string;
+    /**
+     * 限定包裹哪些基础集 api(取值:'fetch'|'xhr'|'json'|'btoa'|'subtle'|'cryptojs');**全局并集**。
+     * 缺省(所有规则都不写)= 默认基础集 fetch/xhr/btoa/subtle(json 因高频、cryptojs 需按需,均需显式开)。
+     */
+    apis?: string[];
+    /** 自定义全局函数点路径列表(如 'byted_acrawler.sign'、'_0xabc.encrypt'),按路径惰性包裹;**全局并集** */
+    hookPaths?: string[];
+    /** 明文/密文内联进索引的字节阈值,超过则旁落独立文件(完整不截断);缺省 2048 */
+    maxInline?: number;
+}
+
+/**
+ * 「JS Hook 探针」支路配置(存于 request-rules.json 的 jsHooks 段)。自带 enabled 子开关,
+ * **独立于 RequestRulesConfig.enabled**(像 record)——即便网络改写总闸关闭,只要 jsHooks.enabled
+ * 就注入抓取。输出到 dumps/:索引 jshook-index-<戳>.jsonl + 大体旁落文件 jshook-<戳>-<seq>-<in|out>.<ext>。
+ * enabled 可热更新(注入脚本恒装恒抓、Node 侧按开关落盘);但「包裹哪些 api/函数」在回放启动时定,
+ * 增删 apis/hookPaths 需重启回放才生效。
+ */
+export interface JsHookConfig {
+    /** 独立开关:true 即启用注入抓取,与网络改写总闸无关 */
+    enabled: boolean;
+    /** 规则列表(命中任一条的 urlPattern 即落盘;apis/hookPaths 全局并集);缺省/空 = 默认基础集全抓 */
+    rules?: JsHookRule[];
+}
+
+/**
  * 「支路级分闸」开关映射:键 = 支路名,值 = 是否启用。**缺省 / 缺键 = true(启用)**,只有显式
  * false 才关闭该支路。与顶层 enabled 是 **AND** 关系:enabled 是总闸、sections 是各支路分闸——
  * 某支路生效需「enabled 为真 且 sections[该支路] !== false 且 该支路有规则」。
@@ -835,6 +870,8 @@ export interface RequestRulesConfig {
     bodyReplaces?: BodyReplaceRule[];
     /** 只记录不修改支路(独立开关);缺省视为不记录 */
     record?: TimelineRecordConfig;
+    /** JS Hook 探针支路(独立开关,独立于 enabled;回放端主世界注入抓明文↔密文);缺省视为不启用 */
+    jsHooks?: JsHookConfig;
     /**
      * 响应触发重发的**链式跳数上限**(熔断阈值,仅回放端)。真实浏览器请求视为第 0 跳,每被重发一次 +1。
      * 当触发响应所属请求的跳数已达此值时,不再继续触发新的重发——用来在支持「连环触发」(一条重发的响应

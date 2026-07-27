@@ -37,6 +37,7 @@ import type {
     DumpRule,
     BodyReplaceRule,
     BodySaveRule,
+    JsHookRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -66,6 +67,13 @@ import {
 } from './request-rewrite';
 import { TimelineRecorder } from './timeline-recorder';
 import { RecordBodyIndex } from './record-body-index';
+import { JsHookIndex } from './js-hook-index';
+import {
+    buildJsHookInitScript,
+    buildInjectConfig,
+    pickMaxInline,
+    type JsHookProbePayload,
+} from './js-hook-script';
 import { logInfo, logError } from './logger';
 
 /** CDP Fetch.requestPaused 事件里的 request 结构(取用到的字段;Playwright CDPSession 事件为弱类型) */
@@ -272,6 +280,19 @@ export class MacroRunner {
     private readonly networkEnabledSessions = new Set<CDPSession>();
     /** 已挂记录 session 的 CDP targetId:一个 target 只保留一个 session,防同一 target 被多 Page 对象/多次事件重复记录 */
     private readonly attachedTargets = new Set<string>();
+    // --- 「JS Hook 探针(jsHooks)」运行期状态(随 jsHooks.enabled,独立于 enabled;回放端主世界注入抓明文↔密文)---
+    /** 当前生效的 hook 规则(URL 过滤 + maxInline;apis/hookPaths 已在注入时聚合、不在此) */
+    private jsHookRules: JsHookRule[] = [];
+    /** 是否落盘(jsHooks.enabled;注入脚本恒抓,此标志控 Node 侧落不落盘) */
+    private jsHookWant = false;
+    /** 命中落盘索引(jshook-index-<戳>.jsonl);关→null 停写 */
+    private jsHookIndex: JsHookIndex | null = null;
+    /** 旁落文件序号:与毫秒戳组合防同毫秒撞名 */
+    private jsHookSeq = 0;
+    /** 明文/密文内联阈值(字节),超则旁落独立文件(完整不截断);缺省 2048 */
+    private jsHookMaxInline = 2048;
+    /** 注入脚本 + exposeBinding 是否已装(恒装一次,不可撤销) */
+    private jsHookScriptInstalled = false;
 
     constructor(
         errorDir: string,
@@ -456,6 +477,10 @@ export class MacroRunner {
                     Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 }
             });
+
+            // JS Hook 探针:主世界注入抓取脚本 + exposeBinding 回传管子(仅当配置了 jsHooks 支路)。
+            // 必须在第一个 goto 之前挂 context 上——自动覆盖初始页与后续弹窗;恒装恒抓,落盘由 jsHookWant 热控。
+            await this.installJsHookProbe(context);
 
             // 注入录制 webview 的 cookies(把录制时登录的账号带进回放)
             if (this.session.cookies && this.session.cookies.length > 0) {
@@ -849,6 +874,7 @@ export class MacroRunner {
         this.applyReplayResend(initial);
         this.applyReplayDump(initial);
         this.applyReplayBodyReplace(initial);
+        this.applyReplayJsHook(initial);
     }
 
     /**
@@ -864,6 +890,7 @@ export class MacroRunner {
         this.applyReplayResend(cfg);
         this.applyReplayDump(cfg);
         this.applyReplayBodyReplace(cfg);
+        this.applyReplayJsHook(cfg);
     }
 
     /**
@@ -1352,6 +1379,152 @@ export class MacroRunner {
             );
             return null;
         }
+    }
+
+    // ===== JS Hook 探针(jsHooks):主世界注入抓明文↔密文 + 回传落盘 =====
+
+    /**
+     * 向页面主世界一次性注入抓取脚本 + 挂 exposeBinding 回传管子(仅当 session 配置了 jsHooks 支路)。
+     * 必须在第一个 goto 之前、挂在 context 上——自动覆盖初始页与后续所有弹窗,无需 per-page 补挂。
+     * addInitScript/exposeBinding **不可撤销**,故恒装恒抓;「落不落盘」由 applyReplayJsHook 的 jsHookWant 热控。
+     */
+    private async installJsHookProbe(context: BrowserContext): Promise<void> {
+        if (this.jsHookScriptInstalled) {
+            return;
+        }
+        const j = this.session.requestRules?.jsHooks;
+        if (!j) {
+            return; // 未配置 jsHooks 支路 → 完全不注入,对现有用户零影响
+        }
+        const injectCfg = buildInjectConfig(j.rules ?? []);
+        try {
+            await context.exposeBinding('__macroProbe', (_src, payload) => {
+                this.onJsHookProbe(payload as JsHookProbePayload);
+            });
+            await context.addInitScript({ content: buildJsHookInitScript(injectCfg) });
+            this.jsHookScriptInstalled = true;
+            logInfo(
+                `JS Hook 探针:已注入主世界抓取脚本(基础集:${injectCfg.apis.join(',') || '无'};` +
+                    `自定义函数:${injectCfg.hookPaths.join(',') || '无'})。`
+            );
+        } catch (err) {
+            logError(`JS Hook 探针:注入失败(不影响回放):${(err as Error).message}`);
+        }
+    }
+
+    /**
+     * exposeBinding 回调:页面主世界每次 hook 命中回传一条 payload。按最新 jsHookWant + URL 过滤后落盘:
+     * 短明文/短密文内联进索引,超 maxInline 或二进制的 payload 旁落独立文件(完整不截断)。整体 try/catch,不拖垮回放。
+     */
+    private onJsHookProbe(payload: JsHookProbePayload): void {
+        try {
+            if (!this.jsHookWant || !this.jsHookIndex) {
+                return; // 支路已停用(注入脚本仍在抓,这里丢弃)
+            }
+            if (!this.jsHookMatch(payload.url ?? '')) {
+                return;
+            }
+            const inp = this.materializeHookField(payload.input, payload.inputEnc, 'in');
+            const out = this.materializeHookField(payload.output, payload.outputEnc, 'out');
+            this.jsHookIndex.writeEntry({
+                api: payload.api ?? 'unknown',
+                url: payload.url ?? '',
+                input: inp.inline,
+                inputEnc: inp.enc,
+                inputFile: inp.file,
+                output: out.inline,
+                outputEnc: out.enc,
+                outputFile: out.file,
+                stack: payload.stack,
+            });
+        } catch (err) {
+            logError(`JS Hook 探针:处理回传出错(不影响回放):${(err as Error).message}`);
+        }
+    }
+
+    /**
+     * 决定一个 hook 字段(明文/密文)内联进索引还是旁落文件:字节 ≤ maxInline 内联(base64 保留标注),
+     * 否则写成独立文件返回文件名(完整不截断)。落盘失败退回内联,保证数据不丢。
+     */
+    private materializeHookField(
+        s: string | undefined,
+        enc: 'base64' | undefined,
+        kind: 'in' | 'out'
+    ): { inline?: string; enc?: 'base64'; file?: string } {
+        if (s === undefined) {
+            return {};
+        }
+        const buf = enc === 'base64' ? Buffer.from(s, 'base64') : Buffer.from(s, 'utf-8');
+        if (buf.length <= this.jsHookMaxInline) {
+            return enc ? { inline: s, enc } : { inline: s };
+        }
+        const file = this.writeJsHookFile(buf, kind, enc);
+        return file ? { file } : enc ? { inline: s, enc } : { inline: s };
+    }
+
+    /**
+     * 把超阈值/二进制的 hook payload 写成独立文件(**完整字节、禁止截断**)。命名 jshook-<戳>-<seq>-<in|out>.<ext>;
+     * 二进制(base64)用 .bin、文本用 .txt。复用 dumpsDir + dumpsReady 懒建;写失败只记日志返回 null。
+     */
+    private writeJsHookFile(buf: Buffer, kind: 'in' | 'out', enc?: 'base64'): string | null {
+        try {
+            if (!this.dumpsReady) {
+                fs.mkdirSync(this.dumpsDir, { recursive: true });
+                this.dumpsReady = true;
+            }
+            this.jsHookSeq += 1;
+            const ext = enc === 'base64' ? 'bin' : 'txt';
+            const name = `jshook-${Date.now()}-${this.jsHookSeq}-${kind}.${ext}`;
+            fs.writeFileSync(path.join(this.dumpsDir, name), buf); // 一次性写完整字节,不截断
+            return name;
+        } catch (err) {
+            logError(`JS Hook 探针:写旁落文件失败(不影响回放):${(err as Error).message}`);
+            return null;
+        }
+    }
+
+    /** 当前页面 URL 是否命中任一 jsHooks 规则的 urlPattern(无规则 = 全抓;规则无 urlPattern = 匹配所有页面)。 */
+    private jsHookMatch(url: string): boolean {
+        if (this.jsHookRules.length === 0) {
+            return true;
+        }
+        return this.jsHookRules.some((r) => {
+            if (!r.urlPattern) {
+                return true;
+            }
+            try {
+                return globToRegExp(r.urlPattern).test(url);
+            } catch {
+                return true; // 非法 pattern 兜底放行(与 matchRule 容错一致)
+            }
+        });
+    }
+
+    /**
+     * 按配置启用/停用 JS Hook 探针支路(随 jsHooks.enabled,**独立于 cfg.enabled**)。注入脚本 + exposeBinding
+     * 在 run() 首个 goto 前由 installJsHookProbe 一次性装(恒抓);此处只切 want/规则/阈值/索引对象——
+     * 热更新即时改「落不落盘」与「URL 过滤」,但「包裹哪些 api/函数」由装载时快照决定(注入不可撤销)。
+     */
+    private applyReplayJsHook(cfg: RequestRulesConfig): void {
+        const j = cfg.jsHooks;
+        const want = j?.enabled === true;
+        this.jsHookRules = want ? j?.rules ?? [] : [];
+        this.jsHookMaxInline = pickMaxInline(this.jsHookRules);
+        if (this.jsHookWant !== want) {
+            if (want) {
+                if (!this.jsHookIndex) {
+                    this.jsHookIndex = new JsHookIndex(this.dumpsDir);
+                }
+                logInfo(
+                    `JS Hook 探针:已启用,共 ${this.jsHookRules.length} 条规则;` +
+                        `输出目录:${this.dumpsDir};索引:${this.jsHookIndex.file}`
+                );
+            } else {
+                this.jsHookIndex = null;
+                logInfo('JS Hook 探针:已停用(注入脚本仍在页面,回传将被丢弃)。');
+            }
+        }
+        this.jsHookWant = want;
     }
 
     // ===== 请求体落盘的 CDP Fetch 拦截(抓 File/Blob 上传体;Playwright postDataBuffer 对 Blob 返回 null)=====
