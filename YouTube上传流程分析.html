@@ -329,6 +329,91 @@
     </div>
 </section>
 
+<!-- ========== 删除接口 ========== -->
+<section>
+    <h2>八、删除视频接口(video/delete）—— 创建的对应操作</h2>
+
+    <div class="callout c-info">
+        <b>与 createvideo 同源、互为对称操作。</b> 删除走同一套 InnerTube API(<code>/youtubei/v1/…</code>）与同构的 <code>context</code> 结构;它的唯一业务入参 <code>videoId</code> <b>正是 createvideo 的输出</b> —— 补齐了「创建 → 存在 → 删除」的视频生命周期对称面,可作创建接口的对应参考。<br>
+        <span class="muted">数据源:<code>timelines/timeline-replay-20260724-182402098.jsonl</code>(回放端记录,与前文上传时间线不同批;客户端版本已升到 <code>1.20260722.04.00</code>）。同频道 <code>UCkbDU_zD8CNUmrHrlQNqEbw</code>。</span>
+    </div>
+
+    <div class="card">
+        <div class="step-head"><div class="step-num">✕</div><h3 style="margin:0;">删除请求 —— <code>POST /youtubei/v1/video/delete</code></h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">完整 URL</div><div><code>https://studio.youtube.com/youtubei/v1/video/delete?alt=json</code></div>
+            <div class="lbl">方法</div><div><span class="badge">POST</span> <span class="muted">InnerTube 一律 POST+JSON,不用 HTTP DELETE 动词;端点是单数 <code>video/delete</code>,非批量</span></div>
+            <div class="lbl">来源页</div><div><code>referer: …/channel/UCkbDU_…/videos/upload</code></div>
+            <div class="lbl">响应</div><div><span class="badge">200</span> <span class="badge">1,128 ms</span> <span class="badge">application/json · br · 1636B</span></div>
+        </div>
+
+        <p><span class="tag t-req">关键请求头</span>(敏感值只示前缀）</p>
+<pre><span class="k">authorization</span>: SAPISIDHASH 1784888647_1cd0…_u   <span class="c"># 三段并列 SAPISIDHASH / SAPISID1PHASH / SAPISID3PHASH</span>
+<span class="k">content-type</span>: application/json
+<span class="k">x-youtube-client-name</span>: 62                       <span class="c"># WEB_CREATOR(Studio 前端固定)</span>
+<span class="k">x-youtube-client-version</span>: 1.20260722.04.00
+<span class="k">x-youtube-delegation-context</span>: Ehh…AggI            <span class="c"># ★ 与 body 的 serializedDelegationContext 完全一致</span>
+<span class="k">x-goog-visitor-id</span>: Cgs3bmtDU3FWelpWSSil…
+<span class="k">x-goog-authuser</span>: 0
+<span class="k">x-origin</span>: https://studio.youtube.com</pre>
+
+        <p><span class="tag t-req">请求体结构</span>(长令牌按长度截断)</p>
+<pre>{
+  <span class="k">"context"</span>: {
+    <span class="k">"client"</span>: { <span class="k">"clientName"</span>: 62, <span class="k">"clientVersion"</span>: <span class="s">"1.20260722.04.00"</span>, <span class="k">"hl"</span>: <span class="s">"zh-CN"</span>, <span class="k">"gl"</span>: <span class="s">"SG"</span>, <span class="k">"utcOffsetMinutes"</span>: 480, <span class="k">"userInterfaceTheme"</span>: <span class="s">"USER_INTERFACE_THEME_LIGHT"</span>, … },
+    <span class="k">"request"</span>: {
+      <span class="k">"returnLogEntry"</span>: true,
+      <span class="k">"eats"</span>: <span class="s">"AeCS5zDCFP…(≈128)"</span>,
+      <span class="k">"sessionInfo"</span>: { <span class="k">"token"</span>: <span class="s">"Ac9D6cEb1c…(≈164)"</span> },
+      <span class="k">"consistencyTokenJars"</span>: []                       <span class="c"># ← 删除请求此处为空(createvideo 里带 TTL 600s 令牌);且<b>无</b> attestationResponseData(BotGuard),比 createvideo 更轻</span>
+    },
+    <span class="k">"user"</span>: {
+      <span class="k">"delegationContext"</span>: { <span class="k">"externalChannelId"</span>: <span class="s">"UCkbDU_zD8CNUmrHrlQNqEbw"</span>, <span class="k">"roleType"</span>: { <span class="k">"channelRoleType"</span>: <span class="s">"CREATOR_CHANNEL_ROLE_TYPE_OWNER"</span> } },
+      <span class="k">"serializedDelegationContext"</span>: <span class="s">"Ehh…AggI"</span>       <span class="c"># = 请求头 x-youtube-delegation-context</span>
+    },
+    <span class="k">"clickTracking"</span>: { <span class="k">"visualElement"</span>: { <span class="k">"veType"</span>: 31402 } },
+    <span class="k">"clientScreenNonce"</span>: <span class="s">"7IrSu0y-QjVCLg9L"</span>
+  },
+  <span class="k">"videoId"</span>: <span class="s">"ArTd8YSb2Zw"</span>                            <span class="c"># ★ 顶层唯一业务字段:删除只认 videoId</span>
+}</pre>
+
+        <div class="callout c-key" style="margin-bottom:0;">
+            <b>删除只凭 <code>videoId</code> + <code>delegationContext</code> 定位,完全不碰上传阶段的配对标识。</b> body 里<b>没有</b> <code>frontendUploadId</code>、<b>没有</b> <code>scottyResourceId</code> —— 这两个是「创建/上传」侧的资源句柄;到了删除侧,视频已是频道里一个有 <code>videoId</code> 的实体,只需这一个 id 即可作废。
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>8.1 create ↔ delete 三个标识的分工</h3>
+        <table>
+            <tr><th style="width:170px;">标识</th><th>产生位置</th><th>createvideo(创建)</th><th>video/delete(删除)</th></tr>
+            <tr><td><code>frontendUploadId</code></td><td>① start 请求体(前端 UUID)</td><td>必填 · 配对键 + 幂等键</td><td><span class="muted">不出现</span></td></tr>
+            <tr><td><code>scottyResourceId</code></td><td>① start 响应头(服务端 scotty)</td><td>必填 · <code>resourceId.scottyResourceId.id</code></td><td><span class="muted">不出现</span></td></tr>
+            <tr><td><code>videoId</code></td><td>③ createvideo <b>响应返回</b></td><td><b>输出</b> · 新建草稿的视频 id</td><td><b>唯一入参</b> · 顶层 <code>videoId</code></td></tr>
+        </table>
+        <p class="muted" style="margin-bottom:0;">一句话:createvideo 的<b>产出</b>(videoId)= delete 的<b>输入</b>。上传链路用 (frontendUploadId, scottyResourceId) 这对句柄,删除链路只用 videoId。</p>
+    </div>
+
+    <div class="card">
+        <h3>8.2 本次调用序列(纯删除流)</h3>
+        <div class="timeline">
+            <div class="tl-item hi"><span class="tl-t">t+0.00s</span> · <span class="tag t-req">① 删除</span> <code>POST /youtubei/v1/video/delete</code> <span class="muted">videoId=ArTd8YSb2Zw → 1128ms, 200</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+0.18s</span> · <span class="tag t-cli">埋点</span> <code>POST play.google.com/log</code> 匿名统计上报</div>
+            <div class="tl-item hi"><span class="tl-t">t+1.18s</span> · <span class="tag t-req">② 刷新</span> <code>POST /youtubei/v1/creator/list_creator_videos</code> <span class="muted">删后重拉列表 → 1063ms, 200</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+4.84s</span> · <span class="tag t-cli">埋点</span> <code>POST play.google.com/log</code> 匿名统计上报</div>
+        </div>
+        <p class="muted" style="margin-bottom:0;">t 基准 = 首个请求(<code>2026-07-24T10:24:07.951Z</code>)。删除成功后前端立即以 <code>list_creator_videos</code> 重拉视频列表刷新 UI(带长 <code>mask</code> 指定回传字段、<code>pageSize:31</code>、<code>order:VIDEO_ORDER_DISPLAY_TIME_DESC</code>、排除 Shorts/影视)。</p>
+    </div>
+
+    <div class="callout c-warn" style="margin-bottom:0;">
+        <b>诚实边界(必读):</b>
+        <ul class="tight" style="margin:6px 0 0;">
+            <li><b>无响应体正文可查。</b> 本 recorder 格式(<code>src/core/timeline-recorder.ts</code>)只落 <code>status/timingMs/respHeaders</code>,<b>不记录 respBody</b>;删除是否成功只能凭 <code>200</code> + 返回 1636B JSON 判断,正文内容未留存。</li>
+            <li><b>本时间线是纯删除流,未含 create。</b> 被删的 <code>videoId=ArTd8YSb2Zw</code> 在录制开始前就已存在,本记录里<b>没有</b>对应的 createvideo/upload 调用。故「videoId = createvideo 产出」是<b>接口语义上的对应关系</b>,而非本时间线内的闭环实证。</li>
+            <li><b>令牌均为一次性/时效凭据</b>(<code>authorization</code> / <code>eats</code> / <code>sessionInfo.token</code> / <code>serializedDelegationContext</code>),此处仅示前缀,不可直接复用。</li>
+        </ul>
+    </div>
+</section>
+
 <div class="foot">
     本文档由抓包时间线逆向整理，所有字段值均取自真实记录 · 长令牌为一次性/时效令牌，仅示前缀 · 生成于 2026-07-16
 </div>
