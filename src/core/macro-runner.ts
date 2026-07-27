@@ -266,6 +266,8 @@ export class MacroRunner {
     private readonly cdpSessionIds = new Map<Page, string>();
     /** 已 enable Network 域(record)的 session:去重防重复 enable / 重复挂 handler */
     private readonly networkEnabledSessions = new Set<CDPSession>();
+    /** 已挂记录 session 的 CDP targetId:一个 target 只保留一个 session,防同一 target 被多 Page 对象/多次事件重复记录 */
+    private readonly attachedTargets = new Set<string>();
 
     constructor(
         errorDir: string,
@@ -1356,11 +1358,38 @@ export class MacroRunner {
         if (!ctx) {
             return;
         }
+        let targetId: string | undefined;
         try {
             const cdp = await ctx.newCDPSession(page);
+            // 按 CDP targetId 去重:持久 context 的多 Page 对象 / context.on('page') 多次事件可能都指向**同一底层
+            // target**,若各挂一个 session 会把同一批请求记/落多遍(实测同一 delete 被记 3 遍、落 3 份)。一个 target
+            // 只保留一个记录 session,重复的直接 detach 跳过。拿不到 targetId 时退化为按 Page 幂等(不去重),不致命。
+            try {
+                const info = (await cdp.send('Target.getTargetInfo')) as {
+                    targetInfo?: { targetId?: string };
+                };
+                targetId = info.targetInfo?.targetId;
+            } catch {
+                /* 拿不到 targetId:退化按 Page 幂等 */
+            }
+            if (targetId && this.attachedTargets.has(targetId)) {
+                logInfo(
+                    `回放 CDP 会话:target 已挂记录 session,跳过该 page 的重复 session(去重防同一 target 被记多遍)[${page.url()}]`
+                );
+                try {
+                    await cdp.detach();
+                } catch {
+                    /* 忽略 */
+                }
+                return;
+            }
+            if (targetId) {
+                this.attachedTargets.add(targetId);
+            }
             this.dumpCdpSessions.set(page, cdp);
             const sid = String(this.cdpSessionSeq++);
             this.cdpSessionIds.set(page, sid);
+            logInfo(`回放 CDP 会话已挂:sid=${sid} target=${targetId ?? '?'} [${page.url()}]`);
             // Network 域(record 时间线)**先** enable:确保不漏该页任何请求的 requestWillBeSent(全站覆盖红线);
             // 被动监听、不暂停、含 loadingFailed 记失败。若 Fetch 先 enable 会暂停请求、抢在 Network 之前,
             // record 可能错过该请求的 requestWillBeSent(实测首次冷启动会漏)。
@@ -1378,6 +1407,9 @@ export class MacroRunner {
         } catch (err) {
             this.dumpCdpSessions.delete(page);
             this.cdpSessionIds.delete(page);
+            if (targetId) {
+                this.attachedTargets.delete(targetId);
+            }
             logError(`回放 CDP 会话挂载失败(该页不落盘/不记录,不影响回放):${(err as Error).message}`);
         }
     }
@@ -1713,6 +1745,7 @@ export class MacroRunner {
         this.dumpCdpSessions.clear();
         this.cdpSessionIds.clear();
         this.networkEnabledSessions.clear();
+        this.attachedTargets.clear();
     }
 
     /**
