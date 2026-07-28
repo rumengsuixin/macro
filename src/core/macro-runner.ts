@@ -366,6 +366,58 @@ export class MacroRunner {
             }
         };
 
+        // 活动页焦点管理:把原先双写的 activePage(局部)+ this.activePage(实例)收敛为单一入口,
+        // 并维护存活页栈,支撑「弹窗关闭自动回切」与未来多标签场景。
+        const livePages: Page[] = []; // 存活页栈(创建序,栈顶=最近新建且未关)
+        const POPUP_SWITCH = '检测到新标签页弹窗,已切换为活动页继续回放。';
+        // 统一决定活动页:写 this.activePage(重发器/CDP 跨方法读的单一入口)+ 设该页默认超时 + 可选打日志,
+        // 并回传该页;局部 activePage 由调用点以 `activePage = setActivePage(...)` 直接赋值(保留 TS 控制流 narrowing)。
+        const setActivePage = (p: Page, logMsg?: string): Page => {
+            this.activePage = p;
+            try {
+                p.setDefaultTimeout(this.timeoutMs);
+                p.setDefaultNavigationTimeout(this.timeoutMs);
+            } catch {
+                /* 页面正在关闭等,忽略 */
+            }
+            if (logMsg) {
+                logInfo(logMsg);
+            }
+            return p;
+        };
+        // 给页面挂关闭监听:关闭即移出存活栈 + per-page CDP 轻清理;若关的正是当前焦点,回切到栈顶首个未关页。
+        // 拆机时 finally 先置 this.activePage=null(早于 context.close),故初始页关闭时回切分支天然跳过 —— 单页零副作用。
+        const attachClose = (p: Page): void => {
+            p.on('close', () => {
+                const idx = livePages.indexOf(p);
+                if (idx >= 0) {
+                    livePages.splice(idx, 1);
+                }
+                // 关页的 CDP session 已死,顺手卸载,免热更新对已关页重试 attachDumpCdp 刷日志
+                // (不清 attachedTargets:无 page→targetId 反查表且 targetId 不复用,残留无害,交整批清理)
+                const cdp = this.dumpCdpSessions.get(p);
+                if (cdp) {
+                    void cdp.detach().catch(() => undefined);
+                    this.dumpCdpSessions.delete(p);
+                }
+                this.cdpSessionIds.delete(p);
+                this.dumpPages.delete(p);
+                // 仅当被关的是当前焦点、且非主动停止(cancel 关 context 会连环关页,此时回切/告警是噪声)才回切
+                if (!this.cancelled && this.activePage === p) {
+                    for (let k = livePages.length - 1; k >= 0; k -= 1) {
+                        if (!livePages[k].isClosed()) {
+                            activePage = setActivePage(
+                                livePages[k],
+                                '活动页已关闭,已回切到上一个存活页继续回放。'
+                            );
+                            return;
+                        }
+                    }
+                    logError('活动页已关闭且无其它存活页,后续步骤可能失败。');
+                }
+            });
+        };
+
         try {
             // 默认有头(回放可视);设置 MACRO_HEADLESS=1 可无头运行(便于自动化测试)
             const headless = process.env.MACRO_HEADLESS === '1';
@@ -523,18 +575,17 @@ export class MacroRunner {
             // 跟随「新标签页」弹窗:录制时点击 target=_blank / window.open 会被重定向到同一视图,
             // 回放时同样的点击会在 Playwright 中开新页(popup),这里自动切换为活动页继续回放。
             // 初始页已创建完毕(挂监听前),故此后每次 page 事件都是弹窗。
-            activePage = page;
-            this.activePage = page;
+            livePages.push(page);
+            attachClose(page);
+            activePage = setActivePage(page);
             // per-page CDP session(record 走 Network 域 + saveBodies 走 Fetch 域):给初始页挂一个。
             // **await**:必须在第一个 goto 前完成 enable,否则 record 会漏掉页面早期请求(全站覆盖红线)。
             this.dumpPages.add(page);
             await this.attachDumpCdp(page);
             context.on('page', (popup) => {
-                activePage = popup;
-                this.activePage = popup;
-                popup.setDefaultTimeout(this.timeoutMs);
-                popup.setDefaultNavigationTimeout(this.timeoutMs);
-                logInfo('检测到新标签页弹窗,已切换为活动页继续回放。');
+                livePages.push(popup);
+                attachClose(popup);
+                activePage = setActivePage(popup, POPUP_SWITCH);
                 // 弹窗也各自挂 CDP,保证在新标签页里的上传体也能落盘
                 this.dumpPages.add(popup);
                 void this.attachDumpCdp(popup);
@@ -2483,25 +2534,35 @@ export class MacroRunner {
         waitFn: (p: Page) => Promise<unknown>,
         timeout?: number
     ): Promise<void> {
-        const current = waitFn(page);
+        const current = waitFn(page); // 唯一携带「致命超时 reject」的分支
         if (!context) {
             await current;
             return;
         }
-        const popup = context
+        // 弹窗侧分支「只赢不输」:命中目标才 resolve;DOM 未就绪 / 元素不在该页 / 页已关一律吞掉并永久挂起,
+        // 绝不把 race 拖 reject —— 致命超时语义仍只由 current(当前页)分支承载。
+        const winOnly = (p: Page): Promise<unknown> =>
+            p
+                .waitForLoadState('domcontentloaded')
+                .catch(() => undefined)
+                .then(() => waitFn(p))
+                .catch(() => new Promise<never>(() => undefined));
+        // 先纳入「已存在但晚于本步的其它页」——修复 waitForEvent 只等「下一个」弹窗、会漏掉「已发生」page 事件的竞态;
+        // 再叠加「未来新弹窗」。哪个页先命中目标用哪个;activePage 由 context.on('page') 同步更新,后续步骤自然接续。
+        const existing = context
+            .pages()
+            .filter((p) => p !== page && !p.isClosed())
+            .map(winOnly);
+        const future = context
             .waitForEvent('page', timeout ? { timeout } : undefined)
-            .then(async (p) => {
-                // 新窗口:等 DOM 就绪后在其上执行同样的等待
-                // (activePage 由既有 context.on('page') 监听同步更新,故本步解决后续步骤自然在新页继续)
-                await p.waitForLoadState('domcontentloaded').catch(() => undefined);
-                return waitFn(p);
-            });
+            .then(winOnly)
+            .catch(() => new Promise<never>(() => undefined));
+        const branches = [current, ...existing, future];
         try {
-            await Promise.race([current, popup]);
+            await Promise.race(branches);
         } finally {
             // 抑制未采纳分支的迟到 rejection(超时/页面关闭),避免 unhandledRejection
-            current.catch(() => undefined);
-            popup.catch(() => undefined);
+            branches.forEach((b) => b.catch(() => undefined));
         }
     }
 
