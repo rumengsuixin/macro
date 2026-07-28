@@ -1,11 +1,10 @@
 // 回放端「JS Hook 探针(jsHooks)」端到端自检。
-// 验证:向页面主世界注入 hook 脚本 + exposeBinding 回传管子后,能抓到
-//   ① 网络出口 fetch(发出前的 url/method/body)
-//   ② JSON.stringify(明文对象 → 字符串)
-//   ③ btoa(base64 编码前后)
-//   ④ **平台自定义签名函数**(hookPaths 指定的 window.mySign)的「明文入参 ↔ 密文出参 + 调用栈」
-// 并验证:短值内联进索引 / 超 maxInline 的大 payload 旁落独立文件(完整不截断);
-//        jsHooks 独立于改写总闸(enabled:false 仍抓);jsHooks.enabled:false 时注入但不落盘。
+// 验证向页面主世界注入 hook 脚本 + exposeBinding 回传后,能抓到全部基础集 + 自定义签名函数:
+//   ① fetch(发出前 url/method/body)  ② XMLHttpRequest(open/send)  ③ JSON.stringify(明文对象→串)
+//   ④ btoa(base64 前后)  ⑤ crypto.subtle.digest(异步,明文末参)  ⑥ CryptoJS.HmacSHA256(惰性包裹)
+//   ⑦ 自定义签名函数 window.mySign(hookPaths 惰性包裹)——每类的「明文入参 ↔ 密文出参 + 调用栈」
+// 并验证:短值内联 / 超 maxInline 的大 payload 旁落独立文件(完整不截断);jsHooks 独立于改写总闸
+//        (enabled:false 仍抓);jsHooks.enabled:false 时注入但不落盘;maxEntries 达上限熔断(防爆)。
 //
 // 用法:MACRO_HEADLESS=1 node scripts/verify-js-hook.mjs
 //   本机缺 headless_shell 时:PLAYWRIGHT_BROWSERS_PATH=<repo>/build/ms-playwright MACRO_HEADLESS=1 node ...
@@ -34,18 +33,24 @@ const server = http.createServer((req, res) => {
         const u = new URL(req.url, 'http://x');
         const bigLen = Number(u.searchParams.get('big') || '4');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        // 页面脚本:先定义自定义签名函数 mySign(注入脚本已在 document-start 装 setter,赋值即被惰性包裹),
-        // 再走 JSON.stringify → mySign(内部调 btoa)→ fetch 带 sign。全程触发 4 类 hook。
+        // 页面脚本依次触发 7 类 hook。注入脚本已在 document-start 装好惰性 setter,故 mySign / CryptoJS
+        // 的赋值即被包裹。subtle.digest 异步,与 fetch 一并 Promise.all 完成后再插可见的 #done。
         res.end(`<!doctype html><meta charset="utf-8"><title>js-hook</title><div id="host">初始化…</div>
 <script>
 (function(){
   try {
     window.mySign = function(x){ return btoa(x); };
+    window.CryptoJS = { HmacSHA256: function(msg, key){ return 'HMAC_' + msg; } };
     var plain = JSON.stringify({a:1, b:'hello', big:'B'.repeat(${bigLen})});
     var sig = window.mySign(plain);
-    fetch('/api/echo?sign=' + encodeURIComponent(sig), { method:'POST', body: plain })
-      .then(function(r){ return r.text(); })
-      .then(function(){ var d=document.createElement('div'); d.id='done'; d.textContent='往返完成'; document.body.appendChild(d); })
+    window.CryptoJS.HmacSHA256(plain, 'secret');
+    var x = new XMLHttpRequest();
+    x.open('POST', '/api/echo?via=xhr');
+    x.send('xhrbody-' + plain);
+    Promise.all([
+      crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain)),
+      fetch('/api/echo?sign=' + encodeURIComponent(sig), { method:'POST', body: plain }).then(function(r){ return r.text(); })
+    ]).then(function(){ var d=document.createElement('div'); d.id='done'; d.textContent='往返完成'; document.body.appendChild(d); })
       .catch(function(e){ var f=document.createElement('div'); f.id='failed'; f.textContent=String(e); document.body.appendChild(f); });
   } catch(e){ var f=document.createElement('div'); f.id='failed'; f.textContent=String(e); document.body.appendChild(f); }
 })();
@@ -92,27 +97,47 @@ function loadIndex(dumpsDir) {
     return { idxFiles, entries };
 }
 
-// 跑一种配置:jsEnabled=jsHooks.enabled;bigLen=页面 big 长度;maxInline=内联阈值。
-async function runCase(label, jsEnabled, bigLen, maxInline) {
+// 读一个 hook 字段(内联则直接取;旁落则从文件读),base64 字段解码回原文
+function readField(dumpsDir, entry, kind) {
+    const inlineKey = kind === 'in' ? 'input' : 'output';
+    const encKey = kind === 'in' ? 'inputEnc' : 'outputEnc';
+    const fileKey = kind === 'in' ? 'inputFile' : 'outputFile';
+    if (entry[inlineKey] !== undefined) {
+        return entry[encKey] === 'base64'
+            ? Buffer.from(entry[inlineKey], 'base64').toString('utf-8')
+            : entry[inlineKey];
+    }
+    if (entry[fileKey]) {
+        return fs.readFileSync(path.join(dumpsDir, entry[fileKey])).toString('utf-8');
+    }
+    return undefined;
+}
+
+function cleanup(dumpsDir, timelinesDir) {
+    try {
+        fs.rmSync(dumpsDir, { recursive: true, force: true });
+        fs.rmSync(timelinesDir, { recursive: true, force: true });
+    } catch {
+        /* 忽略 */
+    }
+}
+
+const ALL_APIS = ['fetch', 'xhr', 'json', 'btoa', 'subtle', 'cryptojs'];
+
+// 跑一种配置:jsEnabled=jsHooks.enabled;bigLen=页面 big 长度;maxInline=内联阈值;maxEntries=可选上限。
+async function runCase(label, jsEnabled, bigLen, maxInline, maxEntries) {
     const dumpsDir = fs.mkdtempSync(path.join(os.tmpdir(), `macro-jshook-${label}-`));
     const timelinesDir = fs.mkdtempSync(path.join(os.tmpdir(), `macro-jshook-tl-${label}-`));
     fs.mkdirSync(path.join(root, 'errors'), { recursive: true });
+    const jsHooks = {
+        enabled: jsEnabled,
+        rules: [{ urlPattern: '*', apis: ALL_APIS, hookPaths: ['mySign'], maxInline }],
+    };
+    if (maxEntries !== undefined) {
+        jsHooks.maxEntries = maxEntries;
+    }
     const sessionOptions = {
-        requestRules: {
-            enabled: false, // 改写总闸关:证 jsHooks 随自身 enabled 走、独立于总闸
-            rules: [],
-            jsHooks: {
-                enabled: jsEnabled,
-                rules: [
-                    {
-                        urlPattern: '*',
-                        apis: ['fetch', 'json', 'btoa'],
-                        hookPaths: ['mySign'],
-                        maxInline,
-                    },
-                ],
-            },
-        },
+        requestRules: { enabled: false, rules: [], jsHooks }, // enabled:false 证独立于总闸
     };
     const runner = new MacroRunner(
         path.join(root, 'errors'),
@@ -142,7 +167,7 @@ async function runCase(label, jsEnabled, bigLen, maxInline) {
         failed += 1;
         return;
     }
-    await new Promise((r) => setTimeout(r, 300)); // 给 exposeBinding 回调落盘留余量
+    await new Promise((r) => setTimeout(r, 400)); // 给异步 subtle + exposeBinding 回调落盘留余量
 
     const { idxFiles, entries } = loadIndex(dumpsDir);
     const apis = entries.map((e) => e.api);
@@ -153,26 +178,34 @@ async function runCase(label, jsEnabled, bigLen, maxInline) {
     const expectedSig = b64(expectedPlain);
 
     if (!jsEnabled) {
-        // 停用:注入脚本仍在页面(抓 + 回传),但 Node 侧丢弃 → 不生成索引文件
         assert(idxFiles.length === 0, `[${label}] jsHooks.enabled:false 时不生成索引(注入但不落盘)`);
         cleanup(dumpsDir, timelinesDir);
         return;
     }
 
+    if (maxEntries !== undefined) {
+        // 防爆:一次页面触发 7 类 hook,配 maxEntries 应恰好熔断在上限
+        assert(entries.length === maxEntries, `[${label}] 命中达 maxEntries=${maxEntries} 即熔断(实际 ${entries.length})`);
+        cleanup(dumpsDir, timelinesDir);
+        return;
+    }
+
     assert(idxFiles.length === 1, `[${label}] 恰好生成 1 个索引文件(实际 ${idxFiles.length})`);
-    assert(apis.includes('custom:mySign'), `[${label}] 抓到自定义签名函数 custom:mySign`);
+    // 七类 hook 全覆盖
+    assert(apis.includes('fetch'), `[${label}] 抓到 fetch`);
+    assert(apis.includes('xhr'), `[${label}] 抓到 XMLHttpRequest`);
     assert(apis.includes('json'), `[${label}] 抓到 JSON.stringify`);
     assert(apis.includes('btoa'), `[${label}] 抓到 btoa`);
-    assert(apis.includes('fetch'), `[${label}] 抓到 fetch`);
+    assert(apis.includes('subtle.digest'), `[${label}] 抓到 crypto.subtle.digest`);
+    assert(apis.includes('cryptojs.HmacSHA256'), `[${label}] 抓到 CryptoJS.HmacSHA256`);
+    assert(apis.includes('custom:mySign'), `[${label}] 抓到自定义签名函数 custom:mySign`);
 
+    // 自定义签名函数:明文↔密文↔栈
     const sign = entries.find((e) => e.api === 'custom:mySign');
     if (sign) {
         assert(typeof sign.stack === 'string' && sign.stack.length > 0, `[${label}] custom:mySign 带非空调用栈(可定位函数)`);
-        const gotIn = readField(dumpsDir, sign, 'in');
-        const gotOut = readField(dumpsDir, sign, 'out');
-        assert(gotIn === expectedPlain, `[${label}] mySign 明文入参正确(${plaintextFor(bigLen).length} 字节)`);
-        assert(gotOut === expectedSig, `[${label}] mySign 密文出参正确(= btoa(明文))`);
-        // 内联 / 旁落 二选一,取决于 maxInline
+        assert(readField(dumpsDir, sign, 'in') === expectedPlain, `[${label}] mySign 明文入参正确(${expectedPlain.length} 字节)`);
+        assert(readField(dumpsDir, sign, 'out') === expectedSig, `[${label}] mySign 密文出参正确(= btoa(明文))`);
         const inlined = sign.input !== undefined;
         if (Buffer.byteLength(expectedPlain, 'utf-8') > maxInline) {
             assert(!inlined && !!sign.inputFile, `[${label}] 明文超 maxInline(${maxInline})→ 旁落文件(${sign.inputFile})`);
@@ -181,48 +214,46 @@ async function runCase(label, jsEnabled, bigLen, maxInline) {
         }
     }
 
+    // CryptoJS:明文↔密文
+    const cj = entries.find((e) => e.api === 'cryptojs.HmacSHA256');
+    if (cj) {
+        assert(readField(dumpsDir, cj, 'in') === expectedPlain, `[${label}] CryptoJS 明文入参正确`);
+        assert(readField(dumpsDir, cj, 'out') === 'HMAC_' + expectedPlain, `[${label}] CryptoJS 出参正确`);
+    }
+
+    // XHR:抓到 url+method+body
+    const xhr = entries.find((e) => e.api === 'xhr');
+    if (xhr) {
+        const inp = readField(dumpsDir, xhr, 'in') || '';
+        assert(inp.includes('/api/echo') && inp.includes('POST') && inp.includes('xhrbody-'), `[${label}] XHR 记录含 url/method/body`);
+    }
+
+    // subtle.digest:出参应为二进制(base64)摘要
+    const sd = entries.find((e) => e.api === 'subtle.digest');
+    if (sd) {
+        const hasOut = sd.output !== undefined || !!sd.outputFile;
+        assert(hasOut, `[${label}] subtle.digest 抓到摘要出参`);
+    }
+
+    // fetch:抓到 url(带 sign)+method
     const fx = entries.find((e) => e.api === 'fetch');
     if (fx) {
-        const inp = readField(dumpsDir, fx, 'in') || ''; // maxInline 小时 fetch input 也会旁落文件
+        const inp = readField(dumpsDir, fx, 'in') || '';
         assert(inp.includes('/api/echo') && inp.includes('sign=') && inp.includes('POST'), `[${label}] fetch 记录含 url(带 sign)+ method`);
     }
 
     cleanup(dumpsDir, timelinesDir);
 }
 
-// 读一个 hook 字段(内联则直接取;旁落则从文件读),统一返回字符串(base64 字段解码回原文对比)
-function readField(dumpsDir, entry, kind) {
-    const inlineKey = kind === 'in' ? 'input' : 'output';
-    const encKey = kind === 'in' ? 'inputEnc' : 'outputEnc';
-    const fileKey = kind === 'in' ? 'inputFile' : 'outputFile';
-    if (entry[inlineKey] !== undefined) {
-        return entry[encKey] === 'base64'
-            ? Buffer.from(entry[inlineKey], 'base64').toString('utf-8')
-            : entry[inlineKey];
-    }
-    if (entry[fileKey]) {
-        const buf = fs.readFileSync(path.join(dumpsDir, entry[fileKey]));
-        return buf.toString('utf-8'); // 本测明文/密文均为文本
-    }
-    return undefined;
-}
-
-function cleanup(dumpsDir, timelinesDir) {
-    try {
-        fs.rmSync(dumpsDir, { recursive: true, force: true });
-        fs.rmSync(timelinesDir, { recursive: true, force: true });
-    } catch {
-        /* 忽略 */
-    }
-}
-
 console.log('\n========== 验证结果 ==========');
-// basic:大值短(全内联),验证四类 hook 抓到 + 明文/密文正确 + 栈非空 + 独立于总闸
+// basic:大值短(全内联),验证七类 hook 抓到 + 明文/密文正确 + 栈非空 + 独立于总闸
 await runCase('basic', true, 4, 2048);
 // sidecar:明文超 maxInline=8,验证大 payload 旁落独立文件、内容完整不截断
 await runCase('sidecar', true, 200, 8);
-// disabled:jsHooks.enabled:false,验证注入但不落盘(无索引文件)
+// disabled:jsHooks.enabled:false,验证注入但不落盘
 await runCase('disabled', false, 4, 2048);
+// capped:maxEntries=3,验证达上限熔断(防高频刷爆)
+await runCase('capped', true, 4, 2048, 3);
 
 server.close();
 
@@ -231,7 +262,7 @@ if (failed > 0) {
     process.exit(1);
 }
 console.log(
-    '\n✅ JS Hook 探针端到端通过:主世界注入抓到 fetch/JSON.stringify/btoa/自定义签名函数的明文↔密文+调用栈,' +
-        '短值内联、大 payload 旁落独立文件(完整不截断),独立于改写总闸,停用时注入但不落盘。'
+    '\n✅ JS Hook 探针端到端通过:主世界注入抓到 fetch/XHR/JSON.stringify/btoa/subtle.digest/CryptoJS/自定义签名函数' +
+        '的明文↔密文+调用栈,短值内联、大 payload 旁落(完整不截断),独立于总闸,停用不落盘,maxEntries 达上限熔断。'
 );
 process.exit(0);

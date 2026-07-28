@@ -630,6 +630,9 @@ function normalizeJsHookConfig(raw: unknown): JsHookConfig | undefined {
             cfg.rules = rules;
         }
     }
+    if (typeof r.maxEntries === 'number' && Number.isFinite(r.maxEntries) && r.maxEntries > 0) {
+        cfg.maxEntries = Math.floor(r.maxEntries);
+    }
     return cfg;
 }
 

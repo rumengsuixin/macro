@@ -864,6 +864,7 @@
                 <tbody>
                     <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>true 即注入抓取</td><td><b>与顶层 enabled 无关</b>(像 record);可热更新(注入恒装、此开关控落盘)</td></tr>
                     <tr><td class="field"><code>rules[]</code></td><td class="type">JsHookRule[]</td><td><span class="badge opt">可选</span></td><td>抓取规则(见下表)</td><td>缺省/空 = 默认基础集全抓</td></tr>
+                    <tr><td class="field"><code>maxEntries</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>单次回放命中落盘条数上限(防高频 api 刷爆 <code class="inline">dumps/</code>)</td><td>达上限熔断并日志告警一次(不静默);缺省 20000</td></tr>
                 </tbody>
             </table>
             <div class="note ok"><span class="nt">独立于网络改写</span>即便顶层 <code class="inline">enabled:false</code>(不开任何拦截改写),只要 <code class="inline">jsHooks.enabled:true</code> 就注入抓取——纯观察前端加密场景友好。</div>
@@ -880,7 +881,7 @@
                         <tr><td class="field"><code>maxInline</code></td><td class="type">number</td><td><span class="badge opt">可选</span></td><td>明文/密文内联阈值(字节)</td><td>超则旁落独立文件(完整不截断);缺省 2048</td></tr>
                     </tbody>
                 </table>
-                <div class="note info"><span class="nt">输出:索引 + 旁落文件</span>落 <code class="inline">dumps/</code>:每次命中追加一行 <code class="inline">jshook-index-&lt;毫秒戳&gt;.jsonl</code>,含 <code class="inline">{t, api, url, input?/inputFile?, output?/outputFile?, stack}</code>;短值内联、超 <code class="inline">maxInline</code> 或二进制的 payload 旁落 <code class="inline">jshook-&lt;戳&gt;-&lt;seq&gt;-&lt;in|out&gt;.&lt;txt|bin&gt;</code>。<code class="inline">api</code> 形如 <code class="inline">fetch</code> / <code class="inline">json</code> / <code class="inline">btoa</code> / <code class="inline">subtle.digest</code> / <code class="inline">cryptojs.HmacSHA256</code> / <code class="inline">custom:byted_acrawler.sign</code>。</div>
+                <div class="note info"><span class="nt">输出:索引 + 旁落文件</span>落 <code class="inline">dumps/</code>:每次命中追加一行 <code class="inline">jshook-index-&lt;毫秒戳&gt;.jsonl</code>,含 <code class="inline">{t, api, url, input?/inputFile?, output?/outputFile?, stack}</code>;短值内联、超 <code class="inline">maxInline</code> 或二进制的 payload 旁落 <code class="inline">jshook-&lt;戳&gt;-&lt;seq&gt;-&lt;in|out&gt;.&lt;txt|bin&gt;</code>。<code class="inline">api</code> 形如 <code class="inline">fetch</code> / <code class="inline">json</code> / <code class="inline">btoa</code> / <code class="inline">subtle.digest</code> / <code class="inline">subtle.decrypt</code> / <code class="inline">cryptojs.HmacSHA256</code> / <code class="inline">custom:byted_acrawler.sign</code>(<code class="inline">subtle</code> 覆盖 digest/sign/verify/encrypt/decrypt)。</div>
                 <div class="note limit"><span class="nt">局限</span>「包裹哪些 api/函数」在回放<b>启动时</b>定(注入不可撤销),增删 <code class="inline">apis</code>/<code class="inline">hookPaths</code> 需重启回放(<code class="inline">enabled</code> 本身可热更新);函数在包裹前已被缓存引用则可能漏包。算法的最终还原(反混淆/脱 VMP)不在本工具范围——它只负责抓「明文↔密文配对 + 定位到函数」。</div>
             </div>
         </div>
@@ -945,7 +946,7 @@
         </div>
 
         <footer>
-            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-27(新增 jsHooks:主世界注入 hook 探针,抓 fetch/加密库/自定义签名函数的明文↔密文+调用栈,输出 jshook-index-*.jsonl)
+            拦截器规则配置手册 · 基于 <code class="inline">src/core/macro-types.ts</code> + <code class="inline">src/storage/request-rules-store.ts</code> 生成 · 2026-07-28(新增 jsHooks:主世界注入 hook 探针,抓 fetch/XHR/JSON.stringify/btoa/crypto.subtle[digest·sign·verify·encrypt·decrypt]/CryptoJS/自定义签名函数的明文↔密文+调用栈,maxEntries 防爆,输出 jshook-index-*.jsonl)
         </footer>
     </main>
 </div>

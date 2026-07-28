@@ -819,6 +819,8 @@ export interface JsHookConfig {
     enabled: boolean;
     /** 规则列表(命中任一条的 urlPattern 即落盘;apis/hookPaths 全局并集);缺省/空 = 默认基础集全抓 */
     rules?: JsHookRule[];
+    /** 单次回放命中落盘条数上限(防高频 api 如 JSON.stringify 刷爆 dumps/);达上限熔断并告警一次。缺省 20000 */
+    maxEntries?: number;
 }
 
 /**

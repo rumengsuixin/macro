@@ -185,10 +185,11 @@ export const JS_HOOK_PROBE_FACTORY = `function (cfg) {
             };
         }
 
-        // —— crypto.subtle(异步):digest/sign/encrypt,明文一般是末参 ——
+        // —— crypto.subtle(异步):digest/sign/verify/encrypt/decrypt,数据/明文一般是末参 ——
+        // (decrypt 的 input=密文、output=明文,方向靠 api 名 subtle.decrypt 区分;verify 出参是布尔)
         if (has('subtle') && window.crypto && window.crypto.subtle) {
             var subtle = window.crypto.subtle;
-            ['digest', 'sign', 'encrypt'].forEach(function (m) {
+            ['digest', 'sign', 'verify', 'encrypt', 'decrypt'].forEach(function (m) {
                 if (typeof subtle[m] !== 'function') { return; }
                 var orig = subtle[m];
                 subtle[m] = function () {

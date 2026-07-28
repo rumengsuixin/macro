@@ -291,6 +291,12 @@ export class MacroRunner {
     private jsHookSeq = 0;
     /** 明文/密文内联阈值(字节),超则旁落独立文件(完整不截断);缺省 2048 */
     private jsHookMaxInline = 2048;
+    /** 本次回放命中落盘条数上限(防高频 api 刷爆 dumps/);达上限熔断并告警一次。缺省 20000 */
+    private jsHookMaxEntries = 20000;
+    /** 本次回放已落盘的命中条数(达 maxEntries 即停止记录) */
+    private jsHookCount = 0;
+    /** 上限告警是否已发(每次回放只发一次,不刷屏) */
+    private jsHookLimitWarned = false;
     /** 注入脚本 + exposeBinding 是否已装(恒装一次,不可撤销) */
     private jsHookScriptInstalled = false;
 
@@ -1424,6 +1430,16 @@ export class MacroRunner {
             if (!this.jsHookMatch(payload.url ?? '')) {
                 return;
             }
+            // 防爆上限:高频 api(如 JSON.stringify)刷爆时熔断——达上限即停止记录并告警一次(不静默丢弃)
+            if (this.jsHookCount >= this.jsHookMaxEntries) {
+                if (!this.jsHookLimitWarned) {
+                    this.jsHookLimitWarned = true;
+                    logInfo(
+                        `JS Hook 探针:本次回放命中已达上限 ${this.jsHookMaxEntries} 条,后续命中不再记录(调大 jsHooks.maxEntries 可放宽)。`
+                    );
+                }
+                return;
+            }
             const inp = this.materializeHookField(payload.input, payload.inputEnc, 'in');
             const out = this.materializeHookField(payload.output, payload.outputEnc, 'out');
             this.jsHookIndex.writeEntry({
@@ -1437,6 +1453,7 @@ export class MacroRunner {
                 outputFile: out.file,
                 stack: payload.stack,
             });
+            this.jsHookCount += 1;
         } catch (err) {
             logError(`JS Hook 探针:处理回传出错(不影响回放):${(err as Error).message}`);
         }
@@ -1510,11 +1527,15 @@ export class MacroRunner {
         const want = j?.enabled === true;
         this.jsHookRules = want ? j?.rules ?? [] : [];
         this.jsHookMaxInline = pickMaxInline(this.jsHookRules);
+        this.jsHookMaxEntries =
+            typeof j?.maxEntries === 'number' && j.maxEntries > 0 ? Math.floor(j.maxEntries) : 20000;
         if (this.jsHookWant !== want) {
             if (want) {
                 if (!this.jsHookIndex) {
                     this.jsHookIndex = new JsHookIndex(this.dumpsDir);
                 }
+                this.jsHookCount = 0; // 新一轮回放:命中计数与告警标志归零
+                this.jsHookLimitWarned = false;
                 logInfo(
                     `JS Hook 探针:已启用,共 ${this.jsHookRules.length} 条规则;` +
                         `输出目录:${this.dumpsDir};索引:${this.jsHookIndex.file}`
