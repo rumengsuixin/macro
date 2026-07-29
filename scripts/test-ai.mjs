@@ -1,10 +1,11 @@
-// AI 提取自检脚本:验证 macro 能否对接 openclaw agent 并产出提取规则。
-// 验证整链:连 OpenClaw Gateway → Ed25519 认证 → chat.send(deliver:false) → 收回草稿 → 解析 JSON。
+// AI 提取自检脚本:验证 macro 能否对接 AI 后端并产出提取规则。
+// 走哪个后端由 ai-config.json 的 defaultBackend / profile.backend 决定(runtime 或 openclaw),
+// 结果里会打印实际走的后端 —— 切后端各跑一次即可做对照。
 // 用法:
 //   node scripts/test-ai.mjs                       # 用默认配置档(webextract)
 //   node scripts/test-ai.mjs webextract            # 指定配置档 id
 //   node scripts/test-ai.mjs webextract "采集标题和价格"
-// 前提:OpenClaw Gateway 正在运行;需先 npm run build 生成 dist/core/ai-extract.js。
+// 前提:目标后端可达(runtime worker :8080 或 OpenClaw Gateway);需先 npm run build 生成 dist/core/ai-extract.js。
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -41,14 +42,14 @@ const SAMPLE_HTML = `<!DOCTYPE html><html><head><title>示例书店</title>
 </ol></section></body></html>`;
 
 async function main() {
-    console.log('=== AI 提取自检(对接 openclaw agent)===');
+    console.log('=== AI 提取自检(后端由 ai-config.json 决定)===');
     try {
         const info = ai.listProfiles();
         console.log('配置文件:', ai.getConfigPath());
         console.log('默认配置档:', info.defaultProfile);
         console.log('可用配置档:');
         for (const p of info.profiles) {
-            console.log(`  - ${p.id}  [agent=${p.agentId}]  ${p.label}`);
+            console.log(`  - ${p.id}  [agent=${p.agentId}] [后端=${p.backend}]  ${p.label}`);
         }
     } catch (e) {
         console.error('读取配置失败:', e);
@@ -57,12 +58,14 @@ async function main() {
 
     console.log(`\n调用配置档:${profileId ?? '(默认)'}`);
     console.log(`采集需求:${requirement}`);
-    console.log('连接 OpenClaw 并请求 agent,请稍候……\n');
+    console.log('正在请求 AI 后端,请稍候……\n');
 
     const res = await ai.generateExtract({ requirement, html: SAMPLE_HTML, profileId });
 
     console.log('=== 结果 ===');
-    console.log(`成功:${res.ok} | 配置档:${res.profileLabel} | 耗时:${res.elapsedMs}ms`);
+    console.log(`成功:${res.ok} | 配置档:${res.profileLabel} | 后端:${res.backend}`
+        + `${res.sessionId ? ' | 会话:' + res.sessionId : ''} | 耗时:${res.elapsedMs}ms`);
+    if (res.usage) console.log('token 用量:', res.usage);
     if (res.ok) {
         console.log('生成的提取规则:');
         console.log(JSON.stringify(res.rules, null, 2));

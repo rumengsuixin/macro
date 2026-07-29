@@ -1,30 +1,29 @@
-// AI 提取规则生成:对接 openclaw agent。
-// macro 作为客户端连本机 OpenClaw Gateway(WebSocket + Ed25519,见 openclaw-client.ts),
-// 把「采集需求 + 网页 HTML」发给指定 agent,收回提取规则 JSON。
+// AI 提取规则生成 / 选择器校正:**双后端**,按配置切换。
+//
+//   runtime  —— HTTP 提交 + 轮询 mcp-agent-runtime worker(主线;判定规格在其域包里)
+//   openclaw —— WebSocket + Ed25519 连 OpenClaw Gateway(存量;判定规格在工作区 SOUL.md)
+//
+// 本文件只管「配置 + 任务组装 + 结果解析」,两条后端路径的差异全在 ai-executor.ts 里。
 //
 // 设计要点:
-// - profile 列表式:每个 profile 指定一个 openclaw agent 目标(agentId + sessionKey 前缀)。
-//   可配多个,对接时按 profileId 选用,UI 下拉展示。
-// - 单次请求即用即走:连接 → 认证 → chat.send(deliver:false) → 收草稿 → 关闭。
-import { randomUUID } from 'node:crypto';
+// - profile 列表式:每个 profile 指定一个 agent 目标,可配多个,按 profileId 选用,UI 下拉展示;
+//   每档可单独指定 backend(不填走顶层 defaultBackend),便于灰度与回滚。
+// - 单次请求即用即走:两个后端都不持久连接。
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ExtractConfig } from './macro-types';
-import { OpenclawClient, type OpenclawConnConfig } from './openclaw-client';
+import type { OpenclawConnConfig } from './openclaw-client';
+import type { RuntimeConnConfig } from './runtime-client';
+import {
+    getExecutor,
+    type AiBackend,
+    type AiProfile,
+    type ExecutorConfig,
+    type ExtractFields,
+    type FixFields,
+} from './ai-executor';
 
-/** 单个 AI 配置档(= 一个 openclaw agent 目标) */
-export interface AiProfile {
-    /** 唯一标识,UI/IPC 用它选择 */
-    id: string;
-    /** 显示名称 */
-    label: string;
-    /** openclaw agent id(sessionKey 第二段) */
-    agentId: string;
-    /** sessionKey 前缀;实际 key = `${sessionKeyPrefix}:${uuid}` */
-    sessionKeyPrefix: string;
-    /** 请求超时(毫秒) */
-    timeout?: number;
-}
+export type { AiBackend, AiProfile } from './ai-executor';
 
 /** AI 提取整体配置 */
 export interface AiConfig {
@@ -32,11 +31,15 @@ export interface AiConfig {
     defaultProfile: string;
     /** 配置档列表 */
     profiles: AiProfile[];
+    /** 默认后端;各 profile 可用自己的 backend 覆盖 */
+    defaultBackend: AiBackend;
     /** openclaw 连接覆盖(默认自动读 ~/.openclaw) */
     openclaw?: OpenclawConnConfig;
-    /** 系统提示词(拼进发给 agent 的 message) */
+    /** runtime worker 连接参数 */
+    runtime?: RuntimeConnConfig;
+    /** 系统提示词(**仅 openclaw 路径**拼进 message) */
     systemPrompt: string;
-    /** 提示词模板,支持占位符 {requirement} 与 {html} */
+    /** 提示词模板,支持占位符 {requirement} 与 {html}(**仅 openclaw 路径**) */
     promptTemplate: string;
     /** 是否在发送前清洗 HTML(去 script/style/注释降噪),默认 true */
     cleanHtml?: boolean;
@@ -47,6 +50,8 @@ export interface ProfileSummary {
     id: string;
     label: string;
     agentId: string;
+    /** 本档实际生效的后端(已回落顶层默认) */
+    backend: AiBackend;
 }
 
 /** 生成结果 */
@@ -64,21 +69,18 @@ export interface GenerateResult {
     sessionKey?: string;
     /** 耗时(毫秒) */
     elapsedMs: number;
+    /** 本次实际走的后端(排障用) */
+    backend?: AiBackend;
+    /** runtime 会话 id(可在会话观察台复盘);openclaw 路径为空 */
+    sessionId?: string;
+    /** token 用量(runtime 路径有) */
+    usage?: Record<string, number>;
 }
 
-// ===== 默认配置(首次运行自动写入项目根 ai-config.json) =====
-// 注:详细的提取规则结构(list/single、type 含义)由专用 agent 的 SOUL.md 持有,
-// 这里只负责传入「需求 + HTML」并保留一句「只输出 JSON」的安全兜底,提示词尽量精简。
-// 通用选择器质量准则:与具体框架无关,凡生成规则一律注入,从源头降低「选错选择器」概率。
-// 不专项 hack 某个组件库——下面的框架名只作举例,核心是「避免动态/脆弱选择器、注意克隆 DOM」。
-// 极简指针:完整选择器质量规范在 agent 侧 SOUL.md〈选择器质量准则〉(单一可信源);
-// 客户端仅注入这一行核心红线作兜底,防 agent 侧准则缺失/被改坏时质量失守。
-const SELECTOR_QUALITY_GUIDE =
-    '【选择器质量准则(完整规范见你的〈选择器质量准则〉)】选择器务必稳定可命中:优先用 ' +
-    'data-*/id/aria-label/语义 class/可见文本等稳定锚点,避免框架运行时动态类名、结构性伪类与隐藏的' +
-    '克隆 DOM;actionSelector 须能在每个列表项内点中。严禁把随用户交互/表单校验实时变化的**状态属性**' +
-    '作为选择条件(如 aria-invalid/aria-expanded/aria-selected/aria-checked/aria-pressed/aria-busy/' +
-    'aria-disabled/aria-current 及元素 value)——录制那一刻的状态回放时往往不存在,会命中 0 个导致超时。';
+// ===== 默认配置(首次运行自动写入 <dataRoot>/config/ai-config.json) =====
+// 注:详细的提取规则结构(list/single、type 含义)由 agent 侧持有 ——
+//   runtime 路径在域包 domains/webextract、domains/selector_fix;openclaw 路径在工作区 SOUL.md。
+//   本地只保留一句「只输出 JSON」的安全兜底(openclaw 路径用),提示词尽量精简。
 
 const DEFAULT_SYSTEM_PROMPT =
     '只输出一个 JSON 对象作为网页提取规则,不要任何解释、前言或 Markdown 代码块标记。';
@@ -90,6 +92,10 @@ const DEFAULT_PROMPT_TEMPLATE = [
     '{html}',
 ].join('\n');
 
+/** runtime worker 默认地址。刻意用 IPv4 字面量:某些机器上 localhost 先解析到 ::1,
+ *  而 Docker 端口发布在 IPv4,写 localhost 会连不上。 */
+const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:8080';
+
 const DEFAULT_CONFIG: AiConfig = {
     defaultProfile: 'webextract',
     profiles: [
@@ -99,6 +105,7 @@ const DEFAULT_CONFIG: AiConfig = {
             agentId: 'webextract',
             sessionKeyPrefix: 'agent:webextract:macro:extract',
             timeout: 120000,
+            domain: 'webextract',
         },
         {
             id: 'selector-fix',
@@ -106,13 +113,21 @@ const DEFAULT_CONFIG: AiConfig = {
             agentId: 'selector-fix',
             sessionKeyPrefix: 'agent:selector-fix:macro:selector',
             timeout: 90000,
+            domain: 'selector_fix',
         },
     ],
+    defaultBackend: 'runtime',
     openclaw: {},
+    runtime: { url: DEFAULT_RUNTIME_URL },
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     promptTemplate: DEFAULT_PROMPT_TEMPLATE,
     cleanHtml: true,
 };
+
+/** 本档实际生效的后端:档内 backend 优先,回落顶层 defaultBackend,再回落 runtime */
+export function resolveBackend(cfg: AiConfig, profile: AiProfile): AiBackend {
+    return profile.backend ?? cfg.defaultBackend ?? 'runtime';
+}
 
 // ===== 配置读写 =====
 /** ai-config.json 的绝对路径(统一收在 <dataRoot>/config/ 下,与其它运行时配置对齐) */
@@ -133,13 +148,17 @@ export function loadAiConfig(): AiConfig {
     }
     try {
         const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<AiConfig>;
+        // 老配置(迁 runtime 之前生成的)没有 defaultBackend / runtime 段 —— 在这里回填默认值,
+        // 于是升级后默认走 runtime。连不上时 runtime-client 会给出可操作的中文提示。
         return {
             defaultProfile: raw.defaultProfile || DEFAULT_CONFIG.defaultProfile,
             profiles:
                 Array.isArray(raw.profiles) && raw.profiles.length > 0
                     ? (raw.profiles as AiProfile[])
                     : DEFAULT_CONFIG.profiles,
+            defaultBackend: raw.defaultBackend ?? DEFAULT_CONFIG.defaultBackend,
             openclaw: raw.openclaw ?? DEFAULT_CONFIG.openclaw,
+            runtime: raw.runtime ?? DEFAULT_CONFIG.runtime,
             systemPrompt: raw.systemPrompt ?? DEFAULT_CONFIG.systemPrompt,
             promptTemplate: raw.promptTemplate ?? DEFAULT_CONFIG.promptTemplate,
             cleanHtml: raw.cleanHtml !== false,
@@ -153,7 +172,12 @@ export function loadAiConfig(): AiConfig {
 export function listProfiles(): { profiles: ProfileSummary[]; defaultProfile: string } {
     const cfg = loadAiConfig();
     return {
-        profiles: cfg.profiles.map((p) => ({ id: p.id, label: p.label, agentId: p.agentId })),
+        profiles: cfg.profiles.map((p) => ({
+            id: p.id,
+            label: p.label,
+            agentId: p.agentId,
+            backend: resolveBackend(cfg, p),
+        })),
         defaultProfile: cfg.defaultProfile,
     };
 }
@@ -219,6 +243,15 @@ export function validateAiConfig(raw: unknown): ValidateResult {
         if (p.timeout !== undefined && (typeof p.timeout !== 'number' || !(p.timeout > 0))) {
             return { ok: false, error: `${at}.timeout 必须是正数(毫秒)。` };
         }
+        // 双后端字段(均可选)
+        if (p.backend !== undefined && p.backend !== 'openclaw' && p.backend !== 'runtime') {
+            return { ok: false, error: `${at}.backend 只能是 "openclaw" 或 "runtime"。` };
+        }
+        for (const key of ['domain', 'promptOverride'] as const) {
+            if (p[key] !== undefined && !isNonEmptyString(p[key])) {
+                return { ok: false, error: `${at}.${key} 必须是非空字符串。` };
+            }
+        }
         const id = (p.id as string).trim();
         if (ids.has(id)) {
             return { ok: false, error: `profiles 中存在重复的 id:「${id}」。` };
@@ -230,6 +263,11 @@ export function validateAiConfig(raw: unknown): ValidateResult {
             agentId: (p.agentId as string).trim(),
             sessionKeyPrefix: (p.sessionKeyPrefix as string).trim(),
             ...(p.timeout !== undefined ? { timeout: p.timeout as number } : {}),
+            ...(p.backend !== undefined ? { backend: p.backend as AiBackend } : {}),
+            ...(p.domain !== undefined ? { domain: (p.domain as string).trim() } : {}),
+            ...(p.promptOverride !== undefined
+                ? { promptOverride: (p.promptOverride as string).trim() }
+                : {}),
         });
     }
 
@@ -276,6 +314,43 @@ export function validateAiConfig(raw: unknown): ValidateResult {
         openclaw = oc as OpenclawConnConfig;
     }
 
+    // defaultBackend:可选;若存在须是两个枚举值之一
+    if (
+        raw.defaultBackend !== undefined &&
+        raw.defaultBackend !== 'openclaw' &&
+        raw.defaultBackend !== 'runtime'
+    ) {
+        return { ok: false, error: 'defaultBackend 只能是 "openclaw" 或 "runtime"。' };
+    }
+
+    // runtime:可选;若存在须为对象,url 为非空字符串,两个时长为正数,headers 为字符串字典
+    let runtime: RuntimeConnConfig | undefined;
+    if (raw.runtime !== undefined) {
+        if (!isPlainObject(raw.runtime)) {
+            return { ok: false, error: 'runtime 必须是对象。' };
+        }
+        const rt = raw.runtime;
+        if (rt.url !== undefined && !isNonEmptyString(rt.url)) {
+            return { ok: false, error: 'runtime.url 必须是非空字符串(如 http://127.0.0.1:8080)。' };
+        }
+        for (const key of ['pollMs', 'reqTimeoutMs'] as const) {
+            if (rt[key] !== undefined && (typeof rt[key] !== 'number' || !((rt[key] as number) > 0))) {
+                return { ok: false, error: `runtime.${key} 必须是正数(毫秒)。` };
+            }
+        }
+        if (rt.headers !== undefined) {
+            if (!isPlainObject(rt.headers)) {
+                return { ok: false, error: 'runtime.headers 必须是对象。' };
+            }
+            for (const [k, v] of Object.entries(rt.headers)) {
+                if (typeof v !== 'string') {
+                    return { ok: false, error: `runtime.headers.${k} 必须是字符串。` };
+                }
+            }
+        }
+        runtime = rt as RuntimeConnConfig;
+    }
+
     // cleanHtml:可选;若存在须为布尔
     if (raw.cleanHtml !== undefined && typeof raw.cleanHtml !== 'boolean') {
         return { ok: false, error: 'cleanHtml 必须是布尔值。' };
@@ -284,7 +359,9 @@ export function validateAiConfig(raw: unknown): ValidateResult {
     const config: AiConfig = {
         defaultProfile,
         profiles,
+        defaultBackend: (raw.defaultBackend as AiBackend) ?? DEFAULT_CONFIG.defaultBackend,
         openclaw: openclaw ?? {},
+        runtime: runtime ?? DEFAULT_CONFIG.runtime,
         systemPrompt: (raw.systemPrompt as string),
         promptTemplate: (raw.promptTemplate as string),
         cleanHtml: raw.cleanHtml !== false,
@@ -337,61 +414,8 @@ export function cleanHtml(html: string): string {
         .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '');
 }
 
-// ===== 提示词拼装 =====
-function fillTemplate(template: string, requirement: string, html: string): string {
-    const req = requirement.trim() || '(未填写,请根据页面主要内容自动判断要采集的字段)';
-    return template.split('{requirement}').join(req).split('{html}').join(html);
-}
-
-/**
- * 按目标 mode 动态构造一段「模式前提」,拼进发给 agent 的 message。
- * 不传 mode 时返回空串(旧路径行为不变);list-detail 时完整内嵌作为基础的 list 规则(不截断)。
- */
-function buildModeHint(
-    mode?: 'single' | 'list' | 'list-detail' | 'list-action',
-    baseRules?: ExtractConfig
-): string {
-    if (mode === 'list-action') {
-        return [
-            '【目标模式前提】请输出 mode="list-action" 的「列表逐项动作」规则:',
-            '结构为 { "mode": "list-action", "listSelector": "...", "actionSelector": ... }。',
-            'listSelector 是页面上重复出现的列表项容器选择器;',
-            'actionSelector 是每项要依次执行的点击动作,可为:',
-            '  · 单个字符串(相对列表项查找的按钮选择器,如 "button.download");',
-            '  · 或字符串/对象数组表示多个动作依次点击,如',
-            '    ["a.expand", "button.download"] 或 [{"selector":"button.dl","scope":"item"},{"selector":"#global-confirm","scope":"page"}]。',
-            '每个动作可带 scope:"item"(缺省,相对列表项查找)或 "page"(全局页面查找,用于按钮挂在页面别处)。',
-            '通常一个下载按钮用单字符串即可;仅当每项需要多步点击时才用数组。',
-            '只输出 listSelector 与 actionSelector,不要 fields、不要详情结构、不要其它字段。',
-            '适用场景:列表每一项都有按钮需要逐项点击(如每点一次触发一次文件下载)。',
-        ].join('\n');
-    }
-    if (mode === 'single') {
-        return [
-            '【目标模式前提】请输出 mode="single" 的整页提取规则:',
-            '结构为 { "mode": "single", "fields": [...] },对整页只取一组字段,不要列表或详情结构。',
-        ].join('\n');
-    }
-    if (mode === 'list') {
-        return [
-            '【目标模式前提】请输出 mode="list" 的列表提取规则:',
-            '结构为 { "mode": "list", "listSelector": "...", "fields": [...] }。',
-            '只采集列表页本身的重复项字段,不要包含任何详情页字段。',
-        ].join('\n');
-    }
-    if (mode === 'list-detail') {
-        const base = baseRules ? JSON.stringify(baseRules, null, 4) : '(未提供)';
-        return [
-            '【目标模式前提】请输出 mode="list-detail" 的「列表+详情」提取规则:',
-            '结构为 { "mode": "list-detail", "listSelector": "...", "fields": [...], "detailFields": [...] }。',
-            '以下是已有的 list 规则,请以它为基础,保留其 listSelector 与 fields 完全不变,',
-            '只补充 detailFields(进入详情页后要抓取的字段,字段名勿与 fields 重名)。',
-            '现有 list 规则:',
-            base,
-        ].join('\n');
-    }
-    return '';
-}
+// 注:提示词拼装(fillTemplate / buildModeHint / 选择器质量准则)已下沉到 ai-executor.ts。
+//     那是**后端相关**的事:openclaw 路径要拼整段 message,runtime 路径只发结构化 inputs。
 
 /** 从模型回复中剥出 JSON(处理 ```json 围栏与前后噪声) */
 export function extractJson(text: string): unknown {
@@ -435,7 +459,17 @@ export interface GenerateInput {
     sessionKey?: string;
 }
 
-/** 调用 openclaw agent 生成提取规则 */
+/** 从 AiConfig 取执行器需要的配置切片 */
+function toExecutorConfig(cfg: AiConfig): ExecutorConfig {
+    return {
+        openclaw: cfg.openclaw,
+        runtime: cfg.runtime,
+        systemPrompt: cfg.systemPrompt,
+        promptTemplate: cfg.promptTemplate,
+    };
+}
+
+/** 调用 AI agent 生成提取规则(后端由配置决定) */
 export async function generateExtract(input: GenerateInput): Promise<GenerateResult> {
     const start = Date.now();
     const cfg = loadAiConfig();
@@ -450,41 +484,39 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
         };
     }
 
-    const html = cfg.cleanHtml === false ? input.html : cleanHtml(input.html);
-    const body = fillTemplate(cfg.promptTemplate, input.requirement, html);
-    const modeHint = buildModeHint(input.mode, input.baseRules);
-    // 选择器质量准则无条件注入(不依赖用户既有 ai-config.json,老装机也即时生效)。
-    // 现为极简指针:完整规范在 agent 侧 SOUL.md,客户端仅注入核心红线作兜底,避免与 SOUL.md 全文重复。
-    // feedback 段放最后:重生成时把「上一轮哪些选择器 0 命中」直接喂回,要求据此修正。
-    const feedbackBlock = input.feedback
-        ? '【上一轮选择器实测反馈】以下选择器在当前页未命中,请据此修正后重新输出完整规则:\n' +
-          input.feedback
-        : '';
-    const message =
-        (cfg.systemPrompt ? cfg.systemPrompt + '\n\n' : '') +
-        SELECTOR_QUALITY_GUIDE + '\n\n' +
-        (modeHint ? modeHint + '\n\n' : '') +
-        body +
-        (feedbackBlock ? '\n\n' + feedbackBlock : '');
-    // 多轮修复复用同一会话以保留上下文;首轮不传则新建一次性会话
-    const sessionKey = input.sessionKey ?? `${profile.sessionKeyPrefix}:${randomUUID()}`;
-    const timeout = profile.timeout ?? 120000;
+    const backend = resolveBackend(cfg, profile);
+    const fields: ExtractFields = {
+        requirement: input.requirement,
+        html: cfg.cleanHtml === false ? input.html : cleanHtml(input.html),
+        mode: input.mode,
+        baseRules: input.baseRules,
+        feedback: input.feedback,
+    };
 
-    let client: OpenclawClient | null = null;
     try {
-        client = new OpenclawClient(cfg.openclaw ?? {});
-        await client.connect();
-        const reply = await client.requestDraft(sessionKey, message, timeout);
-        const rules = extractJson(reply);
+        const reply = await getExecutor(backend).request(
+            {
+                kind: 'extract',
+                profile,
+                fields,
+                sessionKey: input.sessionKey,
+                timeoutMs: profile.timeout ?? 120000,
+            },
+            toExecutorConfig(cfg)
+        );
+        const rules = extractJson(reply.text);
         if (!rules || typeof rules !== 'object') {
             return {
                 ok: false,
                 profileId: profile.id,
                 profileLabel: profile.label,
-                raw: reply,
+                raw: reply.text,
                 error: '模型未返回可解析的 JSON 规则',
-                sessionKey,
+                sessionKey: reply.sessionKey,
                 elapsedMs: Date.now() - start,
+                backend,
+                sessionId: reply.sessionId,
+                usage: reply.usage,
             };
         }
         return {
@@ -492,9 +524,12 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
             profileId: profile.id,
             profileLabel: profile.label,
             rules: rules as ExtractConfig,
-            raw: reply,
-            sessionKey,
+            raw: reply.text,
+            sessionKey: reply.sessionKey,
             elapsedMs: Date.now() - start,
+            backend,
+            sessionId: reply.sessionId,
+            usage: reply.usage,
         };
     } catch (err) {
         return {
@@ -503,15 +538,14 @@ export async function generateExtract(input: GenerateInput): Promise<GenerateRes
             profileLabel: profile.label,
             error: err instanceof Error ? err.message : String(err),
             elapsedMs: Date.now() - start,
+            backend,
         };
-    } finally {
-        client?.close();
     }
 }
 
-// ===== 选择器校正(对接 selector-fix agent)=====
-// 与 generateExtract 同链路(连接→认证→chat.send(deliver:false)→收草稿→关闭),
-// 但目标不同:给某个已录制步骤的脆弱选择器重挑一个更稳定、更通用的选择器。
+// ===== 选择器校正 =====
+// 与 generateExtract 同链路(同一套双后端执行器),但目标不同:
+// 给某个已录制步骤的脆弱选择器重挑一个更稳定、更通用的选择器。
 // 由 renderer 在真实录制 webview 里定位元素、取上下文,发到这里;agent 只输出 {"selector":"..."}。
 
 /** 选择器校正入参 */
@@ -545,6 +579,12 @@ export interface FixSelectorResult {
     /** 本次会话 key(供多轮修复复用) */
     sessionKey?: string;
     elapsedMs: number;
+    /** 本次实际走的后端(排障用) */
+    backend?: AiBackend;
+    /** runtime 会话 id(可在会话观察台复盘);openclaw 路径为空 */
+    sessionId?: string;
+    /** token 用量(runtime 路径有) */
+    usage?: Record<string, number>;
 }
 
 /** selector-fix 找不到时的默认档回退顺序 */
@@ -572,43 +612,27 @@ export async function fixSelector(input: FixSelectorInput): Promise<FixSelectorR
         };
     }
 
-    // 组装 message:系统兜底 + 选择器质量红线 + 任务说明 + 元素上下文 + 可选反馈。
-    // 完整〈选择器质量准则〉在 selector-fix agent 侧 SOUL.md(单一可信源),此处只注入核心红线兜底。
-    const taskHint = [
-        '【任务:选择器校正】下面给你一个网页元素的 DOM 上下文,以及它当前那个不稳定的选择器。',
-        '请为【这个元素】重挑一个唯一命中它、且尽量稳定通用的选择器。',
-        '只输出一个 JSON 对象:{ "selector": "..." },不要任何解释、前言或 Markdown 代码块标记。',
-        'selector 可以是 CSS,若用文本/属性锚定更稳可用 xpath=// 前缀。',
-    ].join('\n');
-    const contextBlock = [
-        '当前选择器:' + input.current,
-        input.reason ? '判定原因:' + input.reason : '',
-        '目标元素 outerHTML:',
-        input.elementHtml,
-        input.ancestors ? '祖先链(从近到远):\n' + input.ancestors : '',
-    ]
-        .filter(Boolean)
-        .join('\n\n');
-    const feedbackBlock = input.feedback
-        ? '【上一轮实测反馈】你上次给的选择器未通过,请据此修正后重新只输出 {"selector":"..."}:\n' +
-          input.feedback
-        : '';
-    const message =
-        (cfg.systemPrompt ? cfg.systemPrompt + '\n\n' : '') +
-        SELECTOR_QUALITY_GUIDE + '\n\n' +
-        taskHint + '\n\n' +
-        contextBlock +
-        (feedbackBlock ? '\n\n' + feedbackBlock : '');
+    const backend = resolveBackend(cfg, profile);
+    const fields: FixFields = {
+        current: input.current,
+        elementHtml: input.elementHtml,
+        reason: input.reason,
+        ancestors: input.ancestors,
+        feedback: input.feedback,
+    };
 
-    const sessionKey = input.sessionKey ?? `${profile.sessionKeyPrefix}:${randomUUID()}`;
-    const timeout = profile.timeout ?? 90000;
-
-    let client: OpenclawClient | null = null;
     try {
-        client = new OpenclawClient(cfg.openclaw ?? {});
-        await client.connect();
-        const reply = await client.requestDraft(sessionKey, message, timeout);
-        const parsed = extractJson(reply) as { selector?: unknown } | null;
+        const reply = await getExecutor(backend).request(
+            {
+                kind: 'fix-selector',
+                profile,
+                fields,
+                sessionKey: input.sessionKey,
+                timeoutMs: profile.timeout ?? 90000,
+            },
+            toExecutorConfig(cfg)
+        );
+        const parsed = extractJson(reply.text) as { selector?: unknown } | null;
         const selector =
             parsed && typeof parsed.selector === 'string' ? parsed.selector.trim() : '';
         if (!selector) {
@@ -616,10 +640,13 @@ export async function fixSelector(input: FixSelectorInput): Promise<FixSelectorR
                 ok: false,
                 profileId: profile.id,
                 profileLabel: profile.label,
-                raw: reply,
+                raw: reply.text,
                 error: '模型未返回可解析的 { "selector": "..." }',
-                sessionKey,
+                sessionKey: reply.sessionKey,
                 elapsedMs: Date.now() - start,
+                backend,
+                sessionId: reply.sessionId,
+                usage: reply.usage,
             };
         }
         return {
@@ -627,9 +654,12 @@ export async function fixSelector(input: FixSelectorInput): Promise<FixSelectorR
             profileId: profile.id,
             profileLabel: profile.label,
             selector,
-            raw: reply,
-            sessionKey,
+            raw: reply.text,
+            sessionKey: reply.sessionKey,
             elapsedMs: Date.now() - start,
+            backend,
+            sessionId: reply.sessionId,
+            usage: reply.usage,
         };
     } catch (err) {
         return {
@@ -637,10 +667,9 @@ export async function fixSelector(input: FixSelectorInput): Promise<FixSelectorR
             profileId: profile.id,
             profileLabel: profile.label,
             error: err instanceof Error ? err.message : String(err),
-            sessionKey,
+            sessionKey: input.sessionKey,
             elapsedMs: Date.now() - start,
+            backend,
         };
-    } finally {
-        client?.close();
     }
 }

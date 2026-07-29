@@ -836,10 +836,14 @@ function registerIpc(): void {
         const reqText = (input?.requirement || '').trim() || '(未填写需求)';
         logInfo(`AI 提取:配置档=${input?.profileId ?? '默认'},目标模式=${input?.mode ?? '未指定'},需求=「${reqText}」,正在请求……`);
         const result = await generateExtract(input);
+        // 后端名 + runtime 会话 id 一并打出:一眼看出走的哪条路、去哪查会话轨迹
+        const trace = `${result.backend ?? '?'}${result.sessionId ? `,会话 ${result.sessionId}` : ''}`;
         if (result.ok) {
-            logInfo(`AI 提取成功(${result.profileLabel},耗时 ${result.elapsedMs}ms),已生成规则。`);
+            logInfo(`AI 提取成功(${result.profileLabel},后端 ${trace},耗时 ${result.elapsedMs}ms),已生成规则。`);
         } else {
-            logError(`AI 提取失败(${result.profileLabel || input?.profileId || '未知'}):${result.error}`);
+            logError(
+                `AI 提取失败(${result.profileLabel || input?.profileId || '未知'},后端 ${trace}):${result.error}`
+            );
         }
         return result;
     });
@@ -848,10 +852,15 @@ function registerIpc(): void {
     ipcMain.handle('ai-fix-selector', async (_e, input: FixSelectorInput) => {
         logInfo(`AI 校正选择器:配置档=${input?.profileId ?? 'selector-fix'},当前=「${input?.current ?? ''}」,正在请求……`);
         const result = await fixSelector(input);
+        const trace = `${result.backend ?? '?'}${result.sessionId ? `,会话 ${result.sessionId}` : ''}`;
         if (result.ok) {
-            logInfo(`AI 校正选择器成功(${result.profileLabel},耗时 ${result.elapsedMs}ms):${result.selector}`);
+            logInfo(
+                `AI 校正选择器成功(${result.profileLabel},后端 ${trace},耗时 ${result.elapsedMs}ms):${result.selector}`
+            );
         } else {
-            logError(`AI 校正选择器失败(${result.profileLabel || input?.profileId || 'selector-fix'}):${result.error}`);
+            logError(
+                `AI 校正选择器失败(${result.profileLabel || input?.profileId || 'selector-fix'},后端 ${trace}):${result.error}`
+            );
         }
         return result;
     });

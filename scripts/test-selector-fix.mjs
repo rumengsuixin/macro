@@ -55,7 +55,7 @@ async function main() {
 
     console.log(`\n调用配置档:${profileId}`);
     console.log('当前(脆弱)选择器:', current);
-    console.log('连接 OpenClaw 并请求 agent,请稍候……\n');
+    console.log('正在请求 AI 后端,请稍候……\n');
 
     const res = await ai.fixSelector({
         profileId,
@@ -66,7 +66,9 @@ async function main() {
     });
 
     console.log('=== 结果 ===');
-    console.log(`成功:${res.ok} | 配置档:${res.profileLabel} | 耗时:${res.elapsedMs}ms`);
+    console.log(`成功:${res.ok} | 配置档:${res.profileLabel} | 后端:${res.backend}`
+        + `${res.sessionId ? ' | 会话:' + res.sessionId : ''} | 耗时:${res.elapsedMs}ms`);
+    if (res.usage) console.log('token 用量:', res.usage);
     if (!res.ok || !res.selector) {
         console.log('错误:', res.error);
         if (res.raw) {
@@ -90,7 +92,10 @@ async function main() {
     }
 
     if (failed > 0) {
-        console.error(`\n自检未通过(${failed} 项),请检查 selector-fix agent 的 SOUL.md 选择器质量准则。`);
+        console.error(
+            `\n自检未通过(${failed} 项)。规格位置:runtime 后端在 domains/selector_fix/ 与 ` +
+            '_shared/selector-quality.md,openclaw 后端在工作区 SOUL.md〈选择器质量准则〉。'
+        );
         process.exit(3);
     }
     console.log('\n自检通过:selector-fix 产出的选择器非空且不含已知垃圾特征(随机 id / 原子类 / nth-of-type)。');
