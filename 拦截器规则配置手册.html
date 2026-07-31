@@ -390,15 +390,16 @@
         <div class="nav-group">改写 / 拦截支路(仅回放端)</div>
         <a href="#rules"><span class="idx">1</span>rules 请求体改写</a>
         <a href="#resends"><span class="idx">2</span>resends 重发</a>
-        <a href="#responseRules"><span class="idx">3</span>responseRules 响应头改写</a>
-        <a href="#requestHeaderRules"><span class="idx">4</span>requestHeaderRules 请求头改写</a>
-        <a href="#blocks"><span class="idx">5</span>blocks 硬阻断 / 挂起</a>
-        <a href="#dumps"><span class="idx">6</span>dumps 请求体落盘</a>
-        <a href="#bodyReplaces"><span class="idx">7</span>bodyReplaces 请求体替换</a>
+        <a href="#captures"><span class="idx">3</span>captures 变量捕获</a>
+        <a href="#responseRules"><span class="idx">4</span>responseRules 响应头改写</a>
+        <a href="#requestHeaderRules"><span class="idx">5</span>requestHeaderRules 请求头改写</a>
+        <a href="#blocks"><span class="idx">6</span>blocks 硬阻断 / 挂起</a>
+        <a href="#dumps"><span class="idx">7</span>dumps 请求体落盘</a>
+        <a href="#bodyReplaces"><span class="idx">8</span>bodyReplaces 请求体替换</a>
 
         <div class="nav-group">记录支路(两端)</div>
-        <a href="#record"><span class="idx">8</span>record 只记录不修改</a>
-        <a href="#jsHooks"><span class="idx">9</span>jsHooks JS Hook 探针</a>
+        <a href="#record"><span class="idx">9</span>record 只记录不修改</a>
+        <a href="#jsHooks"><span class="idx">10</span>jsHooks JS Hook 探针</a>
 
         <div class="nav-group">附录</div>
         <a href="#full-example"><span class="idx">§</span>完整示例</a>
@@ -414,13 +415,14 @@
 
         <!-- ============ 总览 ============ -->
         <h2 id="overview"><span class="num">§</span>顶层结构总览</h2>
-        <p class="section-hint">配置根对象:8 个支路键 + 顶层 <code class="inline">enabled</code> 总开关 + <code class="inline">sections</code> 支路级分闸 + <code class="inline">maxResendHops</code>(响应触发连环的跳数上限)。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 统管,并可再经 <code class="inline">sections</code> 逐支路启停。</p>
+        <p class="section-hint">配置根对象:9 个支路键 + 顶层 <code class="inline">enabled</code> 总开关 + <code class="inline">sections</code> 支路级分闸 + <code class="inline">maxResendHops</code>(响应触发连环的跳数上限)。除 <code class="inline">record</code> 外,所有支路都受顶层 <code class="inline">enabled</code> 统管,并可再经 <code class="inline">sections</code> 逐支路启停。</p>
 
         <div class="overview-grid">
             <a class="ov-item" href="#concepts"><div class="k">enabled</div><div class="d">总开关,管所有改写/拦截支路(不含 record)</div></a>
             <a class="ov-item" href="#concepts"><div class="k">sections</div><div class="d">支路级分闸:逐支路启停(缺省启用)</div></a>
             <a class="ov-item" href="#rules"><div class="k">rules[]</div><div class="d">改写请求 body 顶层字段</div></a>
             <a class="ov-item" href="#resends"><div class="k">resends[]</div><div class="d">命中后延时改参重发一个新请求</div></a>
+            <a class="ov-item" href="#captures"><div class="k">captures[]</div><div class="d">被动抓响应变量入池,供重发注入</div></a>
             <a class="ov-item" href="#responseRules"><div class="k">responseRules[]</div><div class="d">按条件改写响应头</div></a>
             <a class="ov-item" href="#requestHeaderRules"><div class="k">requestHeaderRules[]</div><div class="d">按条件改写原始请求的请求头</div></a>
             <a class="ov-item" href="#blocks"><div class="k">blocks[]</div><div class="d">真拦截:硬阻断 / 挂起等人工放行</div></a>
@@ -440,10 +442,11 @@
             <table>
                 <thead><tr><th>键</th><th>类型</th><th>必填</th><th>作用</th><th>缺省 / 空</th></tr></thead>
                 <tbody>
-                    <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>总开关:false 时改写/重发/响应头/硬阻断/落盘/替换 六支路全部不生效</td><td>缺失视为 <code class="inline">false</code></td></tr>
-                    <tr><td class="field"><code>sections</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>支路级分闸</b>:键=支路名(rules/resends/responseRules/requestHeaderRules/blocks/dumps/bodyReplaces)→ 布尔。与 <code class="inline">enabled</code> 是 <b>AND</b>:某支路生效需 enabled 真 且 sections[支路]!==false 且 有规则。用于只关某一支路(如 <code class="inline">resends:false</code>)而保留其规则数组、不影响其它支路。<code class="inline">record</code> 不受此管</td><td>缺该键 / 缺某支路键 = 该支路<b>启用</b>(向后兼容)</td></tr>
+                    <tr><td class="field"><code>enabled</code></td><td class="type">boolean</td><td><span class="badge req">必填</span></td><td>总开关:false 时改写/重发/变量捕获/响应头/硬阻断/落盘/替换 等支路全部不生效</td><td>缺失视为 <code class="inline">false</code></td></tr>
+                    <tr><td class="field"><code>sections</code></td><td class="type">object</td><td><span class="badge opt">可选</span></td><td><b>支路级分闸</b>:键=支路名(rules/resends/captures/responseRules/requestHeaderRules/blocks/dumps/bodyReplaces)→ 布尔。与 <code class="inline">enabled</code> 是 <b>AND</b>:某支路生效需 enabled 真 且 sections[支路]!==false 且 有规则。用于只关某一支路(如 <code class="inline">resends:false</code>)而保留其规则数组、不影响其它支路。<code class="inline">record</code> 不受此管</td><td>缺该键 / 缺某支路键 = 该支路<b>启用</b>(向后兼容)</td></tr>
                     <tr><td class="field"><code>rules</code></td><td class="type">RequestRule[]</td><td><span class="badge opt">可选</span></td><td>请求体改写规则列表</td><td><code class="inline">[]</code></td></tr>
                     <tr><td class="field"><code>resends</code></td><td class="type">ResendRule[]</td><td><span class="badge opt">可选</span></td><td>重发规则列表</td><td>无</td></tr>
+                    <tr><td class="field"><code>captures</code></td><td class="type">CaptureRule[]</td><td><span class="badge opt">可选</span></td><td>被动变量捕获规则列表(命中响应即提取变量入变量池,供 resends 的 <code class="inline">{{占位符}}</code> 注入;不重发不改响应)</td><td>无</td></tr>
                     <tr><td class="field"><code>responseRules</code></td><td class="type">ResponseHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>响应条件改写规则列表(头 / 状态码 / 响应体 / mock)</td><td>无</td></tr>
                     <tr><td class="field"><code>requestHeaderRules</code></td><td class="type">RequestHeaderRule[]</td><td><span class="badge opt">可选</span></td><td>请求头改写规则列表</td><td>无</td></tr>
                     <tr><td class="field"><code>blocks</code></td><td class="type">BlockRule[]</td><td><span class="badge opt">可选</span></td><td>真拦截规则列表(mode:abort 硬阻断 / hold 挂起放行)</td><td>无</td></tr>
@@ -489,7 +492,7 @@
             <div class="note warn"><span class="nt">数组值写法</span>数组值<b>直接写真 JSON 数组</b> <code class="inline">["x"]</code>,<b>不要</b>写成字符串 <code class="inline">"['x']"</code>(带引号 / 单引号非合法 JSON)。这是最常见的配置错误。</div>
 
             <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">④ 为什么支路是分开的数组</h3>
-            <p class="section-hint">匹配引擎「首个命中即返回」。若把改写 / 重发 / 阻断混进同一个数组,会互抢首命中。因此 <code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code> <b>各自独立数组</b>,互不干扰,同一个 URL 可同时命中多个支路。</p>
+            <p class="section-hint">匹配引擎「首个命中即返回」。若把改写 / 重发 / 阻断混进同一个数组,会互抢首命中。因此 <code class="inline">rules</code> / <code class="inline">resends</code> / <code class="inline">captures</code> / <code class="inline">responseRules</code> / <code class="inline">blocks</code> / <code class="inline">dumps</code> / <code class="inline">bodyReplaces</code> <b>各自独立数组</b>,互不干扰,同一个 URL 可同时命中多个支路。</p>
 
             <h3 style="color:var(--deep);font-size:16px;margin:24px 0 4px">⑤ 防递归标记头 + 链式跳数熔断</h3>
             <p class="section-hint">重发的请求会带 <code class="inline">x-macro-resend</code> 头,其<b>值 = 该请求在重发链上的跳数(hop)</b>:真实浏览器请求不带此头(第 0 跳),第一次重发带 <code class="inline">1</code>,之后每被链式重发一次 +1。<code class="inline">route</code> 改写 / <code class="inline">dumps</code> 落盘 / 请求捕获三处见到此头即整体跳过(不再加工工具自己发的请求)。该标记头<b>不可被 setHeaders 覆盖、不可被 removeHeaders 删除</b>。</p>
@@ -511,6 +514,7 @@
                     <tr><td>改某接口 POST 请求参数(改分页 / 加字段 / 删字段)</td><td><code>rules</code></td><td>set / append / remove</td></tr>
                     <tr><td>某请求命中后隔几秒再自动发一个(改参 / 换 token)</td><td><code>resends</code></td><td>delayMs / set / setHeaders</td></tr>
                     <tr><td>等某个响应满足条件(如上传完成)后才重发</td><td><code>resends</code> + responseTrigger</td><td>triggerUrl / bodyContains</td></tr>
+                    <tr><td>重发要注入的变量在<b>另一条(更早的)响应</b>里,而非触发那条</td><td><code>captures</code> + <code>resends</code></td><td>captures.extract → 变量池 → <code>{{占位符}}</code></td></tr>
                     <tr><td>重发时换整个 body 成一个本地文件(换视频)</td><td><code>resends</code></td><td>replaceWithFile</td></tr>
                     <tr><td>改某响应的响应头(加 CORS 头 / 改缓存头)</td><td><code>responseRules</code></td><td>when / setHeaders</td></tr>
                     <tr><td>改某响应的<b>响应体 / 状态码</b>(让前端以为成功 / 失败、删响应某项)</td><td><code>responseRules</code></td><td>setBody / bodyReplaceFile / setStatus</td></tr>
@@ -672,8 +676,52 @@
 }</pre>
         </div>
 
-        <!-- ============ 3. responseRules ============ -->
-        <h2 id="responseRules"><span class="num">3</span><span class="key">responseRules[]</span>&nbsp;响应条件改写(头 / 状态码 / 响应体 / mock)</h2>
+        <!-- ============ 3. captures ============ -->
+        <h2 id="captures"><span class="num">3</span><span class="key">captures[]</span>&nbsp;被动变量捕获</h2>
+        <p class="section-hint">命中 <code class="inline">urlPattern</code>(+可选 <code class="inline">when</code>)的响应即用 <code class="inline">extract</code> 从<b>该条响应</b>头/体提取命名变量,存进回放期<b>变量池</b>——<b>不重发、不改写响应</b>,只「喂」变量池,供 <code class="inline">resends</code> 的 <code class="inline">{{占位符}}</code> 注入。</p>
+        <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
+
+        <div class="note info">
+            <span class="nt">解决什么问题:「触发闸门」与「变量提取源」是<b>不同响应</b></span>
+            <code class="inline">resends</code> 的 <code class="inline">responseTrigger.extract</code> 只能从<b>触发那条响应</b>取变量。但有时触发时机(晚)和要注入的变量(早)分处两条响应——典型如 YouTube:用 A 视频的 <code class="inline">feedback</code> 响应「处理完成」作触发闸门(晚),但要注入的 <code class="inline">scottyResourceId</code> 在更早的 B 视频 <code class="inline">upload/studio</code> start 响应头里。<code class="inline">captures</code> 把「捕获变量」与「触发重发」解耦:captures 在 start 响应到达时就把变量存池,feedback 触发时从池里取。
+        </div>
+
+        <div class="card">
+            <table>
+                <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>作用</th><th>限制 / 备注</th></tr></thead>
+                <tbody>
+                    <tr><td class="field"><code>urlPattern</code></td><td class="type">string</td><td><span class="badge req">必填</span></td><td>CDP glob 匹配要观察的响应 URL</td><td>缺失整条丢弃</td></tr>
+                    <tr><td class="field"><code>when</code></td><td class="type">string</td><td><span class="badge opt">可选</span></td><td>JS 风格布尔表达式门槛,满足才捕获;语义/上下文同 <code class="inline">responseTrigger.when</code>(status/hop/body/text + header/reqHeader/match/contains)</td><td>缺省=无条件捕获;失败即安全(解析/求值失败不捕获)。用 <code class="inline">reqHeader('x-macro')=='1'</code> 区分同一 URL 的多次响应很有用</td></tr>
+                    <tr><td class="field"><code>extract</code></td><td class="type">object(name→{fromBody/fromHeader/default})</td><td><span class="badge req">必填</span></td><td>变量名→取值源:<code class="inline">fromBody</code> 响应体点路径 / <code class="inline">fromHeader</code> 响应头名,取不到走 <code class="inline">default</code></td><td>与 <code class="inline">responseTrigger.extract</code> 同款;归一化后为空则整条丢弃</td></tr>
+                </tbody>
+            </table>
+            <div class="note info"><span class="nt">变量池优先级 &amp; 生命周期</span>重发注入时 <code class="inline">vars = { ...变量池, ...本次 responseTrigger.extract }</code>——<b>同名时「本次触发响应就地提取」覆盖「池中历史值」</b>。变量池按变量名<b>后到覆盖</b>、<b>每次回放开始清空</b>(runId 隔离)。若重发模板引用了 <code class="inline">{{name}}</code> 但该变量空/缺(常见坑:captures 时序晚于触发闸门),会渲染为空串并去重打一条告警。</div>
+            <div class="note limit"><span class="nt">限制</span>仅 <code class="inline">fromHeader</code>/<code class="inline">reqHeader</code> 的规则零 IO 不读响应体;含 <code class="inline">fromBody</code> 或 when 引用 body/text 才异步读体(读不到走 default)。<b>捕获必须在触发之前发生</b>——若变量所在响应晚于触发闸门,则触发时池里还没有,注入空值。</div>
+<pre><span class="c">// YouTube:A 处理完成(feedback SUCCESS)后才触发 createvideo,scottyResourceId 从 B 的 start 响应头入池</span>
+<span class="c">// ① captures:B 的 upload/studio start 响应(带 x-macro:1 标记)→ 把 scottyResourceId 存进变量池</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"https://upload.youtube.com/upload/studio?authuser=0"</span>,
+  <span class="k">"when"</span>: <span class="s">"reqHeader('x-macro') == '1'"</span>,       <span class="c">// 只抓带标记的那条 start 响应</span>
+  <span class="k">"extract"</span>: {
+    <span class="k">"scottyResourceId"</span>: { <span class="k">"fromHeader"</span>: <span class="s">"x-goog-upload-header-scotty-resource-id"</span> }
+  }
+}
+<span class="c">// ② resends:feedback 轮询到 SUCCESS 时触发 createvideo,从变量池注入 {{scottyResourceId}}</span>
+{
+  <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/upload/createvideo?alt=json"</span>,
+  <span class="k">"setHeaders"</span>: { <span class="k">"x-macro"</span>: <span class="s">"3"</span> },
+  <span class="k">"set"</span>: { <span class="k">"resourceId"</span>: { <span class="k">"scottyResourceId"</span>: { <span class="k">"id"</span>: <span class="s">"{{scottyResourceId}}"</span> } } },
+  <span class="k">"dedupeMs"</span>: <span class="n">60000</span>,                          <span class="c">// SUCCESS 会轮询多次,去抖防重复重发</span>
+  <span class="k">"responseTrigger"</span>: {
+    <span class="k">"triggerUrl"</span>: <span class="s">"**/youtubei/v1/upload/feedback*"</span>,
+    <span class="k">"bodyContains"</span>: [<span class="s">"\"uploadStatus\":\"SUCCESS\""</span>],
+    <span class="k">"when"</span>: <span class="s">"hop == 0"</span>                        <span class="c">// 只在真实响应触发,从根切断连环</span>
+  }
+}</pre>
+        </div>
+
+        <!-- ============ 4. responseRules ============ -->
+        <h2 id="responseRules"><span class="num">4</span><span class="key">responseRules[]</span>&nbsp;响应条件改写(头 / 状态码 / 响应体 / mock)</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的响应,当其响应头满足 <code class="inline">when</code> 条件时,改写响应<b>头 / 状态码 / 响应体</b>;或用 <code class="inline">mock:true</code> <b>直接返回一个假响应、不打后端</b>。改头/状态/体三类动作可组合(mock 除外)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -714,8 +762,8 @@
 }</pre>
         </div>
 
-        <!-- ============ 4. requestHeaderRules ============ -->
-        <h2 id="requestHeaderRules"><span class="num">4</span><span class="key">requestHeaderRules[]</span>&nbsp;请求头条件改写</h2>
+        <!-- ============ 5. requestHeaderRules ============ -->
+        <h2 id="requestHeaderRules"><span class="num">5</span><span class="key">requestHeaderRules[]</span>&nbsp;请求头条件改写</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,当其<b>原始请求头</b>满足 <code class="inline">when</code> 条件时,在发出前改写请求头。对称于 <code class="inline">responseRules</code>,但改的是<b>请求侧</b>。典型用途:注入/替换 Authorization、改 X-Requested-With、删探针头。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -745,8 +793,8 @@
 }</pre>
         </div>
 
-        <!-- ============ 5. blocks ============ -->
-        <h2 id="blocks"><span class="num">5</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断 / 挂起放行）</h2>
+        <!-- ============ 6. blocks ============ -->
+        <h2 id="blocks"><span class="num">6</span><span class="key">blocks[]</span>&nbsp;真拦截（硬阻断 / 挂起放行）</h2>
         <p class="section-hint">命中<b>触发条件</b>的请求被拦在<b>发送阶段</b>,按 <code class="inline">mode</code> 处置:<code class="inline">abort</code>(缺省)<b>直接阻断、不让其发出</b>(<code class="inline">route.abort()</code>,页面 fetch/XHR 收到网络错误);<code class="inline">hold</code> <b>挂起等人工放行</b>——请求悬在半空(pending,不发也不失败),同时列进暂停模态框的「被拦截的请求」列表,人工逐条选「继续」放行或「阻断」丢弃。</p>
         <p class="section-hint">触发条件不止 <code class="inline">urlPattern</code>:<code class="inline">urlPattern</code> / <code class="inline">method</code> / <code class="inline">requestHeaders</code> / <code class="inline">query</code> / <code class="inline">bodyJson</code> / <code class="inline">bodyContains</code> / <code class="inline">when</code> <b>各组均可选、缺省=不校验、全组 AND</b>——沿用 <a href="#resends"><code class="inline">resends.responseTrigger</code></a> 同款词汇,但<b>判的是请求自身</b>(请求头 / query 参数 / 请求体)。旧配置(仅 <code class="inline">urlPattern</code>)完全向后兼容。多条规则按声明序逐条整条件判定,取<b>首个全条件命中</b>者(仅 URL 命中却条件不符的规则<b>不会遮蔽</b>后面本应命中的规则)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
@@ -776,8 +824,8 @@
             <div class="note info"><span class="nt">hold 常配 pause 步骤</span>回放中通常用「暂停,等待人工操作」步骤卡住浏览器让人工操作;此时人工触发的、命中 hold 规则的请求会挂进同一个暂停模态框的列表,一处审查、逐条放行。</div>
         </div>
 
-        <!-- ============ 6. dumps ============ -->
-        <h2 id="dumps"><span class="num">6</span><span class="key">dumps[]</span>&nbsp;请求体落盘</h2>
+        <!-- ============ 7. dumps ============ -->
+        <h2 id="dumps"><span class="num">7</span><span class="key">dumps[]</span>&nbsp;请求体落盘</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,把其<b>完整二进制请求体</b>(从第一字节到最后一字节)写成一个文件到 <code class="inline">dumps/</code> 目录。被动观察、不改原请求。用于抓上传型接口的字节体(如把视频上传体存成 mp4)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -793,8 +841,8 @@
             <div class="note limit"><span class="nt">限制</span>分块 / resumable 上传会落多个文件需自行拼接;个别未缓冲的流式上传可能拿不到则静默跳过。</div>
         </div>
 
-        <!-- ============ 7. bodyReplaces ============ -->
-        <h2 id="bodyReplaces"><span class="num">7</span><span class="key">bodyReplaces[]</span>&nbsp;请求体整体替换</h2>
+        <!-- ============ 8. bodyReplaces ============ -->
+        <h2 id="bodyReplaces"><span class="num">8</span><span class="key">bodyReplaces[]</span>&nbsp;请求体整体替换</h2>
         <p class="section-hint">命中 <code class="inline">urlPattern</code> 的请求,在拦截点把其<b>整个</b>请求体替换成本地文件的完整字节,再放行发出。与 dump 是一对(dump 读、这个写)。走 CDP,能替换 File/Blob 上传体(如把上传的视频换成本地另一个 mp4)。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">受 enabled 管</span></div>
         <div class="card">
@@ -815,8 +863,8 @@
 }</pre>
         </div>
 
-        <!-- ============ 8. record ============ -->
-        <h2 id="record"><span class="num">8</span><span class="key">record</span>&nbsp;只记录不修改</h2>
+        <!-- ============ 9. record ============ -->
+        <h2 id="record"><span class="num">9</span><span class="key">record</span>&nbsp;只记录不修改</h2>
         <p class="section-hint">拦截所有请求(不限 method)+ 响应,写入 <code class="inline">timelines/timeline-*.jsonl</code> 供事后分析。<b>不改写任何请求。</b></p>
         <div class="tag-row"><span class="badge both">录制端 + 回放端</span><span class="badge toggle">独立开关,与 enabled 无关</span></div>
         <div class="card">
@@ -854,8 +902,8 @@
             </div>
         </div>
 
-        <!-- ============ 9. jsHooks ============ -->
-        <h2 id="jsHooks"><span class="num">9</span><span class="key">jsHooks</span>&nbsp;JS Hook 探针(抓明文↔密文)</h2>
+        <!-- ============ 10. jsHooks ============ -->
+        <h2 id="jsHooks"><span class="num">10</span><span class="key">jsHooks</span>&nbsp;JS Hook 探针(抓明文↔密文)</h2>
         <p class="section-hint">向页面<b>主世界</b>注入 hook 脚本,拦截网络出口(fetch/XHR)、标准加密库(CryptoJS/crypto.subtle/btoa/JSON.stringify)与<b>平台自定义签名/加密函数</b>,抓「明文入参 ↔ 密文出参 + 调用栈」。<b>网络层只看得到密文,这里看得到明文</b>——用于逆向前端签名/加密。被动观察、全透传、不改页面行为。</p>
         <div class="tag-row"><span class="badge replay">仅回放端</span><span class="badge toggle">独立开关,与 enabled 无关</span></div>
         <div class="card">

@@ -9,6 +9,8 @@ import type {
     RequestHeaderRule,
     ResendRule,
     ResendResponseTrigger,
+    ResendVarSource,
+    CaptureRule,
     RequestSectionToggles,
     BlockRule,
 } from './macro-types';
@@ -409,6 +411,20 @@ export function triggerNeedsBody(trigger: ResendResponseTrigger): boolean {
 }
 
 /**
+ * 捕获规则是否需要读响应体,用于门控异步读体(仿 triggerNeedsBody):
+ * extract 里存在任一 fromBody 取值源,或 when 引用了 body / text → 需读体;否则(仅 fromHeader/reqHeader)零 IO 不读体。
+ */
+export function captureNeedsBody(rule: {
+    extract?: Record<string, ResendVarSource>;
+    when?: string;
+}): boolean {
+    const bodyExtract =
+        !!rule.extract && Object.values(rule.extract).some((s) => s.fromBody !== undefined);
+    const bodyWhen = !!rule.when && /\b(body|text)\b/.test(rule.when);
+    return bodyExtract || bodyWhen;
+}
+
+/**
  * 为「响应触发 when 表达式」构造求值上下文:body 只 JSON.parse 一次(失败 → undefined),
  * header()/reqHeader() 注入 headerValue 闭包(大小写不敏感)。供 responseTriggerMet 与
  * explainResponseTriggerMiss 共用,保证两者对同一响应看到完全一致的上下文。
@@ -436,6 +452,27 @@ function buildTriggerExprContext(
         header: (n) => headerValue(headers, n),
         reqHeader: (n) => headerValue(requestHeaders, n),
     };
+}
+
+/**
+ * 捕获规则的 when 门槛判定(仅 when,复用响应触发的求值上下文与引擎):
+ * 无 when / 空 → 恒真(无条件捕获);解析失败 / 求值异常 / 结果为假 → false(失败即安全,与 responseTriggerMet 的 when 语义一致)。
+ * 上下文变量同 responseTrigger.when:status/hop/body/text + header()/reqHeader()/match()/contains()。
+ */
+export function captureWhenMet(
+    when: string | undefined,
+    status: number,
+    headers: Record<string, string>,
+    bodyText: string | null,
+    requestHeaders: Record<string, string> = {},
+    hop = 0
+): boolean {
+    if (!when || !when.trim()) {
+        return true;
+    }
+    const ctx = buildTriggerExprContext(status, headers, requestHeaders, bodyText, hop);
+    const r = tryEvalTriggerWhen(when, ctx);
+    return r.ok && !!r.value;
 }
 
 /**
@@ -630,13 +667,26 @@ export function extractResendVars(
     headers: Record<string, string>,
     bodyText: string | null
 ): Record<string, string> {
+    return trigger.extract ? extractVarsFrom(trigger.extract, headers, bodyText) : {};
+}
+
+/**
+ * 从一组 extract 定义(变量名 → 取值源)提取命名变量:与「触发器/捕获规则」解耦的核心实现体。
+ * fromBody(响应体点路径)/ fromHeader(响应头名)/ 取不到走 default,语义同 extractResendVars。
+ * 被 extractResendVars(响应触发重发)与 captures 支路(被动变量捕获)共用,纯逻辑、零 IO。
+ */
+export function extractVarsFrom(
+    extract: Record<string, ResendVarSource>,
+    headers: Record<string, string>,
+    bodyText: string | null
+): Record<string, string> {
     const out: Record<string, string> = {};
-    if (!trigger.extract) {
+    if (!extract) {
         return out;
     }
     let parsed: unknown;
     let parsedTried = false;
-    for (const [name, src] of Object.entries(trigger.extract)) {
+    for (const [name, src] of Object.entries(extract)) {
         let val: string | undefined;
         if (src.fromBody !== undefined) {
             if (!parsedTried) {

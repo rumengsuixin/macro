@@ -6,6 +6,7 @@ import type {
     ResendRule,
     ResendResponseTrigger,
     ResendVarSource,
+    CaptureRule,
     ResponseHeaderRule,
     RequestHeaderRule,
     BlockRule,
@@ -29,11 +30,12 @@ function defaultSections(): Required<RequestSectionToggles> {
         blocks: true,
         dumps: true,
         bodyReplaces: true,
+        captures: true,
     };
 }
 
 /**
- * 归一化「支路级分闸」:返回全 7 键对象,默认全 true,仅当 raw 里对应键是显式布尔时才覆盖。
+ * 归一化「支路级分闸」:返回全键对象,默认全 true,仅当 raw 里对应键是显式布尔时才覆盖。
  * 白名单式——忽略未知键 / 非布尔值。缺 raw / raw 非对象 → 全 true(向后兼容)。
  */
 function normalizeSections(raw: unknown): Required<RequestSectionToggles> {
@@ -72,6 +74,7 @@ function templateConfig(): RequestRulesConfig {
             blocks: true,
             dumps: true,
             bodyReplaces: true,
+            captures: true,
         },
         rules: [
             {
@@ -113,6 +116,18 @@ function templateConfig(): RequestRulesConfig {
                 },
                 delayMs: 800,
                 repeat: 1,
+            },
+        ],
+        // captures:「被动变量捕获」支路(受 enabled 总开关管,仅回放端)。命中 urlPattern 的响应
+        // (+可选 when 门槛)即用 extract 从**该条响应**头/体提取命名变量,存进回放期「变量池」——
+        // 不触发重发、不改写响应,只供 resends 的 {{占位符}} 注入。用于「触发闸门」与「变量提取源」是
+        // **不同响应**的场景(如:A 的 feedback 响应作触发闸门,但 scottyResourceId 在更早的 B start 响应头里)。
+        // 变量池按变量名后到覆盖、每次回放开始清空。示例=从 */api/start* 响应头 x-token 抓 token 入池。
+        captures: [
+            {
+                urlPattern: '*/api/start*',
+                when: "reqHeader('x-macro') == '1'",
+                extract: { token: { fromHeader: 'x-token' } },
             },
         ],
         // responseRules:「响应头条件改写」支路(受 enabled 总开关管)。命中 urlPattern 的响应,
@@ -274,6 +289,30 @@ function normalizeResendRule(raw: unknown): ResendRule | null {
             return null;
         }
         rule.responseTrigger = trigger;
+    }
+    return rule;
+}
+
+/**
+ * 校验并归一化单条「被动变量捕获」规则;非法返回 null(过滤掉)。
+ * urlPattern 必填(非空 string);extract 必填且归一化后非空(无提取源的捕获规则无意义);
+ * when 为非空字符串才保留(不在此解析,与 normalizeResponseTrigger 的 when 处理一致——运行期失败即安全)。
+ */
+function normalizeCaptureRule(raw: unknown): CaptureRule | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return null;
+    }
+    const r = raw as Record<string, unknown>;
+    if (typeof r.urlPattern !== 'string' || !r.urlPattern.trim()) {
+        return null; // 无匹配模式的规则无意义
+    }
+    const extract = normalizeResendExtract(r.extract);
+    if (!extract) {
+        return null; // 无提取源 → 捕获规则无意义,丢弃
+    }
+    const rule: CaptureRule = { urlPattern: r.urlPattern, extract };
+    if (typeof r.when === 'string' && r.when.trim()) {
+        rule.when = r.when;
     }
     return rule;
 }
@@ -662,6 +701,9 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
         const resends = Array.isArray(raw.resends)
             ? raw.resends.map(normalizeResendRule).filter((x): x is ResendRule => x !== null)
             : [];
+        const captures = Array.isArray(raw.captures)
+            ? raw.captures.map(normalizeCaptureRule).filter((x): x is CaptureRule => x !== null)
+            : [];
         const responseRules = Array.isArray(raw.responseRules)
             ? raw.responseRules
                   .map(normalizeResponseHeaderRule)
@@ -695,6 +737,7 @@ export function loadRequestRules(filePath: string): RequestRulesConfig {
             sections: normalizeSections(raw.sections),
             rules,
             ...(resends.length ? { resends } : {}),
+            ...(captures.length ? { captures } : {}),
             ...(responseRules.length ? { responseRules } : {}),
             ...(requestHeaderRules.length ? { requestHeaderRules } : {}),
             ...(blocks.length ? { blocks } : {}),

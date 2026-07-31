@@ -486,6 +486,29 @@ export interface ResendVarSource {
 }
 
 /**
+ * 「被动变量捕获」规则(仅回放端):命中 urlPattern 的响应(+可选 when 门槛),用 extract 从**该条响应**
+ * 的头/体提取命名变量,merge 进回放期变量池,供 resends 的 `{{占位符}}`(set/append/setHeaders/setUrl)注入。
+ * **不触发重发、不改写响应**,只「喂」变量池。用于解决「触发闸门」与「变量提取源」是**不同响应**的场景——
+ * 如:A 的 feedback 响应作触发闸门(晚),但要注入的 scottyResourceId 在更早的 B `upload/studio` start 响应头里。
+ * 变量池按变量名后到覆盖、runId 生命周期(每次回放开始清空)。仅回放端生效。
+ */
+export interface CaptureRule {
+    /** **必填**:观察哪些响应(CDP glob,`*` 通配);缺失则整条规则被归一化丢弃 */
+    urlPattern: string;
+    /**
+     * 可选:**JS 风格布尔表达式**门槛,满足才捕获;空 / 不给 = 无条件捕获。语义/上下文同 responseTrigger.when
+     * (status/hop/body/text + header/reqHeader/match/contains);解析失败 / 求值异常 → 不捕获(失败即安全)。
+     * 用请求头区分同一 URL 的多次响应时很有用(如 `reqHeader('x-macro') == '1'` 只抓带标记的那条)。
+     */
+    when?: string;
+    /**
+     * **必填**:变量名 → 取值源(复用 ResendVarSource 的 fromBody/fromHeader/default)。
+     * 归一化后为空则整条规则被丢弃(无提取源的捕获规则无意义)。
+     */
+    extract: Record<string, ResendVarSource>;
+}
+
+/**
  * 「重发型」拦截规则的**响应条件触发器**。设了 ResendRule.responseTrigger 时,该规则改由**响应观察器**驱动
  * (而非请求侧 urlPattern 命中即触发):
  *   ① 回放期间**捕获**命中顶层 urlPattern 的请求(记下 url/method/头/体,存最近一次);
@@ -845,6 +868,8 @@ export interface RequestSectionToggles {
     dumps?: boolean;
     /** bodyReplaces(请求体整体替换)支路开关;缺省 true */
     bodyReplaces?: boolean;
+    /** captures(被动变量捕获)支路开关;缺省 true */
+    captures?: boolean;
 }
 
 /** 录制端请求改写配置(存于 request-rules.json;默认 enabled=false 不干预) */
@@ -860,6 +885,8 @@ export interface RequestRulesConfig {
     rules: RequestRule[];
     /** 重发规则列表(命中后延时改参重发一个新请求;受 enabled 总开关管);缺省视为无重发 */
     resends?: ResendRule[];
+    /** 被动变量捕获规则列表(命中响应即提取命名变量入变量池,供 resends 的 {{占位符}} 注入;受 enabled 总开关管;仅回放端);缺省视为无 */
+    captures?: CaptureRule[];
     /** 响应头条件改写规则列表(命中且满足 when 条件则改响应头;受 enabled 总开关管);缺省视为无 */
     responseRules?: ResponseHeaderRule[];
     /** 请求头条件改写规则列表(命中且满足 when 则改原始请求头;受 enabled 总开关管;仅回放端);缺省视为无 */

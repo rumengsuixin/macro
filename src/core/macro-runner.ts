@@ -38,6 +38,7 @@ import type {
     BodyReplaceRule,
     BodySaveRule,
     JsHookRule,
+    CaptureRule,
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
@@ -61,6 +62,9 @@ import {
     triggerNeedsBody,
     explainResponseTriggerMiss,
     extractResendVars,
+    extractVarsFrom,
+    captureWhenMet,
+    captureNeedsBody,
     renderResendActions,
     checkExprSyntax,
     sectionEnabled,
@@ -237,6 +241,17 @@ export class MacroRunner {
     private readonly resendTimers = new Set<ReturnType<typeof setTimeout>>();
     /** 去抖:重发规则 urlPattern → 上次触发时刻(ms) */
     private readonly resendLastFireAt = new Map<string, number>();
+    // --- 「被动变量捕获(captures)」支路运行期状态(受 enabled 总开关管,与重发共用热更新) ---
+    /** 当前生效的捕获规则(命中响应即提取变量入池,不重发不改响应) */
+    private captureRules: CaptureRule[] = [];
+    /** 是否启用变量捕获(enabled 且有捕获规则) */
+    private capturesWant = false;
+    /**
+     * 回放期「变量池」:变量名 → 值,后到覆盖、runId 生命周期(clearResendTimers 里清空)。
+     * captures 支路写入,handleResponseTrigger 重发时并入 vars(池 < 本次 trigger.extract,同名后者胜)。
+     * 解决「触发闸门」与「变量提取源」是不同响应的场景。
+     */
+    private readonly capturedVars = new Map<string, string>();
     /**
      * 响应触发的**链式跳数上限**(熔断阈值):触发响应所属请求跳数达此值即不再继续触发。
      * 支持「连环触发」的同时防无限自环/互环。由 request-rules.json 的 maxResendHops 覆盖,缺省 5。
@@ -920,6 +935,12 @@ export class MacroRunner {
             void this.handleResponseTrigger(resp).catch(() => undefined);
         });
 
+        // ⑦ 被动变量捕获观察监听:常挂、被动(不改响应、不重发),靠 capturesWant 标志决定是否处理。
+        //    命中某 captureRule 的 urlPattern(+可选 when)→ 提取命名变量 merge 进变量池,供重发 {{占位符}} 注入。
+        context.on('response', (resp: Response) => {
+            void this.handleCaptureResponse(resp).catch(() => undefined);
+        });
+
         // ⑤ 请求体落盘:不走被动 context.on('request')(其 postDataBuffer 对 File/Blob 上传体返回 null),
         //    改为 per-page CDP Fetch 域拦截,从 Fetch.requestPaused 的 postDataEntries 取完整二进制。
         //    CDP session 按页挂载(见 attachDumpCdp),在 run() 的 page 生命周期处接线,此处仅应用初始标志。
@@ -929,6 +950,7 @@ export class MacroRunner {
         await this.applyReplayRewrite(initial);
         this.applyReplayRecord(initial);
         this.applyReplayResend(initial);
+        this.applyReplayCapture(initial);
         this.applyReplayDump(initial);
         this.applyReplayBodyReplace(initial);
         this.applyReplayJsHook(initial);
@@ -945,6 +967,7 @@ export class MacroRunner {
         void this.applyReplayRewrite(cfg).catch(() => undefined);
         this.applyReplayRecord(cfg);
         this.applyReplayResend(cfg);
+        this.applyReplayCapture(cfg);
         this.applyReplayDump(cfg);
         this.applyReplayBodyReplace(cfg);
         this.applyReplayJsHook(cfg);
@@ -1255,6 +1278,94 @@ export class MacroRunner {
     }
 
     /**
+     * 按配置启用/停用「被动变量捕获」支路(仿 applyReplayResend):观察监听已常挂,这里只切标志。
+     * 分闸 sections.captures;带 when 的规则做加载期语法体检(语法错一次性中文告警,避免静默失效)。
+     */
+    private applyReplayCapture(cfg: RequestRulesConfig): void {
+        this.captureRules = sectionEnabled(cfg, 'captures') ? cfg.captures ?? [] : [];
+        for (const cr of this.captureRules) {
+            if (cr.when && cr.when.trim()) {
+                const err = checkExprSyntax(cr.when);
+                if (err) {
+                    const sig = `capture-when-syntax:${cr.when}`;
+                    if (!this.resendMissWarned.has(sig)) {
+                        this.resendMissWarned.add(sig);
+                        logInfo(
+                            `回放变量捕获:规则 [${cr.urlPattern}] 的 when 表达式语法错误,将永不捕获(请修正):${err}`
+                        );
+                    }
+                }
+            }
+        }
+        const want = cfg.enabled && this.captureRules.length > 0;
+        if (!this.capturesWant && want) {
+            logInfo(
+                `回放变量捕获:已启用,共 ${this.captureRules.length} 条规则,` +
+                    `监听 URL:${this.captureRules.map((r) => r.urlPattern).join(' | ')}`
+            );
+        } else if (this.capturesWant && !want) {
+            logInfo('回放变量捕获:已停用。');
+        }
+        this.capturesWant = want;
+    }
+
+    /**
+     * 被动变量捕获:观察每条响应,命中某 captureRule 的 urlPattern(+可选 when)即用 extract 提取变量 merge 进变量池。
+     * 门控 capturesWant;不重发、不改响应;仅在需要时(captureNeedsBody)异步读体。后到覆盖,变化才记日志。
+     * 读体竞态(context 关闭)与任何异常都吞掉(捕获支路不得影响主流程)。
+     */
+    private async handleCaptureResponse(resp: Response): Promise<void> {
+        try {
+            if (!this.capturesWant) {
+                return;
+            }
+            const url = resp.url();
+            const status = resp.status();
+            const headers = resp.headers();
+            const reqHeaders = resp.request().headers();
+            const hop = resendHop(reqHeaders);
+            // 响应体最多懒读一次,多条规则命中同一响应时复用
+            let bodyText: string | null = null;
+            let bodyRead = false;
+            for (const rule of this.captureRules) {
+                try {
+                    if (!globToRegExp(rule.urlPattern).test(url)) {
+                        continue;
+                    }
+                } catch {
+                    continue; // 非法 urlPattern 跳过
+                }
+                if (captureNeedsBody(rule) && !bodyRead) {
+                    bodyRead = true;
+                    try {
+                        bodyText = await resp.text();
+                    } catch {
+                        bodyText = null; // 读不到(竞态/中断)→ 有 body 条件的源将取不到,走 default
+                    }
+                }
+                if (!captureWhenMet(rule.when, status, headers, bodyText, reqHeaders, hop)) {
+                    continue;
+                }
+                const vars = extractVarsFrom(rule.extract, headers, bodyText);
+                const changed: string[] = [];
+                for (const [k, v] of Object.entries(vars)) {
+                    if (this.capturedVars.get(k) !== v) {
+                        this.capturedVars.set(k, v);
+                        changed.push(k);
+                    }
+                }
+                if (changed.length) {
+                    logInfo(
+                        `回放变量捕获:命中 [${rule.urlPattern}] → 变量池更新 {${changed.join(', ')}}`
+                    );
+                }
+            }
+        } catch {
+            /* 捕获支路不得影响主流程 */
+        }
+    }
+
+    /**
      * 响应条件触发重发:被动观察每条响应,遍历所有响应触发规则——命中某规则的 triggerUrl 且
      * status/headers/bodyJson 条件满足时,重发④已捕获的、命中该规则 urlPattern 的那个请求。
      * 门控:resendResponseWant;防递归:自发重发的响应(其请求带 x-macro-resend)跳过。
@@ -1331,13 +1442,55 @@ export class MacroRunner {
                     );
                     continue;
                 }
-                // 从触发响应提取命名变量(复用已读的响应头/体),供动作字段 {{占位符}} 注入重发
-                const vars = extractResendVars(trigger, headers, bodyText);
+                // 变量来源合并:变量池(captures 支路历史捕获)+ 本次触发响应就地提取(trigger.extract)。
+                // 同名时**本次 extract 覆盖池**(优先级明确:触发响应就地取值胜过历史池值)。
+                const vars = {
+                    ...Object.fromEntries(this.capturedVars),
+                    ...extractResendVars(trigger, headers, bodyText),
+                };
+                // 可观测性:动作模板里引用了 {{name}} 但该变量空/缺 → 去重告警(常见坑:captures 时序晚于触发,变量尚未就绪)
+                this.warnMissingResendVars(rr, vars);
                 // 新重发跳数 = 触发源跳数 + 1(链式接力;真实源 hop0 → 首发 hop1)
                 this.scheduleReplayResend(rr, cap, triggerHop + 1, vars);
             }
         } catch {
             /* 响应触发支路不得影响主流程 */
+        }
+    }
+
+    /**
+     * 可观测性:若重发规则的动作模板(set/append/setHeaders/setUrl)里引用了 `{{name}}`,但合并后的
+     * vars[name] 为空/缺失 → 按变量名去重打一条中文告警(将注入空值)。最常见坑:captures 捕获时序
+     * 晚于触发闸门,变量尚未入池。纯诊断,不改变重发行为。
+     */
+    private warnMissingResendVars(rr: ResendRule, vars: Record<string, string>): void {
+        const templates: string[] = [];
+        if (rr.set) templates.push(JSON.stringify(rr.set));
+        if (rr.append) templates.push(JSON.stringify(rr.append));
+        if (rr.setHeaders) templates.push(Object.values(rr.setHeaders).join('\n'));
+        if (rr.setUrl) templates.push(rr.setUrl);
+        if (!templates.length) {
+            return;
+        }
+        const re = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+        const joined = templates.join('\n');
+        const missing = new Set<string>();
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(joined)) !== null) {
+            const name = m[1];
+            if (!vars[name]) {
+                missing.add(name);
+            }
+        }
+        for (const name of missing) {
+            const sig = `missing-var:${rr.urlPattern}:${name}`;
+            if (!this.resendMissWarned.has(sig)) {
+                this.resendMissWarned.add(sig);
+                logInfo(
+                    `回放请求重发器:变量 ${name} 尚未捕获到,重发 [${rr.urlPattern}] 将注入空值;` +
+                        `请检查 captures 的监听响应时序是否早于触发闸门。`
+                );
+            }
         }
     }
 
@@ -2220,6 +2373,7 @@ export class MacroRunner {
         this.resendTimers.clear();
         this.resendLastFireAt.clear();
         this.resendCaptures.clear();
+        this.capturedVars.clear(); // 变量池 runId 隔离:每次回放清空,不跨 run 串味
         this.resendMissWarned.clear();
     }
 
