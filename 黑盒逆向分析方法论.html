@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>黑盒逆向分析方法论 · 从网络边界逆推内部逻辑</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --ok: #1a9d5a;
+        --warn: #d98a00;
+        --danger: #d64545;
+        --ai: #7c5cff;
+        --bg: #f4f8f9;
+        --card: #ffffff;
+        --line: #d9e4e7;
+        --text: #16323a;
+        --muted: #5c7681;
+        --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        --body: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 0 0 80px; background: var(--bg); color: var(--text);
+        font-family: var(--body); line-height: 1.7; font-size: 15px;
+    }
+    header {
+        background: linear-gradient(135deg, var(--deep), #123f4b);
+        color: #fff; padding: 40px 6% 32px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 28px; }
+    header .sub { color: #a9d4d8; font-size: 14px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 6%; }
+    section { margin-top: 40px; }
+    h2 {
+        font-size: 21px; color: var(--deep); border-left: 5px solid var(--primary);
+        padding-left: 12px; margin: 0 0 16px;
+    }
+    h3 { font-size: 17px; color: var(--deep); margin: 24px 0 10px; }
+    .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 20px 24px; box-shadow: 0 2px 10px rgba(14,42,51,.05); margin-bottom: 18px;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef6f7; color: var(--deep); font-weight: 600; }
+    tr:nth-child(even) td { background: #fafcfc; }
+    code { font-family: var(--mono); background: #eef3f4; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; word-break: break-all; }
+    pre {
+        background: var(--deep); color: #d6ecef; font-family: var(--mono); font-size: 12.5px;
+        padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.55;
+    }
+    pre .k { color: #7fd4dc; } pre .s { color: #ffb38a; } pre .c { color: #6f8b93; }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 20px; color: #fff; font-weight: 600; }
+    .t-req { background: var(--primary); } .t-res { background: var(--ai); }
+    .t-cli { background: var(--muted); } .t-srv { background: var(--accent); }
+    .badge { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #eef3f4; color: var(--deep); }
+    .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .step-num {
+        width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex: 0 0 auto;
+    }
+    .callout { border-radius: 10px; padding: 14px 18px; margin: 14px 0; border-left: 4px solid; }
+    .c-key { background: #fff6f2; border-color: var(--accent); }
+    .c-ok { background: #eefaf2; border-color: var(--ok); }
+    .c-warn { background: #fff8e8; border-color: var(--warn); }
+    .c-info { background: #eef6fb; border-color: #2f8fd6; }
+    .kv { display: grid; grid-template-columns: 92px 1fr; gap: 6px 16px; font-size: 13.5px; }
+    .kv .lbl { color: var(--muted); }
+    .timeline { position: relative; margin: 10px 0 0 6px; padding-left: 22px; border-left: 2px dashed var(--line); }
+    .tl-item { position: relative; padding: 4px 0 14px; }
+    .tl-item::before {
+        content: ''; position: absolute; left: -29px; top: 8px; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--card); border: 3px solid var(--primary);
+    }
+    .tl-item.hi::before { border-color: var(--accent); }
+    .tl-item.aux::before { border-color: var(--line); width: 8px; height: 8px; left: -27px; }
+    .tl-t { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .arrow { text-align: center; color: var(--primary); font-size: 20px; margin: -6px 0; }
+    ul.tight { margin: 6px 0; padding-left: 22px; }
+    ul.tight li { margin: 3px 0; }
+    .foot { margin-top: 50px; text-align: center; color: var(--muted); font-size: 12.5px; }
+    .lead { display:inline-block; font-size:12px; font-weight:600; color:var(--primary); letter-spacing:.5px; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    @media (max-width:720px){ .grid2{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+    <div class="wrap" style="padding:0;">
+        <h1>🔬 黑盒逆向分析方法论</h1>
+        <div class="sub">从「网络边界」逆推内部处理步骤与逻辑 · 以 YouTube Studio 上传/删除为贯穿实例 · 目标无关、可复用</div>
+    </div>
+</header>
+
+<div class="wrap">
+
+<!-- ========== 核心思想 ========== -->
+<section>
+    <h2>一、核心思想:站在网络边界上看</h2>
+    <div class="card">
+        <p><b>黑盒</b> = 拿不到目标系统的服务端源码,唯一能观测的是<b>请求进 / 响应出</b>这道网络边界。所谓「分析出内部步骤和逻辑」,本质是——</p>
+        <div class="callout c-key" style="margin-top:6px;">
+            <b>用边界上<u>可见</u>的三类信号,反推边界内<u>不可见</u>的资源模型与处理逻辑。</b>
+        </div>
+        <div class="grid2" style="margin-top:6px;">
+            <div class="callout c-info" style="margin:0;"><b>① 数据流</b><br><span class="muted">同一个标识/字段在不同请求之间如何流转:谁生成、谁引用谁、逐字是否相等。</span></div>
+            <div class="callout c-info" style="margin:0;"><b>② 时序</b><br><span class="muted">谁先谁后、各自耗时、响应时刻与依赖完成时刻的先后关系。</span></div>
+            <div class="callout c-info" style="margin:0;grid-column:1 / -1;"><b>③ 状态变化</b><br><span class="muted">状态码(200/400/…)、响应体里的成功标志与实体变更(mutation)、前端界面随之出现的条目/进度。</span></div>
+        </div>
+        <p class="muted" style="margin-bottom:0;">下面 8 步就是把这三类信号系统性榨干的固定套路:<b>先被动看清全貌,再主动扰动验证,最后诚实标注每条结论的证据强度。</b></p>
+    </div>
+</section>
+
+<!-- ========== 方法论全景 ========== -->
+<section>
+    <h2>二、方法论全景(8 步)</h2>
+    <div class="card">
+        <div class="timeline">
+            <div class="tl-item"><span class="lead">被动观测</span> · ① 取样(抓干净基线,不施扰动)</div>
+            <div class="tl-item"><span class="lead">被动观测</span> · ② 时序重建 + 剥噪声(切出主链路 vs 辅助请求)</div>
+            <div class="tl-item"><span class="lead">被动观测</span> · ③ 字段级逐字比对(追踪数据流 → 反推资源模型)</div>
+            <div class="tl-item"><span class="lead">被动观测</span> · ④ 时序差推异步/因果(响应早于依赖完成 → 解耦)</div>
+            <div class="tl-item"><span class="lead">证据升级</span> · ⑤ 响应体落盘(头/状态 &lt; 正文)</div>
+            <div class="tl-item"><span class="lead">证据升级</span> · ⑥ 令牌解码(base64 / URL-decode 撬内嵌结构)</div>
+            <div class="tl-item hi"><span class="lead" style="color:var(--accent)">主动测试</span> · ⑦ 扰动实验(控制变量:成对改 / 单改 → 反推校验规则)</div>
+            <div class="tl-item hi"><span class="lead" style="color:var(--accent)">交付纪律</span> · ⑧ 诚实标注证据边界(实测 / 推断 / 语义对应 分档)</div>
+        </div>
+        <p class="muted" style="margin-bottom:0;">① ~ ④ 只读不改,拿到「系统本来长什么样」;⑤ ~ ⑥ 把推测坐实为正文/结构证据;⑦ 才动手改输入看输出;⑧ 贯穿始终,给每条结论标价。</p>
+    </div>
+</section>
+
+<!-- ========== 八步详解 ========== -->
+<section>
+    <h2>三、八步详解(每步配 YouTube 实例)</h2>
+
+    <!-- 步骤1 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">1</div><h3 style="margin:0;">被动观测取样 —— 先拿一份干净基线</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>对一次<b>完整业务操作</b>(如「上传一个视频」),被动抓下它触发的<b>全部</b>网络请求,不改写任何一条。</div>
+            <div class="lbl">怎么做</div><div>用「只记录不修改」的抓包支路(本项目 <code>record</code> 支路,走 CDP Network),被动全站观测。</div>
+            <div class="lbl">铁律</div><div>第一遍<b>绝不施加扰动</b>——否则后面分不清「系统本来行为」还是「被我改出来的行为」。基线必须纯净。</div>
+        </div>
+        <div class="callout c-ok" style="margin-bottom:0;"><b>YouTube 实例:</b>一次上传抓到 <b>117 条</b>时间线(<code>timeline-replay-20260716-115136713.jsonl</code>),覆盖从选文件到草稿生成的全过程,总跨度约 66 秒。</div>
+    </div>
+
+    <!-- 步骤2 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">2</div><h3 style="margin:0;">时序重建 + 剥噪声 —— 从 100+ 条里剥出骨架</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>按时间戳排成时间线,把请求分成<b>主链路</b>(承载核心业务的少数关键请求)与<b>辅助请求</b>(轮询、埋点、静态资源等噪声)。</div>
+            <div class="lbl">怎么做</div><div>按端点(URL)聚类计数、看请求体大小与响应耗时:耗时长/体积大/一次性的往往是主链路;高频重复的多是轮询噪声。</div>
+            <div class="lbl">产出</div><div><b>识别出主链路 = 识别出内部处理的阶段划分。</b></div>
+        </div>
+        <div class="callout c-ok" style="margin-bottom:0;"><b>YouTube 实例:</b>117 条里剥出主链路仅 3 步——<code>start</code>(会话初始化)→ 字节上传 → <code>createvideo</code>(创建草稿);其余 ~114 条是 28 次 <code>feedback</code> 进度轮询、<code>play.google.com/log</code> 埋点、缩略图等噪声。</div>
+    </div>
+
+    <!-- 步骤3 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">3</div><h3 style="margin:0;">字段级逐字比对 —— 追踪数据流,反推资源模型</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>挑出关键标识,追踪它在各请求间的<b>流转路径</b>:首次出现在哪(请求体?响应头?)、后续在哪被引用、两处值是否<b>逐字 <code>===</code> 相等</b>。</div>
+            <div class="lbl">怎么做</div><div>由「谁先出现、谁引用谁」推「谁生成」;由「逐字相等」推「同一实例被复用/绑定」;由「必须成对出现」推「校验规则」。</div>
+            <div class="lbl">这是核心</div><div>服务端源码看不见,但<b>数据流会出卖它的资源模型</b>——这一步是从「外部数据」推「内部逻辑」的最强手段。</div>
+        </div>
+        <p><b>YouTube 实例:</b>追踪两个标识的流转,逐字比对 <code>①</code> 与 <code>③</code>:</p>
+        <table>
+            <tr><th style="width:150px;">标识</th><th>首次出现</th><th>再次出现</th><th>逐字比对推出</th></tr>
+            <tr><td><code>frontendUploadId</code></td><td>① start <b>请求体</b></td><td>③ createvideo 请求体</td><td>前端生成、贯穿全程 → 配对键 + 幂等键</td></tr>
+            <tr><td><code>scottyResourceId</code></td><td>① start <b>响应头</b></td><td>③ createvideo 请求体</td><td>服务端在 start 就分配、后被复用 → 已上传字节的资源句柄</td></tr>
+        </table>
+        <div class="callout c-key" style="margin-bottom:0;"><b>结论:一次 start 产生一对 (fuid, scotty),原封不动带入 createvideo;createvideo 校验二者是否同源。</b>——整套「资源槽位 + 配对」的内部模型,全是从边界上的字段流转反推出来的。</div>
+    </div>
+
+    <!-- 步骤4 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">4</div><h3 style="margin:0;">时序差推异步/因果 —— 用时间关系反推同步性</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>比较「某请求<b>成功返回的时刻</b>」与「它名义上依赖的操作<b>完成的时刻</b>」。若前者<b>早于</b>后者,说明二者<b>异步解耦</b>——该请求当场并不真的等依赖就位。</div>
+            <div class="lbl">怎么做</div><div>按同一业务 id 配对请求/响应行,取响应时间戳做差;差值的正负号就是因果/同步性的证据。</div>
+            <div class="lbl">威力</div><div>这类结论<b>只能从时序看出</b>,单看任何一条请求都发现不了。</div>
+        </div>
+        <div class="callout c-ok"><b>YouTube 实例:</b><code>createvideo</code> 在 <b>t+23.35s</b> 就返回 200,而字节上传的 finalize 到 <b>t+53.44s</b> 才完成——<b>早 30 秒</b>。</div>
+        <div class="callout c-warn" style="margin-bottom:0;"><b>推断:</b>createvideo <b>当场不校验字节是否就位</b>,只凭句柄 + 会话令牌即登记草稿;字节由后端异步收、异步转码(那 28 次 feedback 轮询就是在追这个进度)。<b>⟹ <code>createvideo 返回 200 ≠ 视频最终成功</code></b>——验证是否真成,要看最终转码/可播放状态。</div>
+    </div>
+
+    <!-- 步骤5 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">5</div><h3 style="margin:0;">响应体落盘 —— 证据分级,别停在状态码</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>黑盒里证据有强弱:<b>响应头 / 状态码 &lt; 响应正文</b>。能拿正文就别靠 <code>200</code> 猜语义。</div>
+            <div class="lbl">怎么做</div><div>对关键端点单独抓完整请求/响应体(本项目 <code>record.saveBodies</code>,走 CDP Fetch 响应阶段 <code>getResponseBody</code>),落盘后逐字段读语义。</div>
+            <div class="lbl">收益</div><div>把「凭 200 推测」升级为「有正文实证」,常能<b>直接推翻先前的推断</b>。</div>
+        </div>
+        <div class="callout c-ok"><b>YouTube 实例:</b>对 <code>video/delete</code> 抓到响应体后,发现 <code>frameworkUpdates.entityBatchUpdate.mutations</code> <b>只有一条</b> <code>ENTITY_MUTATION_TYPE_DELETE</code>、<b>无</b> <code>undoToken</code>、<code>success:true</code>。</div>
+        <div class="callout c-key" style="margin-bottom:0;"><b>推翻旧假设:</b>这确证是<b>硬删除 / 实体层直接删除</b>,而非此前凭 200 猜的「软删除 + 可撤销」。一条正文顶十条推测。</div>
+    </div>
+
+    <!-- 步骤6 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">6</div><h3 style="margin:0;">令牌解码 —— 撬开不透明 blob 里的内嵌结构</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>看似随机的长令牌 / key,往往内嵌明文结构。做 <code>base64</code>、<code>URL-decode</code>、protobuf 试解,常能撬出内部命名与主键。</div>
+            <div class="lbl">怎么做</div><div>对 continuation token、entityKey、cursor 等不透明串逐层解码,匹配已知明文片段(如业务 id、实体名)。</div>
+        </div>
+        <p><b>YouTube 实例:</b></p>
+        <ul class="tight">
+            <li>feedback 的 <code>continuation</code> → base64 解出含 <code>innertube_studio</code> 字样 → 证明<b>轮询 token 内编码了 frontendUploadId</b>(前端据此轮询「这一次上传」的进度)。</li>
+            <li>delete 响应的 <code>entityKey</code> → URL-decode + base64 解出 <code>creator_video_data_&lt;videoId&gt;</code> → <b>印证「实体层按 videoId 建主键」</b>的存储模型。</li>
+        </ul>
+        <div class="callout c-info" style="margin-bottom:0;">解码把「黑盒里的随机串」变成「内部结构的自述」——是低成本、高回报的一步。</div>
+    </div>
+
+    <!-- 步骤7 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">7</div><h3 style="margin:0;">主动扰动实验 —— 控制变量,反推校验规则</h3></div>
+        <div class="kv" style="margin:10px 0;">
+            <div class="lbl">做什么</div><div>前 6 步都是<b>被动读</b>;这一步才是真正的「测试」:<b>改一个输入、看输出怎么变</b>,由响应差异反推服务端的校验条件。</div>
+            <div class="lbl">怎么做</div><div>用拦截器改写请求(本项目 <code>rules</code> 改 body / <code>responseRules</code> 改响应 / <code>resends</code> 改参重发),严格<b>控制变量</b>:每次只动一个字段。</div>
+            <div class="lbl">读什么</div><div>状态码从 <code>200</code> 变 <code>400</code>、错误码文案(如 <code>INVALID_ARGUMENT</code>)、是否仍被接受——都是校验规则的指纹。</div>
+        </div>
+        <p><b>YouTube 实例(控制变量法):</b></p>
+        <table>
+            <tr><th style="width:220px;">扰动</th><th>观测结果</th><th>反推的内部规则</th></tr>
+            <tr><td><b>成对</b>改 (fuid, scotty)</td><td>请求仍有效</td><td>安全令牌<b>未对 body 整体签名锁定</b> → 改写这条路可行</td></tr>
+            <tr><td><b>只改其一</b>(破坏配对)</td><td><code>400 INVALID_ARGUMENT</code></td><td>「二者必须<b>同源</b>」是硬约束</td></tr>
+        </table>
+        <div class="callout c-warn" style="margin-bottom:0;"><b>加密黑盒的突破口:</b>当关键字段是密文(前端签名/加密),网络层只见密文。此时向页面<b>主世界注入 hook</b>(本项目 <code>jsHooks</code>)抓「明文入参 ↔ 密文出参 + 调用栈」,把加密黑盒也打开——扰动实验才能作用在明文上。</div>
+    </div>
+
+    <!-- 步骤8 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">8</div><h3 style="margin:0;">诚实标注证据边界 —— 给每条结论标价</h3></div>
+        <p class="muted" style="margin:6px 0 12px;">黑盒推断能不能被信任,分水岭在于:<b>把「实测 / 推断 / 语义对应」分开写,绝不把猜测当事实。</b>每条结论都要标注它站在哪一档证据上。</p>
+        <table>
+            <tr><th style="width:150px;">证据档</th><th>含义</th><th>YouTube 实例</th></tr>
+            <tr><td><span class="tag t-srv">✅ 实测</span></td><td>有正文 / 逐字比对 / 实跑扰动</td><td>删除是硬删除(响应体 mutation 实证)</td></tr>
+            <tr><td><span class="tag t-req">⟂ 推断</span></td><td>由时序 / 间接信号合理推出,未直接验</td><td>createvideo 异步不等字节(时序差 30s)</td></tr>
+            <tr><td><span class="tag t-res">≈ 弱推断</span></td><td>仅凭 <code>content-length</code> 等旁证,无正文</td><td>删后重查响应变小 = 实体已消失</td></tr>
+            <tr><td><span class="tag t-cli">◻ 语义对应</span></td><td>接口语义上成立,但非本次样本内闭环</td><td><code>videoId = createvideo 产出</code>(纯删除流里没抓到 create)</td></tr>
+            <tr><td><span class="tag t-cli" style="background:var(--warn)">❓ 待验证</span></td><td>已列为假设,需专门实验才能定</td><td>同一对能否建多个 / 能否秒传 / blob TTL 多久</td></tr>
+        </table>
+        <div class="callout c-key" style="margin-bottom:0;">一份可信的黑盒报告 = <b>结论 + 每条结论的证据档</b>。缺了后半截,再漂亮的结论也只是猜测。</div>
+    </div>
+</section>
+
+<!-- ========== 工具链对应 ========== -->
+<section>
+    <h2>四、方法论 ↔ 本项目工具链对应</h2>
+    <div class="card">
+        <table>
+            <tr><th style="width:130px;">对应步骤</th><th>本项目支路 / 能力</th><th>作用</th></tr>
+            <tr><td>① 被动观测</td><td><code>record</code>(CDP Network)</td><td>被动全站抓时间线,拿干净基线,不改写</td></tr>
+            <tr><td>⑤ 证据升级</td><td><code>record.saveBodies</code>(CDP Fetch <code>getResponseBody</code>)</td><td>关键端点请求/响应体落盘,头/状态 → 正文</td></tr>
+            <tr><td>⑦ 主动扰动</td><td><code>rules</code> / <code>responseRules</code> / <code>resends</code></td><td>改请求体 / 改响应 / 改参重发,控制变量做实验</td></tr>
+            <tr><td>⑦ 突破加密</td><td><code>jsHooks</code>(主世界注入)</td><td>抓明文↔密文+调用栈,打开前端签名/加密黑盒</td></tr>
+        </table>
+        <p class="muted" style="margin-bottom:0;">全字段速查见 <code>拦截器规则配置手册.html</code>;实例结果文档见 <code>YouTube上传流程分析.html</code>。</p>
+    </div>
+</section>
+
+<!-- ========== Checklist ========== -->
+<section>
+    <h2>五、一页可复用 Checklist(逆向新目标时照走)</h2>
+    <div class="card">
+        <div class="callout c-ok" style="margin-top:0;">
+            <ul class="tight" style="margin:2px 0;">
+                <li>☐ <b>①</b> 对一次完整业务操作被动抓全量请求(不改),存一份干净基线时间线。</li>
+                <li>☐ <b>②</b> 按时间排序,按端点聚类计数,切出主链路 vs 噪声;主链路 = 内部阶段划分。</li>
+                <li>☐ <b>③</b> 列出关键标识,逐个追踪:首现位置 → 再现位置 → 逐字比对;推出「谁生成/绑定/校验」。</li>
+                <li>☐ <b>④</b> 对有依赖关系的请求算响应时间差;若 A 早于其依赖完成,标记「异步解耦」。</li>
+                <li>☐ <b>⑤</b> 对每个关键端点抓响应体正文;凡「凭 200 猜的语义」都用正文复核一遍。</li>
+                <li>☐ <b>⑥</b> 把不透明令牌 / key 做 base64 / URL-decode / protobuf 试解,找内嵌明文。</li>
+                <li>☐ <b>⑦</b> 设计控制变量扰动:每次只改一个字段,记录 200/400 与错误码,反推校验规则;字段是密文则先注入 hook 抓明文。</li>
+                <li>☐ <b>⑧</b> 每条结论标证据档(实测 / 推断 / 弱推断 / 语义对应 / 待验证);把「待验证」单列成下一轮实验。</li>
+            </ul>
+        </div>
+        <div class="callout c-info" style="margin-bottom:0;"><b>一句话总结:</b>被动抓全量 → 剥主链路 → 逐字追数据流 → 时序差推异步/因果 → 抓正文坐实 → 解码令牌撬结构 → 控制变量做扰动 → 每条结论标证据强度。</div>
+    </div>
+</section>
+
+<div class="foot">
+    黑盒逆向分析方法论 · 抽象自 <code>YouTube上传流程分析.html</code> 的实操手法 · 目标无关、可复用 · 与实例文档同一设计系统
+</div>
+
+</div>
+</body>
+</html>
