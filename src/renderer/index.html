@@ -2657,10 +2657,13 @@
             <!-- 被拦截请求区:有挂起请求(blocks mode:'hold')时显示,逐条放行/阻断 -->
             <div id="hold-section">
                 <h3>⏸️ 被拦截的请求 · 等待放行</h3>
-                <div class="hold-hint">下列请求命中「挂起」拦截规则,已被拦在发送阶段。可逐条「继续 / 阻断」,或勾选多条后「并发放行 / 阻断选中」(同步发送)。「重发」= 工具自动重发的请求,「真实」= 页面本身发出的。</div>
+                <div class="hold-hint">下列请求命中「挂起」拦截规则,已被拦在发送阶段。可逐条「继续 / 阻断」,或勾选多条后「并发放行」(同步发送)/「顺序放行」(按间隔逐个放)/「阻断选中」。「重发」= 工具自动重发的请求,「真实」= 页面本身发出的。</div>
                 <div class="hold-bulk">
                     <label class="hold-bulk-all"><input type="checkbox" id="hold-select-all"> 全选</label>
                     <button id="hold-continue-selected">并发放行选中</button>
+                    <label class="hold-bulk-all">间隔 <input type="number" id="hold-seq-interval" min="0" step="0.5" value="1" style="width:56px"> 秒</label>
+                    <button id="hold-continue-sequential">顺序放行选中</button>
+                    <button id="hold-seq-stop" class="danger" disabled>停止</button>
                     <button id="hold-abort-selected" class="danger">阻断选中</button>
                 </div>
                 <div id="hold-list"></div>

@@ -279,6 +279,9 @@ const holdListEl = byId<HTMLDivElement>('hold-list');
 const holdSelectAll = byId<HTMLInputElement>('hold-select-all');
 const holdContinueSelectedBtn = byId<HTMLButtonElement>('hold-continue-selected');
 const holdAbortSelectedBtn = byId<HTMLButtonElement>('hold-abort-selected');
+const holdSeqIntervalInput = byId<HTMLInputElement>('hold-seq-interval');
+const holdContinueSeqBtn = byId<HTMLButtonElement>('hold-continue-sequential');
+const holdSeqStopBtn = byId<HTMLButtonElement>('hold-seq-stop');
 const confirmOverlay = byId<HTMLDivElement>('confirm-overlay');
 const confirmTitleEl = byId<HTMLHeadingElement>('confirm-title');
 const confirmMessageEl = byId<HTMLDivElement>('confirm-message');
@@ -1572,6 +1575,78 @@ function bulkDecideHolds(decision: 'continue' | 'abort'): void {
     syncPauseOverlay();
 }
 
+/** 顺序放行进行中的定时器(null=未在进行);供停止 / 清空时清理 */
+let holdSeqTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 顺序放行进行中 UI 态:禁用「顺序放行」、启用「停止」(反之复位) */
+function setSeqRunning(running: boolean): void {
+    holdContinueSeqBtn.disabled = running;
+    holdSeqStopBtn.disabled = !running;
+}
+
+/**
+ * 顺序放行勾选中的被挂起请求:按「间隔(秒)」逐个放行(首条立即,后续每隔 interval 一条),
+ * 而非并发一起发。快照选中 holdId,中途已消失/清空的自动跳过(heldRequests 检查)。
+ */
+function sequentialContinueHolds(): void {
+    if (holdSeqTimer !== null) {
+        return; // 已在进行,忽略重复点击(用「停止」中断)
+    }
+    const ids = Array.from(
+        holdListEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-hold-id]:checked')
+    ).map((cb) => Number(cb.dataset.holdId));
+    if (!ids.length) {
+        logLocal('未勾选任何被拦截请求');
+        return;
+    }
+    const intervalMs = Math.max(0, (Number(holdSeqIntervalInput.value) || 0) * 1000);
+    logLocal(`开始顺序放行 ${ids.length} 条(间隔 ${intervalMs / 1000} 秒)……`);
+    setSeqRunning(true);
+    let i = 0;
+    const step = (): void => {
+        // 跳过中途已消失(被逐条/并发处置或列表清空)的 holdId
+        while (i < ids.length && !heldRequests.has(ids[i])) {
+            i += 1;
+        }
+        if (i >= ids.length) {
+            holdSeqTimer = null;
+            setSeqRunning(false);
+            logLocal('顺序放行完成。');
+            renderHoldList();
+            syncPauseOverlay();
+            return;
+        }
+        const holdId = ids[i];
+        i += 1;
+        const info = heldRequests.get(holdId);
+        if (info) {
+            window.electronAPI.continueRequest(info.runId, holdId);
+            heldRequests.delete(holdId);
+            logLocal(`顺序放行 [${info.method} ${info.url}]`);
+            renderHoldList();
+            syncPauseOverlay();
+        }
+        if (i < ids.length) {
+            holdSeqTimer = setTimeout(step, intervalMs);
+        } else {
+            holdSeqTimer = null;
+            setSeqRunning(false);
+            logLocal('顺序放行完成。');
+        }
+    };
+    step(); // 首条立即放行,后续按间隔
+}
+
+/** 停止顺序放行:清定时器、复位按钮,剩余条目保留在列表 */
+function stopSequentialHolds(): void {
+    if (holdSeqTimer !== null) {
+        clearTimeout(holdSeqTimer);
+        holdSeqTimer = null;
+        logLocal('已停止顺序放行(剩余条目保留在列表)。');
+    }
+    setSeqRunning(false);
+}
+
 function showPauseModal(info: PauseEvent): void {
     currentPauseRunId = info.runId;
     pauseReasonEl.textContent =
@@ -1597,8 +1672,9 @@ function onRequestHeld(info: HeldRequestEvent): void {
     syncPauseOverlay();
 }
 
-/** 收到「挂起请求全部清空」推送(回放结束/停止):清空列表 + overlay */
+/** 收到「挂起请求全部清空」推送(回放结束/停止):清空列表 + overlay + 停掉未完成的顺序放行 */
 function clearHeldRequests(): void {
+    stopSequentialHolds(); // 清掉未完成的顺序放行 timer,防对已清空列表空转
     if (heldRequests.size > 0) {
         heldRequests.clear();
         renderHoldList();
@@ -1674,6 +1750,8 @@ pauseStopBtn.addEventListener('click', () => {
 // 被拦截请求:批量「并发放行 / 阻断选中」+ 全选(逐条按钮在 renderHoldList 里各自绑定)
 holdContinueSelectedBtn.addEventListener('click', () => bulkDecideHolds('continue'));
 holdAbortSelectedBtn.addEventListener('click', () => bulkDecideHolds('abort'));
+holdContinueSeqBtn.addEventListener('click', () => sequentialContinueHolds());
+holdSeqStopBtn.addEventListener('click', () => stopSequentialHolds());
 holdSelectAll.addEventListener('change', () => {
     const checked = holdSelectAll.checked;
     holdListEl

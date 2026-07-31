@@ -824,7 +824,7 @@
 { <span class="k">"urlPattern"</span>: <span class="s">"*/api/pay*"</span>, <span class="k">"when"</span>: <span class="s">"reqHeader('x-env')=='prod' &amp;&amp; body.amount&gt;1000"</span>, <span class="k">"mode"</span>: <span class="s">"hold"</span> }
 <span class="c">// includeResend:连「工具重发的 createvideo」一起 hold(默认重发免疫,加此开关才拦重发)</span>
 { <span class="k">"urlPattern"</span>: <span class="s">"*/upload/createvideo*"</span>, <span class="k">"mode"</span>: <span class="s">"hold"</span>, <span class="k">"includeResend"</span>: <span class="n">true</span> }</pre>
-            <div class="note info"><span class="nt">hold 常配 pause 步骤</span>回放中通常用「暂停,等待人工操作」步骤卡住浏览器让人工操作;此时人工触发的、命中 hold 规则的请求会挂进同一个暂停模态框的列表,一处审查。列表每条标「真实」/「重发」来源,支持<b>逐条放行/阻断</b>或<b>勾选多条并发放行</b>(同步发送)。默认只有真实请求会进列表;要让工具重发的请求也进来,须在对应 block 规则上加 <code class="inline">includeResend: true</code>。</div>
+            <div class="note info"><span class="nt">hold 常配 pause 步骤</span>回放中通常用「暂停,等待人工操作」步骤卡住浏览器让人工操作;此时人工触发的、命中 hold 规则的请求会挂进同一个暂停模态框的列表,一处审查。列表每条标「真实」/「重发」来源,支持<b>逐条放行/阻断</b>、<b>勾选多条并发放行</b>(同步发送)或<b>顺序放行</b>(按可配间隔逐个放、可随时停止)。默认只有真实请求会进列表;要让工具重发的请求也进来,须在对应 block 规则上加 <code class="inline">includeResend: true</code>。</div>
         </div>
 
         <!-- ============ 7. dumps ============ -->
