@@ -953,17 +953,18 @@ export class MacroRunner {
             }
         });
 
-        // ⑥ 响应条件触发重发观察监听:常挂、被动(不改响应),靠 resendResponseWant 标志决定是否处理。
-        //    命中某规则的 responseTrigger.triggerUrl 且 status/headers/bodyJson 条件满足 →
-        //    重发④已捕获的、命中该规则 urlPattern 的那个请求。
+        // ⑥⑦ 被动响应观察(合并成一条监听):先「变量捕获(captures)」写变量池,再「响应条件触发重发」读池并重发。
+        //    顺序必须由链式 await 保证——captures 在 captureNeedsBody 时会 await resp.text() 后才写池(写入落在
+        //    后续微任务),若拆成两条独立监听、trigger 又不读体,trigger 会同步跑完、抢在 capture 写池之前读到空池
+        //    → 重发注入空值。故这里强制等 capture 完整结束(含其 body await 与写池)再启动 trigger。
+        //    两 handler 各自内部 try/catch 吞异常,外层再各挂 .catch 兜底:capture 失败也不阻断 trigger,互不影响主流程。
+        //    handleResponseTrigger 靠 resendResponseWant、handleCaptureResponse 靠 capturesWant 各自门控;
+        //    resp.text() 跨 handler 双读安全(Playwright 缓冲响应体)。
         context.on('response', (resp: Response) => {
-            void this.handleResponseTrigger(resp).catch(() => undefined);
-        });
-
-        // ⑦ 被动变量捕获观察监听:常挂、被动(不改响应、不重发),靠 capturesWant 标志决定是否处理。
-        //    命中某 captureRule 的 urlPattern(+可选 when)→ 提取命名变量 merge 进变量池,供重发 {{占位符}} 注入。
-        context.on('response', (resp: Response) => {
-            void this.handleCaptureResponse(resp).catch(() => undefined);
+            void (async () => {
+                await this.handleCaptureResponse(resp).catch(() => undefined);
+                await this.handleResponseTrigger(resp).catch(() => undefined);
+            })();
         });
 
         // ⑤ 请求体落盘:不走被动 context.on('request')(其 postDataBuffer 对 File/Blob 上传体返回 null),
