@@ -454,7 +454,11 @@ function redoSteps(): void {
 
 // ===== 日志 =====
 function appendLog(message: string, level: 'info' | 'error', time?: string): void {
-    const t = time ?? new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const d = new Date();
+    const t =
+        time ??
+        `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     const line = document.createElement('div');
     line.className = level === 'error' ? 'log-error' : 'log-info';
     line.textContent = `[${t}] ${message}`;

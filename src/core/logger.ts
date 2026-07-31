@@ -18,7 +18,10 @@ export function setLogSink(wc: WebContents): void {
 }
 
 function emit(level: LogLevel, message: string): void {
-    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    // 时间戳格式 MM-DD HH:mm:ss(补零),跨天回放也能分清日期
+    const d = new Date();
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const time = `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     const payload: LogMessage = { level, message, time };
 
     if (level === 'error') {
