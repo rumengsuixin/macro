@@ -38,6 +38,8 @@ export interface HeldRequestEvent {
     url: string;
     method: string;
     resourceType?: string;
+    /** 是否为工具重发请求(带 x-macro-resend);true=重发、false/缺省=真实请求。供 UI 区分展示 */
+    isResend?: boolean;
 }
 
 const api = {

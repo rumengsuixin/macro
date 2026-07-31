@@ -183,6 +183,8 @@ export interface HoldInfo {
     method: string;
     /** 资源类型(Playwright request.resourceType(),如 xhr/fetch/document);仅供展示 */
     resourceType?: string;
+    /** 是否为本工具自己发出的「重发请求」(带 x-macro-resend 标记头);true=重发、false/缺省=真实请求。供 UI 区分展示 */
+    isResend?: boolean;
 }
 
 /** 人工对被挂起请求的处置:continue=放行(route.continue)、abort=丢弃(route.abort) */
@@ -733,6 +735,12 @@ export interface BlockRule {
     when?: string;
     /** 处置模式:`abort`=硬阻断(缺省,向后兼容旧配置);`hold`=挂起等人工放行(仅回放端) */
     mode?: 'abort' | 'hold';
+    /**
+     * 可选:是否**也拦截本工具自己发出的「重发请求」**(带 x-macro-resend 标记头)。缺省 false=重发免疫(现状:
+     * route handler 对重发请求提前放行,不判 block);设 true 则该 block 规则对重发请求也生效(可 hold/abort 重发)。
+     * 仅回放端。用于「连真实请求带工具重发一起拦下人工审查」的场景。
+     */
+    includeResend?: boolean;
 }
 
 /**

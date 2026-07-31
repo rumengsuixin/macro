@@ -213,6 +213,8 @@ export class MacroRunner {
     private requestHeaderRules: RequestHeaderRule[] = [];
     /** 当前生效的真拦截规则(handler 实时读;命中即 route.abort() 硬阻断,不发出) */
     private blockRules: BlockRule[] = [];
+    /** blockRules 中标了 includeResend 的子集(预算,供重发请求分支判断——重发默认免疫、仅这些能拦它) */
+    private resendBlockRules: BlockRule[] = [];
     /** 改写 route 是否已注册(仅 enabled 且有改写/响应头/真拦截规则时注册 → 未启用零 route 开销) */
     private rewriteInstalled = false;
     /** 记录器;record.enabled 时创建(非 null 即正在记录),关闭时置 null。监听常挂,靠它决定是否写 */
@@ -758,33 +760,23 @@ export class MacroRunner {
         // globToRegExp 匹配(不把 urlPattern 交给 Playwright,避免 glob 方言漂移)。每条必 continue。
         this.rewriteHandler = async (route: Route, request: Request): Promise<void> => {
             try {
-                // 重发请求(页面内 fetch,带标记头)直接放行:它已是最终请求,不再被改写(也防自触发/自阻断)
-                if (isResendOrigin(request.headers())) {
-                    await route.continue();
-                    return;
-                }
-                // 真拦截:命中 block 规则(urlPattern + method + 请求头 / query / body / when 复合 AND)在
-                // 发送阶段拦下,按 mode 处置。放在 isResendOrigin 之后 → 工具自己发的重发请求不会被自己阻断;
-                // 放在改写之前 → 命中即拦最干净。请求头 / 请求体在回放端 route handler 同步可得。
-                const blockRule = matchBlockRule(
-                    this.blockRules,
-                    request.url(),
-                    request.method(),
-                    request.headers(),
-                    request.postData()
-                );
-                if (blockRule) {
+                // block 处置(hold 挂起等人工 / abort 硬阻断):重发分支与真实分支共用同一处置逻辑。
+                const applyBlock = async (blockRule: BlockRule): Promise<void> => {
+                    const isResend = isResendOrigin(request.headers());
                     if (blockRule.mode === 'hold') {
                         // 挂起模式:await onHold 把请求悬在半空(pending,不发也不失败),等人工在 UI 上决定。
                         // 运行结束/取消时主进程会把未决 hold 统一 resolve('abort'),此后 route 可能已失效,
                         // continue/abort 抛错由本 handler 末尾的 catch 兜住,安全。
                         logInfo(
-                            `回放请求拦截器:已挂起等待人工放行 [${request.method()} ${request.url()}]`
+                            `回放请求拦截器:已挂起等待人工放行 [${request.method()} ${request.url()}]${
+                                isResend ? '(重发)' : ''
+                            }`
                         );
                         const decision = await this.onHold({
                             url: request.url(),
                             method: request.method(),
                             resourceType: request.resourceType(),
+                            isResend,
                         });
                         if (decision === 'abort') {
                             logInfo(`回放请求拦截器:人工阻断 [${request.method()} ${request.url()}]`);
@@ -798,6 +790,39 @@ export class MacroRunner {
                     // 硬阻断(缺省 abort):直接丢弃、不放行——页面 fetch/XHR 收到网络错误。
                     logInfo(`回放请求拦截器:已阻断 [${request.method()} ${request.url()}]`);
                     await route.abort();
+                };
+
+                // 重发请求(页面内 fetch,带标记头)默认直接放行:它已是最终请求,不再被改写(也防自触发/自阻断)。
+                // 例外:若配置了 includeResend 的 block 规则并命中,则也按其 mode 处置(可 hold/abort 重发请求)。
+                if (isResendOrigin(request.headers())) {
+                    const rb = this.resendBlockRules.length
+                        ? matchBlockRule(
+                              this.resendBlockRules,
+                              request.url(),
+                              request.method(),
+                              request.headers(),
+                              request.postData()
+                          )
+                        : null;
+                    if (rb) {
+                        await applyBlock(rb);
+                        return;
+                    }
+                    await route.continue();
+                    return;
+                }
+                // 真拦截:命中 block 规则(urlPattern + method + 请求头 / query / body / when 复合 AND)在
+                // 发送阶段拦下,按 mode 处置。放在 isResendOrigin 之后 → 非 includeResend 的重发不被误拦;
+                // 放在改写之前 → 命中即拦最干净。请求头 / 请求体在回放端 route handler 同步可得。
+                const blockRule = matchBlockRule(
+                    this.blockRules,
+                    request.url(),
+                    request.method(),
+                    request.headers(),
+                    request.postData()
+                );
+                if (blockRule) {
+                    await applyBlock(blockRule);
                     return;
                 }
                 // 请求头条件改写:命中即算一次全量新头(读**原始请求头**做 when 判定),供下方三条放行路径复用。
@@ -991,6 +1016,8 @@ export class MacroRunner {
             ? cfg.requestHeaderRules ?? []
             : [];
         this.blockRules = sectionEnabled(cfg, 'blocks') ? cfg.blocks ?? [] : [];
+        // 预算 includeResend 子集:重发请求默认免疫 block,仅这些规则能拦到它(重发分支用它,免每请求 filter)
+        this.resendBlockRules = this.blockRules.filter((b) => b.includeResend);
         // 改写 body / 响应头 / 请求头 / 真拦截规则 任一非空即需注册 route(只配其中一类也要拦)
         const want =
             cfg.enabled &&

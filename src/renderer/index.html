@@ -2203,6 +2203,52 @@
             overflow: auto;
         }
 
+        .hold-bulk {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 6px 0 10px;
+            flex-wrap: wrap;
+        }
+
+        .hold-bulk-all {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12.5px;
+            color: var(--text-muted, #94a3b8);
+            cursor: pointer;
+        }
+
+        .hold-bulk button {
+            padding: 5px 12px;
+            font-size: 12.5px;
+        }
+
+        .hold-row .hold-check {
+            flex: 0 0 auto;
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+        }
+
+        .hold-row .hold-source {
+            flex: 0 0 auto;
+            font-weight: 600;
+            font-size: 11px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            color: #fff;
+        }
+
+        .hold-row .hold-source.is-resend {
+            background: #7c3aed;
+        }
+
+        .hold-row .hold-source.is-real {
+            background: #475569;
+        }
+
         .hold-row {
             display: flex;
             align-items: center;
@@ -2611,7 +2657,12 @@
             <!-- 被拦截请求区:有挂起请求(blocks mode:'hold')时显示,逐条放行/阻断 -->
             <div id="hold-section">
                 <h3>⏸️ 被拦截的请求 · 等待放行</h3>
-                <div class="hold-hint">下列请求命中「挂起」拦截规则,已被拦在发送阶段。逐条选择「继续」放行或「阻断」丢弃。</div>
+                <div class="hold-hint">下列请求命中「挂起」拦截规则,已被拦在发送阶段。可逐条「继续 / 阻断」,或勾选多条后「并发放行 / 阻断选中」(同步发送)。「重发」= 工具自动重发的请求,「真实」= 页面本身发出的。</div>
+                <div class="hold-bulk">
+                    <label class="hold-bulk-all"><input type="checkbox" id="hold-select-all"> 全选</label>
+                    <button id="hold-continue-selected">并发放行选中</button>
+                    <button id="hold-abort-selected" class="danger">阻断选中</button>
+                </div>
                 <div id="hold-list"></div>
             </div>
         </div>

@@ -105,6 +105,8 @@ interface HeldRequestEvent {
     url: string;
     method: string;
     resourceType?: string;
+    /** 是否为工具重发请求(带 x-macro-resend);true=重发、false/缺省=真实请求 */
+    isResend?: boolean;
 }
 
 /** 浏览器登录态复用配置(与主进程 BrowserConfig 同构) */
@@ -274,6 +276,9 @@ const pauseStopBtn = byId<HTMLButtonElement>('pause-stop');
 const pauseSection = byId<HTMLDivElement>('pause-section');
 const holdSection = byId<HTMLDivElement>('hold-section');
 const holdListEl = byId<HTMLDivElement>('hold-list');
+const holdSelectAll = byId<HTMLInputElement>('hold-select-all');
+const holdContinueSelectedBtn = byId<HTMLButtonElement>('hold-continue-selected');
+const holdAbortSelectedBtn = byId<HTMLButtonElement>('hold-abort-selected');
 const confirmOverlay = byId<HTMLDivElement>('confirm-overlay');
 const confirmTitleEl = byId<HTMLHeadingElement>('confirm-title');
 const confirmMessageEl = byId<HTMLDivElement>('confirm-message');
@@ -1473,12 +1478,23 @@ function syncPauseOverlay(): void {
     pauseOverlay.classList.toggle('show', pauseOn || holdOn);
 }
 
-/** 渲染被挂起请求列表:每条一行(方法徽标 + URL + 继续/阻断按钮),命令式重建 */
+/** 渲染被挂起请求列表:每条一行(勾选框 + 来源徽标 + 方法徽标 + URL + 继续/阻断按钮),命令式重建 */
 function renderHoldList(): void {
     holdListEl.innerHTML = '';
     for (const info of heldRequests.values()) {
         const row = document.createElement('div');
         row.className = 'hold-row';
+
+        // 行勾选框:供批量「并发放行 / 阻断选中」收集(dataset 存 holdId)
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'hold-check';
+        cb.dataset.holdId = String(info.holdId);
+
+        // 来源徽标:区分「工具重发」与「真实请求」
+        const source = document.createElement('span');
+        source.className = info.isResend ? 'hold-source is-resend' : 'hold-source is-real';
+        source.textContent = info.isResend ? '重发' : '真实';
 
         const method = document.createElement('span');
         method.className = 'hold-method';
@@ -1517,9 +1533,43 @@ function renderHoldList(): void {
         });
 
         actions.append(continueBtn, abortBtn);
-        row.append(method, url, actions);
+        row.append(cb, source, method, url, actions);
         holdListEl.appendChild(row);
     }
+    holdSelectAll.checked = false; // 列表重建后重置全选态(新行默认未勾)
+}
+
+/**
+ * 批量处置勾选中的被挂起请求:并发放行(continue)或阻断(abort)。
+ * 收集 #hold-list 里被勾选行的 holdId,逐个调用现有单条 IPC(fire-and-forget send)——循环即并发,
+ * 主进程逐个 resolve 对应 pending promise、各自 route.continue/abort。逐条按钮逻辑不受影响。
+ */
+function bulkDecideHolds(decision: 'continue' | 'abort'): void {
+    const boxes = Array.from(
+        holdListEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-hold-id]:checked')
+    );
+    if (!boxes.length) {
+        logLocal('未勾选任何被拦截请求');
+        return;
+    }
+    let n = 0;
+    for (const cb of boxes) {
+        const holdId = Number(cb.dataset.holdId);
+        const info = heldRequests.get(holdId);
+        if (!info) {
+            continue;
+        }
+        if (decision === 'continue') {
+            window.electronAPI.continueRequest(info.runId, holdId);
+        } else {
+            window.electronAPI.abortRequest(info.runId, holdId);
+        }
+        heldRequests.delete(holdId);
+        n += 1;
+    }
+    logLocal(`已${decision === 'continue' ? '并发放行' : '阻断'}选中的 ${n} 条被拦截请求`);
+    renderHoldList();
+    syncPauseOverlay();
 }
 
 function showPauseModal(info: PauseEvent): void {
@@ -1619,6 +1669,18 @@ pauseStopBtn.addEventListener('click', () => {
         logLocal('已请求停止回放……');
     }
     hidePauseModal();
+});
+
+// 被拦截请求:批量「并发放行 / 阻断选中」+ 全选(逐条按钮在 renderHoldList 里各自绑定)
+holdContinueSelectedBtn.addEventListener('click', () => bulkDecideHolds('continue'));
+holdAbortSelectedBtn.addEventListener('click', () => bulkDecideHolds('abort'));
+holdSelectAll.addEventListener('change', () => {
+    const checked = holdSelectAll.checked;
+    holdListEl
+        .querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-hold-id]')
+        .forEach((cb) => {
+            cb.checked = checked;
+        });
 });
 
 // ===== webview 操作 =====

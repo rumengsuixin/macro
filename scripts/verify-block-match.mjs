@@ -15,6 +15,7 @@ const {
     queryValue,
     queryAllEqual,
     bodyConditionsMet,
+    isResendOrigin,
 } = require('../dist/core/request-rewrite.js');
 
 let failed = 0;
@@ -160,6 +161,39 @@ console.log('10) matchBlockRule —— 遍历取首个全条件命中,不被仅 
 
     // 空规则表 → null
     assert(matchBlockRule([], 'https://h/x', 'GET', {}, null) === null, '空规则表 → null');
+}
+
+console.log('11) includeResend —— 重发请求仅被 includeResend 的 block 拦(runner 分支仿真)');
+{
+    const url = 'https://studio.youtube.com/youtubei/v1/upload/createvideo?alt=json';
+    const RESEND = { 'x-macro-resend': '1', 'x-macro': '3' }; // 工具重发请求头(带标记 + 业务标记)
+    const REAL = {}; // 真实请求(无标记头)
+
+    // isResendOrigin 正确识别重发 vs 真实
+    assert(isResendOrigin(RESEND) === true, 'isResendOrigin:带 x-macro-resend → true(重发)');
+    assert(isResendOrigin(REAL) === false, 'isResendOrigin:无标记头 → false(真实)');
+
+    // 两条规则:一条普通(不拦重发)、一条 includeResend(拦重发)
+    const rules = [
+        { urlPattern: '*/upload/createvideo*', mode: 'hold' },
+        { urlPattern: '*/upload/createvideo*', mode: 'hold', includeResend: true },
+    ];
+    // 仿 macro-runner:重发请求只用 includeResend 子集判定
+    const resendSubset = rules.filter((r) => r.includeResend);
+    assert(resendSubset.length === 1, 'includeResend 子集正确过滤出 1 条');
+    const rbHit = matchBlockRule(resendSubset, url, 'POST', RESEND, null);
+    assert(!!rbHit && rbHit.includeResend === true, '重发请求 → 命中 includeResend 的 block');
+
+    // 全是普通规则时,重发子集为空 → 重发不被拦(现状:重发免疫)
+    const plainOnly = [{ urlPattern: '*/upload/createvideo*', mode: 'hold' }];
+    assert(
+        matchBlockRule(plainOnly.filter((r) => r.includeResend), url, 'POST', RESEND, null) === null,
+        '无 includeResend 规则 → 重发子集空 → 重发不被拦(向后兼容)'
+    );
+
+    // 真实请求:用全量规则,命中首个(不受 includeResend 影响)
+    const realHit = matchBlockRule(rules, url, 'POST', REAL, null);
+    assert(!!realHit, '真实请求 → 命中全量 block(首个)');
 }
 
 if (failed > 0) {

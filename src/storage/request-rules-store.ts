@@ -524,6 +524,10 @@ function normalizeBlockRule(raw: unknown): BlockRule | null {
     if (r.mode === 'hold') {
         rule.mode = 'hold';
     }
+    // includeResend:仅布尔 true 才收(缺省 false=重发免疫,现状)
+    if (typeof r.includeResend === 'boolean') {
+        rule.includeResend = r.includeResend;
+    }
     return rule;
 }
 
