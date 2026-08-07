@@ -261,6 +261,15 @@ export interface ListDetailExtractConfig {
     detailLinkField: string;
     /** 详情页要抓取的字段(字段名勿与 fields 重名,否则会被覆盖) */
     detailFields: ExtractField[];
+    /**
+     * 可选:详情页内的「子列表项」选择器,用于**一个列表项对应详情页多条明细**的 1:N 场景
+     * (如一个订单的详情页里有一张几百行的 Pin 码表)。
+     * - **不设(缺省)**:现状语义——一个列表项产出**一行**,detailFields 在详情页**整页**求值。
+     * - **设了**:详情页按该选择器逐项产出**一行**,detailFields 相对**子项**求值,
+     *   列表页字段(fields)在这些行里原样重复;子项 0 命中时仍保一行(详情字段填默认),不丢单。
+     * 旧宏无此字段,行为不变。
+     */
+    detailListSelector?: string;
 }
 
 /**

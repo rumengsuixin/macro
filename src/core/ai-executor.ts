@@ -161,6 +161,9 @@ function buildModeHint(mode?: ExtractFields['mode'], baseRules?: ExtractConfig):
             '结构为 { "mode": "list-detail", "listSelector": "...", "fields": [...], "detailFields": [...] }。',
             '以下是已有的 list 规则,请以它为基础,保留其 listSelector 与 fields 完全不变,',
             '只补充 detailFields(进入详情页后要抓取的字段,字段名勿与 fields 重名)。',
+            '另有可选字段 detailListSelector:当详情页里是「一条列表项对应多条明细」(如一个订单对应一张多行的明细表)时,',
+            '填该明细行的选择器,则每条明细产出一行、detailFields 相对明细行求值;详情页只有单条信息时不要填。',
+            '若输入的现有规则里已带 detailListSelector,请原样保留,不得删除或改写。',
             '现有 list 规则:',
             base,
         ].join('\n');

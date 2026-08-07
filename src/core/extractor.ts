@@ -32,6 +32,13 @@ export interface PaginationContext {
 const PAGE_SETTLE_TIMEOUT = 30000;
 
 /**
+ * 等详情页「子列表」渲染的上限(毫秒)。比 PAGE_SETTLE_TIMEOUT 短:进详情页已过 domcontentloaded,
+ * 子列表要么随页面直出(立即命中、零等待)、要么 AJAX 补渲染(数秒内到)。真正付这个时间的只有
+ * 「本就没有子列表」的条目——若沿用 30s,一批里几十个空详情页会白等十几分钟。
+ */
+const DETAIL_LIST_SETTLE_TIMEOUT = 15000;
+
+/**
  * 每页处理前等列表项渲染就绪(三种翻页模式共用)。
  * 修首页:此前各循环只在 turnPage 后才等,首页之前无等待→AJAX 未就绪 count=0 整页被跳过。
  * 超时不抛(catch):真空结果页自然按 0 项处理,非致命。
@@ -539,37 +546,89 @@ async function extractListDetail(
     logInfo(`列表全部采集完成,共 ${collected.length} 项,开始逐个进入详情页抓取……`);
 
     // ===== 阶段二:逐个进入详情页抓取详情字段 =====
+    // 子列表选择器(可选):设了则详情页逐子项产出一行(1:N 展开),不设沿用「一项一行」
+    const detailListSelector =
+        typeof config.detailListSelector === 'string' ? config.detailListSelector.trim() : '';
     const rows: ExtractRow[] = [];
     for (let i = 0; i < collected.length; i += 1) {
         const { row, detailUrl } = collected[i];
+        let produced: ExtractRow[];
         if (detailUrl) {
             try {
                 await page.goto(detailUrl, { waitUntil: 'domcontentloaded' });
-                for (const field of config.detailFields) {
-                    row[field.name] = await extractFieldValue(
-                        page.locator(field.selector).first(),
-                        field
-                    );
-                }
+                produced = detailListSelector
+                    ? await collectDetailListRows(page, config, row, detailListSelector)
+                    : [await fillDetailFields(page, config, row)];
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 logError(`详情页抓取失败(${detailUrl}):${message},该行详情字段留空。`);
-                for (const field of config.detailFields) {
-                    if (!(field.name in row)) {
-                        row[field.name] = cleanFieldValue(field, '');
-                    }
-                }
+                produced = [defaultDetailRow(config, row)];
             }
         } else {
             // 无详情链接:详情字段填默认值(缺省空串),保证列对齐
-            for (const field of config.detailFields) {
-                row[field.name] = cleanFieldValue(field, '');
-            }
+            produced = [defaultDetailRow(config, row)];
         }
-        logInfo(`详情进度 ${i + 1}/${collected.length}`);
-        rows.push(row);
+        rows.push(...produced);
+        logInfo(
+            `详情进度 ${i + 1}/${collected.length}` +
+                (detailListSelector ? `(本项产出 ${produced.length} 行,累计 ${rows.length} 行)` : '')
+        );
     }
     return rows;
+}
+
+/** 详情字段整页求值并写回该行(不展开子列表时的原有语义) */
+async function fillDetailFields(
+    page: Page,
+    config: ListDetailExtractConfig,
+    row: ExtractRow
+): Promise<ExtractRow> {
+    for (const field of config.detailFields) {
+        row[field.name] = await extractFieldValue(page.locator(field.selector).first(), field);
+    }
+    return row;
+}
+
+/** 详情字段全部填默认值(缺省空串),保证列对齐、不丢该条 */
+function defaultDetailRow(config: ListDetailExtractConfig, row: ExtractRow): ExtractRow {
+    for (const field of config.detailFields) {
+        if (!(field.name in row)) {
+            row[field.name] = cleanFieldValue(field, '');
+        }
+    }
+    return row;
+}
+
+/**
+ * 详情页 1:N 展开:按 detailListSelector 逐子项各产出一行,detailFields 相对子项求值,
+ * 列表页字段(row)在每行原样重复。子项 0 命中时仍保一行(详情字段填默认),不丢该单。
+ * 等待子列表就绪用 DETAIL_LIST_SETTLE_TIMEOUT,超时不抛(无子列表的详情页按 0 项处理)。
+ */
+async function collectDetailListRows(
+    page: Page,
+    config: ListDetailExtractConfig,
+    row: ExtractRow,
+    detailListSelector: string
+): Promise<ExtractRow[]> {
+    await waitListReady(page, detailListSelector, DETAIL_LIST_SETTLE_TIMEOUT);
+    const items = page.locator(detailListSelector);
+    const count = await items.count().catch(() => 0);
+    if (count === 0) {
+        logInfo(`详情页未命中子列表(${detailListSelector}),该条按 1 行输出、详情字段留空。`);
+        return [defaultDetailRow(config, { ...row })];
+    }
+    const out: ExtractRow[] = [];
+    for (let i = 0; i < count; i += 1) {
+        const item = items.nth(i);
+        const detailRow: ExtractRow = { ...row }; // 父行浅拷贝,避免各子行互相覆盖
+        for (const field of config.detailFields) {
+            // 字段选择器留空时,直接取子项本身(与 collectListRows 同款语义)
+            const target = field.selector ? item.locator(field.selector).first() : item;
+            detailRow[field.name] = await extractFieldValue(target, field);
+        }
+        out.push(detailRow);
+    }
+    return out;
 }
 
 /** 按字段类型从定位器取原始值;元素缺失时返回空串(清洗层负责 trim/转换) */
