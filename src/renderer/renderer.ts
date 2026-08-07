@@ -1599,8 +1599,8 @@ function sequentialContinueHolds(): void {
         logLocal('未勾选任何被拦截请求');
         return;
     }
-    const intervalMs = Math.max(0, (Number(holdSeqIntervalInput.value) || 0) * 1000);
-    logLocal(`开始顺序放行 ${ids.length} 条(间隔 ${intervalMs / 1000} 秒)……`);
+    const intervalMs = Math.max(0, Number(holdSeqIntervalInput.value) || 0);
+    logLocal(`开始顺序放行 ${ids.length} 条(间隔 ${intervalMs} 毫秒)……`);
     setSeqRunning(true);
     let i = 0;
     const step = (): void => {
