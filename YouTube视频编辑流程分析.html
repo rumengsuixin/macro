@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube Studio 视频编辑（video_editor）流程分析</title>
+<style>
+    :root {
+        --primary: #0fb0b8;
+        --accent: #ff7a59;
+        --deep: #0e2a33;
+        --ok: #1a9d5a;
+        --warn: #d98a00;
+        --danger: #d64545;
+        --ai: #7c5cff;
+        --bg: #f4f8f9;
+        --card: #ffffff;
+        --line: #d9e4e7;
+        --text: #16323a;
+        --muted: #5c7681;
+        --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        --body: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 0 0 80px; background: var(--bg); color: var(--text);
+        font-family: var(--body); line-height: 1.7; font-size: 15px;
+    }
+    header {
+        background: linear-gradient(135deg, var(--deep), #123f4b);
+        color: #fff; padding: 40px 6% 32px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 28px; }
+    header .sub { color: #a9d4d8; font-size: 14px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 6%; }
+    section { margin-top: 40px; }
+    h2 {
+        font-size: 21px; color: var(--deep); border-left: 5px solid var(--primary);
+        padding-left: 12px; margin: 0 0 16px;
+    }
+    h3 { font-size: 17px; color: var(--deep); margin: 24px 0 10px; }
+    .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 20px 24px; box-shadow: 0 2px 10px rgba(14,42,51,.05); margin-bottom: 18px;
+    }
+    .scroll-x { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef6f7; color: var(--deep); font-weight: 600; }
+    tr:nth-child(even) td { background: #fafcfc; }
+    code { font-family: var(--mono); background: #eef3f4; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; word-break: break-all; }
+    pre {
+        background: var(--deep); color: #d6ecef; font-family: var(--mono); font-size: 12.5px;
+        padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.55;
+    }
+    pre .k { color: #7fd4dc; } pre .s { color: #ffb38a; } pre .c { color: #6f8b93; }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 20px; color: #fff; font-weight: 600; }
+    .t-req { background: var(--primary); } .t-res { background: var(--ai); }
+    .t-cli { background: var(--muted); } .t-srv { background: var(--accent); }
+    .badge { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #eef3f4; color: var(--deep); }
+    .ev { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 4px; font-weight: 600; white-space: nowrap; }
+    .ev-real { background: #e4f6ec; color: #10683c; border: 1px solid #a9dcc0; }
+    .ev-infer { background: #fff4e2; color: #8a5800; border: 1px solid #f0cf92; }
+    .ev-none { background: #f0f2f3; color: #5c7681; border: 1px solid #d3dcdf; }
+    .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .step-num {
+        width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex: 0 0 auto;
+    }
+    .callout { border-radius: 10px; padding: 14px 18px; margin: 14px 0; border-left: 4px solid; }
+    .c-key { background: #fff6f2; border-color: var(--accent); }
+    .c-ok { background: #eefaf2; border-color: var(--ok); }
+    .c-warn { background: #fff8e8; border-color: var(--warn); }
+    .c-info { background: #eef6fb; border-color: #2f8fd6; }
+    .c-bad { background: #fdeeee; border-color: var(--danger); }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 16px; font-size: 13.5px; }
+    .kv .lbl { color: var(--muted); }
+    .timeline { position: relative; margin: 10px 0 0 6px; padding-left: 22px; border-left: 2px dashed var(--line); }
+    .tl-item { position: relative; padding: 4px 0 14px; }
+    .tl-item::before {
+        content: ''; position: absolute; left: -29px; top: 8px; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--card); border: 3px solid var(--primary);
+    }
+    .tl-item.hi::before { border-color: var(--accent); }
+    .tl-item.aux::before { border-color: var(--line); width: 8px; height: 8px; left: -27px; }
+    .tl-t { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .arrow { text-align: center; color: var(--primary); font-size: 20px; margin: -6px 0; }
+    ul.tight { margin: 6px 0; padding-left: 22px; }
+    ul.tight li { margin: 3px 0; }
+    .foot { margin-top: 50px; text-align: center; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+    <div class="wrap" style="padding:0;">
+        <h1>✂️ YouTube Studio 视频编辑（video_editor）流程分析</h1>
+        <div class="sub">基于真实抓包时间线逆向 · 本次实证样本 = blur 打码 · 《YouTube 上传流程分析》姊妹篇</div>
+    </div>
+</header>
+
+<div class="wrap">
+
+<!-- ========== 文档信息 ========== -->
+<section>
+    <h2>一、文档信息</h2>
+    <div class="card">
+        <div class="kv">
+            <div class="lbl">数据来源</div><div><code>timelines/timeline-replay-20260810-161150948.jsonl</code>（180 行 = 90 请求 + 90 响应，<b>0 失败</b>）<br><code>dumps/rec-index-20260810-161150948.jsonl</code>（148 行索引）+ 148 个请求/响应体文件</div>
+            <div class="lbl">抓取方式</div><div>macro 回放端「只记录不修改」支路（<code>request-rules.json</code> 的 <code>record</code> 段），被动观测、不改写任何请求；本次<b>另开了 <code>saveBodies</code></b>，把 4 个关键端点的<b>完整请求体 + 响应体</b>各落成独立文件</div>
+            <div class="lbl">抓取时间</div><div>2026-08-10 08:11:55.403 ~ 08:16:16.157 UTC（总跨度 <b>260.8 秒</b>）</div>
+            <div class="lbl">操作样本</div><div>对已发布视频施加 <b>blur 打码</b>（2 个矩形模糊区，整片生效）并保存</div>
+            <div class="lbl">目标视频</div><div><code>T6q1g5SPGps</code>，标题「A 4」，<b>640×360 / 20,033 ms / 60 fps</b><br>原始上传文件名 <code>originalFilename: "A.mp4"</code>（编辑<b>不改写</b>该字段）</div>
+            <div class="lbl">目标频道</div><div><code>UCkbDU_zD8CNUmrHrlQNqEbw</code>（角色 OWNER）</div>
+            <div class="lbl">客户端版本</div><div>YouTube Studio innertube <code>clientName=62</code>，<code>clientVersion=1.20260805.02.02</code></div>
+        </div>
+        <p class="muted">与上一篇的关键差异：本次<b>有响应体</b>（<code>saveBodies</code> 落盘），因此下文的状态机演进、枚举值、版本号均为<b>逐字实证</b>而非推断。长令牌按长度截断展示。</p>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">证据级图例</h3>
+        <p style="margin:0;">
+            <span class="ev ev-real">抓包实证</span> 可从本次两个 jsonl + 落盘 body 中逐字复核 ·
+            <span class="ev ev-infer">合理推断</span> 由实证事实外推，未直接观测 ·
+            <span class="ev ev-none">未验证</span> 本次未抓到该数据，仅记录存在性
+        </p>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">复核命令（任何数字都可自查）</h3>
+        <pre><span class="c"># 请求路径频次（第三章表格的来源）</span>
+node -e "const fs=require('fs');const c=new Map();
+for(const l of fs.readFileSync('timelines/timeline-replay-20260810-161150948.jsonl','utf8').split(/\r?\n/).filter(Boolean)){
+  const o=JSON.parse(l); if(o.kind!=='request')continue; const u=new URL(o.url);
+  const k=o.method+' '+u.host+u.pathname; c.set(k,(c.get(k)||0)+1);}
+[...c].sort((a,b)=>b[1]-a[1]).forEach(([k,n])=>console.log(n,k));"
+
+<span class="c"># 轮询状态机演进（第六章表格的来源）</span>
+node -e "const fs=require('fs');
+const idx=fs.readFileSync('dumps/rec-index-20260810-161150948.jsonl','utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const t0=new Date(idx[0].t).getTime();
+for(const r of idx.filter(x=>x.kind==='response'&&x.url.includes('get_video_processing_status'))){
+  const o=JSON.parse(fs.readFileSync('dumps/'+r.file,'utf8'));
+  console.log(((new Date(r.t)-t0)/1000).toFixed(1)+'s',o.videoProcessingStatus,o.lastPublishedEditVersion);}"</pre>
+    </div>
+</section>
+
+<!-- ========== 结论速览 ========== -->
+<section>
+    <h2>二、核心结论速览（TL;DR）</h2>
+
+    <div class="callout c-key">
+        <b>编辑不是「一个请求改完」，而是「提交 → 异步调度 → 轮询收敛 → 资源重建」四段式：</b>
+        <ol class="tight">
+            <li><b>① 提交</b> → <code>POST /youtubei/v1/video_editor/edit_video</code>：带上编辑内容 + <code>externalVideoId</code> + <b><code>baseVersion</code></b>，服务端 1.74 秒返回 <code>EDIT_EXECUTION_STATUS_SCHEDULED</code> —— <b>只是「已排期」，什么都还没做</b>。</li>
+            <li><b>② 轮询</b> → <code>POST /youtubei/v1/video_editor/get_video_processing_status</code>：每 ~3.5 秒一次，本次<b>连打 59 次</b>。</li>
+            <li><b>③ 收敛</b> → 第 59 次（<b>t+218.1s</b>）返回 <code>EDITED</code> 且 <code>lastPublishedEditVersion</code> 由 <code>1</code> 跳到 <code>2</code>，前端立即停止轮询。</li>
+            <li><b>④ 重建</b> → t+218.3s 起，编辑器全量重拉波形 / 信息卡 / 片尾 / 缩略图 / 新转码流。</li>
+        </ol>
+        <span class="ev ev-real">抓包实证</span>
+    </div>
+
+    <div class="callout c-bad">
+        <b>⚠️ 最重要的一条：<code>upload/feedback</code> 对编辑流程「失灵」，全程谎报 100%。</b>
+        <ul class="tight">
+            <li>编辑期间 feedback 每 60.5 秒心跳一次，<b>5 次全部返回 <code>uploadStatus: SUCCESS</code>、进度条 <code>fractionCompleted: 1</code>、文案「已处理 100%。」「视频已就绪」</b>——而此时编辑根本没完成。</li>
+            <li>上一篇《上传流程分析》里 feedback 是判断进度的主力；<b>在编辑链路上照搬它会得到完全错误的结论</b>。</li>
+            <li>编辑进度的<b>唯一可靠来源是 <code>get_video_processing_status</code></b>。</li>
+        </ul>
+        <span class="ev ev-real">抓包实证</span>
+    </div>
+
+    <div class="callout c-ok">
+        <b>编辑复用上传期的标识，不产生新视频：</b>
+        <ul class="tight">
+            <li><code>externalVideoId</code> 全程不变（<code>T6q1g5SPGps</code>）——编辑是<b>就地改动</b>，不是「新建再替换」。</li>
+            <li>feedback 的 continuation 解出的 <code>frontendUploadId</code> 仍是<b>上传时那一个</b>（<code>innertube_studio:1B2B34C9-…:0</code>）——上传期标识被编辑期复用，直接衔接上一篇第五章。</li>
+            <li>并发控制走 <b><code>baseVersion</code> 乐观锁</b>：提交时报当前版本 <code>"1"</code>，成功后服务端版本变 <code>"2"</code>。</li>
+        </ul>
+        <span class="ev ev-real">抓包实证</span>
+    </div>
+</section>
+
+<!-- ========== 时序总表 ========== -->
+<section>
+    <h2>三、完整请求时序</h2>
+
+    <div class="card">
+        <h3 style="margin-top:0;">3.1 主链路（t0 = <code>edit_video</code> 发出时刻 2026-08-10 08:11:55.399Z）</h3>
+        <div class="timeline">
+            <div class="tl-item hi"><span class="tl-t">t+0.00s</span> · <span class="tag t-req">① 提交编辑</span> <code>POST /youtubei/v1/video_editor/edit_video</code> <span class="muted">blurRegions×2 · baseVersion=1 → 1,740ms, 200</span></div>
+            <div class="tl-item"><span class="tl-t">t+1.72s</span> · <span class="tag t-res">② 响应</span> <code>executionStatus: EDIT_EXECUTION_STATUS_SCHEDULED</code> <span class="muted">已排期，未开始处理</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+1.82s</span> · <span class="tag t-cli">列表刷新</span> <code>POST /creator/get_creator_videos</code> <span class="muted">mask 只要 inlineEditProcessingStatus → PROCESSING</span></div>
+            <div class="tl-item hi"><span class="tl-t">t+4.76s</span> · <span class="tag t-req">③ 轮询启动</span> <code>POST /video_editor/get_video_processing_status</code> <span class="muted">第 1/59 次 → PROCESSING, pubVer=1</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+13.5s</span> · <span class="tag t-cli">feedback 心跳</span> <code>POST /upload/feedback</code> <span class="muted">SUCCESS + 100%（<b>与实际进度无关</b>）</span></div>
+            <div class="tl-item"><span class="tl-t">t+8.2s ~ 214.5s</span> · <span class="tag t-req">轮询持续</span> <span class="muted">第 2~58 次，间隔中位 <b>3,475ms</b>，全部 PROCESSING / pubVer=1</span></div>
+            <div class="tl-item hi"><span class="tl-t">t+218.1s</span> · <span class="tag t-srv">④ 收敛</span> <code>videoProcessingStatus: EDITED</code> <span class="muted">第 59/59 次 · pubVer 1→<b>2</b> · transVer 1→<b>2</b> · <b>轮询立即停止</b></span></div>
+            <div class="tl-item hi"><span class="tl-t">t+218.3s</span> · <span class="tag t-req">⑤ 编辑器重载</span> <span class="muted">同一秒并发 4 个端点：<code>get_audio_waveform_url</code> / <code>list_creator_info_cards</code> / <code>get_creator_endscreens</code> / <code>get_last_published_edits</code></span></div>
+            <div class="tl-item aux"><span class="tl-t">t+219.0s</span> · <span class="tag t-cli">新缩略图</span> <code>GET i9.ytimg.com/vi/T6q1g5SPGps/mqdefault.jpg</code> <span class="muted">sqp 参数已变 → 封面按新画面重生成</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+219.1s</span> · <span class="tag t-cli">新转码流</span> <code>GET rr4---sn-npoeeney.c.youtube.com/videoplayback</code> <span class="muted">换了 CDN 节点与 ei/expire → 播放的是编辑后的新流</span></div>
+            <div class="tl-item aux"><span class="tl-t">t+219.2s</span> · <span class="tag t-cli">音频波形</span> <code>GET www.youtube.com/api/editor/waveform</code> <span class="muted">editlist=waveform-4faab583948f1a9b… → 1,825ms</span></div>
+            <div class="tl-item"><span class="tl-t">t+256.1s</span> · <span class="tag t-srv">⑥ 非主资产完成</span> <code>POST /upload/feedback</code> <span class="muted">360p 由 UNAVAILABLE → <b>AVAILABLE</b>，checks 由 INLINE_EDIT_IN_PROGRESS → <b>COMPLETED</b>（比 EDITED 晚 38 秒）</span></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">3.2 全部 90 条请求按端点归类</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>次数</th><th>方法</th><th>端点</th><th>角色</th><th>响应耗时 min/中位/max (ms)</th></tr>
+            <tr><td><b>59</b></td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/video_editor/get_video_processing_status</code></td><td><b>主进度源</b>，~3.5s 轮询</td><td>412 / 454 / 1554</td></tr>
+            <tr><td>9</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/creator/get_creator_videos</code></td><td>列表/详情刷新，5 种不同 mask</td><td>426 / 713 / 2019</td></tr>
+            <tr><td>5</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/upload/feedback</code></td><td>60.5s 心跳（对编辑失灵）</td><td>199 / 225 / 625</td></tr>
+            <tr><td>6</td><td>GET</td><td><code>rr4/rr5---sn-*.c.youtube.com/videoplayback</code></td><td>编辑器预览拉流</td><td>477 / 560 / 1462</td></tr>
+            <tr><td>2</td><td>GET</td><td><code>i9.ytimg.com/vi/T6q1g5SPGps/mqdefault.jpg</code></td><td>缩略图（编辑前后各一次）</td><td>1236 / 2136 / 2136</td></tr>
+            <tr><td>2</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/video_editor/get_audio_waveform_url</code></td><td>音轨波形地址</td><td>943 / 947 / 947</td></tr>
+            <tr><td><b>1</b></td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/video_editor/edit_video</code></td><td><b>唯一的写操作</b></td><td>1740</td></tr>
+            <tr><td>1</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/video_editor/get_last_published_edits</code></td><td>拉已发布编辑（<code>baseVersion</code> 的可能来源）</td><td>501</td></tr>
+            <tr><td>1</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/creator/list_creator_info_cards</code></td><td>信息卡重载</td><td>432</td></tr>
+            <tr><td>1</td><td>POST</td><td><code>studio.youtube.com/youtubei/v1/creator/get_creator_endscreens</code></td><td>片尾重载</td><td>484</td></tr>
+            <tr><td>1</td><td>GET</td><td><code>www.youtube.com/api/editor/waveform</code></td><td>波形数据本体</td><td>1825</td></tr>
+            <tr><td>1</td><td>POST</td><td><code>accounts.youtube.com/RotateCookies</code></td><td>会话保活（t+155.6s，与编辑无关）</td><td>521</td></tr>
+            <tr><td>1</td><td>POST</td><td><code>play.google.com/log</code></td><td>BotGuard / streamz 埋点</td><td>615</td></tr>
+        </table>
+        </div>
+        <p class="muted">合计 90 条请求 / 90 条响应 / <b>0 条失败</b>。轮询占 65.6%——编辑链路的网络开销几乎全在「等」。</p>
+    </div>
+</section>
+
+<!-- ========== 主链路详解 ========== -->
+<section>
+    <h2>四、编辑主链路四阶段详解</h2>
+
+    <!-- 阶段 1 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">1</div><h3 style="margin:0;">提交编辑 —— <code>POST /youtubei/v1/video_editor/edit_video</code></h3></div>
+        <p class="muted">整条链路<b>唯一的写操作</b>。落盘文件：<code>dumps/rec-1786349515398-interception_job_1_0-req.json</code>（1,680 B）</p>
+
+        <p><span class="tag t-req">关键请求头</span>（敏感值只示前缀）</p>
+        <pre><span class="k">Authorization</span>: SAPISIDHASH 1786349515_a4f3b73fd9e533043eca95d10e2133ab2fb18…
+<span class="k">Content-Type</span>: application/json
+<span class="k">X-YouTube-Client-Name</span>: 62                                  <span class="c"># WEB_CREATOR</span>
+<span class="k">X-YouTube-Client-Version</span>: 1.20260805.02.02
+<span class="k">X-YouTube-Delegation-Context</span>: EhhVQ2tiRFVfekQ4Q05VbXJIcmxRTnFFYncqAggI
+<span class="k">X-YouTube-Page-Label</span>: youtube.studio.web_20260805_02_RC02
+<span class="k">X-YouTube-Page-CL</span>: 959635348
+<span class="k">X-Goog-Visitor-Id</span>: Cgs3bmtDU3FWelpWSSiLjObTBjIKCgJTRxIEGgAgRGLfAgrcAjIwLllUPVA1…
+<span class="k">X-Goog-AuthUser</span>: 0
+<span class="k">X-Origin</span>: https://studio.youtube.com
+<span class="k">Referer</span>: https://studio.youtube.com/video/T6q1g5SPGps/editor   <span class="c"># 指向编辑器页</span></pre>
+        <p class="muted"><code>SAPISIDHASH</code> = <code>&lt;unix秒&gt;_&lt;SHA1(时间戳 空格 SAPISID Cookie 空格 Origin)&gt;</code>，<b>时间戳 1786349515 与请求发出时刻一致</b>，即每次请求现算、不可跨时段复用。<span class="ev ev-real">抓包实证</span></p>
+
+        <p><span class="tag t-req">请求体结构</span>（长令牌按长度截断）</p>
+        <pre>{
+  <span class="k">"videoEdit"</span>: {
+    <span class="k">"blurEdit"</span>: { <span class="k">"edit"</span>: { <span class="k">"blurRegions"</span>: [ <span class="c">/* 见第五章逐字详解 */</span> ] } }
+  },
+  <span class="k">"externalVideoId"</span>: <span class="s">"T6q1g5SPGps"</span>,          <span class="c"># 就地改动，不产生新 ID</span>
+  <span class="k">"baseVersion"</span>: <span class="s">"1"</span>,                          <span class="c"># ★ 乐观锁：客户端声明「我基于第 1 版改」</span>
+  <span class="k">"context"</span>: {
+    <span class="k">"client"</span>: { <span class="k">"clientName"</span>: 62, <span class="k">"clientVersion"</span>: <span class="s">"1.20260805.02.02"</span>,
+                <span class="k">"hl"</span>: <span class="s">"zh-CN"</span>, <span class="k">"gl"</span>: <span class="s">"SG"</span>, <span class="k">"utcOffsetMinutes"</span>: 480,
+                <span class="k">"screenWidthPoints"</span>: 1280, <span class="k">"screenHeightPoints"</span>: 720, … },
+    <span class="k">"request"</span>: { <span class="k">"returnLogEntry"</span>: true, <span class="k">"internalExperimentFlags"</span>: [],
+                 <span class="k">"eats"</span>: <span class="s">"AeCS5zDkGI6W5N8bEHNyYDv6ezBDTgWPbKGkRAZKdoGZqRRtCMTIRhhj…"</span>,
+                 <span class="k">"sessionInfo"</span>: { <span class="k">"token"</span>: <span class="s">"AQc-WVm5SI9Qk4kjVdAEE8pLZYGjLA9SlNhkWtjAAbha…"</span> },
+                 <span class="k">"consistencyTokenJars"</span>: [] },
+    <span class="k">"user"</span>: { <span class="k">"delegationContext"</span>: { <span class="k">"externalChannelId"</span>: <span class="s">"UCkbDU_zD8CNUmrHrlQNqEbw"</span>,
+                <span class="k">"roleType"</span>: { <span class="k">"channelRoleType"</span>: <span class="s">"CREATOR_CHANNEL_ROLE_TYPE_OWNER"</span> } },
+              <span class="k">"serializedDelegationContext"</span>: <span class="s">"EhhVQ2tiRFVfekQ4Q05VbXJIcmxRTnFFYncqAggI"</span> },
+    <span class="k">"clickTracking"</span>: { <span class="k">"visualElement"</span>: { <span class="k">"veType"</span>: 74616 } },
+    <span class="k">"clientScreenNonce"</span>: <span class="s">"Z98TsQ8GFm8-8JEk"</span>
+  }
+}</pre>
+        <div class="callout c-key" style="margin-bottom:0;">
+            <b><code>videoEdit</code> 是编辑类型的分派点。</b> 本次样本走 <code>videoEdit.blurEdit</code>；按 <code>videoEditEligibility</code> 暴露的能力清单（见 4.5），同链路还应有 trim / audioswap / mute / revertToOriginal 等平行分支，<b>共用同一个 <code>edit_video</code> 端点、同一套 <code>baseVersion</code> 与轮询机制</b>，仅 <code>videoEdit</code> 下的子键不同。<span class="ev ev-infer">合理推断</span>（本次只抓到 blur 一种）
+        </div>
+    </div>
+
+    <!-- 阶段 2 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">2</div><h3 style="margin:0;">异步调度确认 —— 响应体只有一个字段有用</h3></div>
+        <p class="muted">落盘文件：<code>dumps/rec-1786349517120-interception_job_1_0-res.json</code>（3,681 B）· 耗时 1,740ms · HTTP 200</p>
+        <pre>{
+  <span class="k">"responseContext"</span>: {
+    <span class="k">"serviceTrackingParams"</span>: [
+      { <span class="k">"service"</span>: <span class="s">"GFEEDBACK"</span>, <span class="k">"params"</span>: [ …, { <span class="k">"key"</span>: <span class="s">"e"</span>, <span class="k">"value"</span>: <span class="s">"9406010,23804281,…"</span> } ] },
+      { <span class="k">"service"</span>: <span class="s">"CSI"</span>, <span class="k">"params"</span>: [ { <span class="k">"key"</span>: <span class="s">"c"</span>, <span class="k">"value"</span>: <span class="s">"WEB_CREATOR"</span> },
+                                    { <span class="k">"key"</span>: <span class="s">"EditVideo_rid"</span>, <span class="k">"value"</span>: <span class="s">"0x3821190a94785f50"</span> } ] },
+      …
+    ],
+    <span class="k">"responseId"</span>: <span class="s">"IhMI2v_fws6VlgMVtBmtBh31UAi4"</span>
+  },
+  <span class="k">"executionStatus"</span>: <span class="s">"EDIT_EXECUTION_STATUS_SCHEDULED"</span>      <span class="c"># ★ 全部有效载荷就这一行</span>
+}</pre>
+        <div class="callout c-warn">
+            <b>200 ≠ 编辑完成。</b> 响应体<b>不含</b>新版本号、不含任务 ID、不含预计耗时。<code>SCHEDULED</code> 的字面意思就是「已排进队列」——真正的处理在此之后还要跑 <b>216 秒</b>。任何「发完 edit_video 就认为改好了」的自动化都会拿到旧内容。<span class="ev ev-real">抓包实证</span>
+        </div>
+        <p class="muted">附带发现：<code>CSI.EditVideo_rid = 0x3821190a94785f50</code> 是本次请求的服务端 request id，可用于跨日志追踪，但<b>后续轮询请求里并不携带它</b>——轮询靠 <code>encryptedVideoId</code> 定位，不靠任务句柄。<span class="ev ev-real">抓包实证</span></p>
+    </div>
+
+    <!-- 阶段 3 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">3</div><h3 style="margin:0;">轮询收敛 —— <code>POST /video_editor/get_video_processing_status</code> ×59</h3></div>
+
+        <p><span class="tag t-req">请求体</span>（极简，去掉 <code>context</code> 后只剩一个字段）</p>
+        <pre>{
+  <span class="k">"context"</span>: { <span class="c">/* 与 edit_video 完全相同的 client/request/user 结构 */</span> },
+  <span class="k">"encryptedVideoId"</span>: <span class="s">"T6q1g5SPGps"</span>       <span class="c"># ★ 注意字段名与 edit_video 的 externalVideoId 不同</span>
+}</pre>
+        <div class="callout c-info">
+            <b>同一个视频 ID，两个端点用了两个不同的字段名：</b><code>edit_video</code> 用 <code>externalVideoId</code>，<code>get_video_processing_status</code> 用 <code>encryptedVideoId</code>，值都是 <code>T6q1g5SPGps</code>。构造请求时不能想当然互换。<span class="ev ev-real">抓包实证</span>
+        </div>
+
+        <p><span class="tag t-res">响应体</span>（去掉 <code>responseContext</code> 后只有三个字段）</p>
+        <pre>{
+  <span class="k">"videoProcessingStatus"</span>: <span class="s">"VIDEO_PROCESSING_STATUS_PROCESSING"</span>,
+  <span class="k">"lastPublishedEditVersion"</span>: <span class="s">"1"</span>,
+  <span class="k">"lastTranscodesPublishedEditVersion"</span>: <span class="s">"1"</span>
+}</pre>
+
+        <h3>3.1 59 次轮询的完整演进</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>轮次</th><th>相对时刻</th><th><code>videoProcessingStatus</code></th><th><code>lastPublishedEditVersion</code></th><th><code>lastTranscodesPublishedEditVersion</code></th></tr>
+            <tr><td>1</td><td>t+5.2s</td><td><code>…_PROCESSING</code></td><td>1</td><td>1</td></tr>
+            <tr><td>2 ~ 58</td><td>t+8.6s ~ 214.5s</td><td colspan="3" style="text-align:center;"><b>57 次全部完全相同</b>（PROCESSING / 1 / 1），无任何中间进度信息</td></tr>
+            <tr style="background:#fff6f2;"><td><b>59</b></td><td><b>t+218.1s</b></td><td><b><code>VIDEO_PROCESSING_STATUS_EDITED</code></b></td><td><b>2</b></td><td><b>2</b></td></tr>
+        </table>
+        </div>
+        <p class="muted">轮询间隔：min 3,426ms / 中位 <b>3,475ms</b> / max 4,565ms / 均值 3,669ms —— 固定 ~3.5 秒，无退避。<span class="ev ev-real">抓包实证</span></p>
+
+        <div class="callout c-bad">
+            <b>这个端点不提供百分比进度。</b> 58 次响应字节级相同，直到最后一次才翻转。它是一个<b>二值状态机</b>，不是进度条——想给用户显示「已完成 40%」在这条链路上<b>拿不到数据</b>（feedback 的 100% 是假的，见第六章）。<span class="ev ev-real">抓包实证</span>
+        </div>
+
+        <div class="callout c-ok" style="margin-bottom:0;">
+            <b>自动化的终止条件应写成（两者同时满足最稳）：</b>
+            <ul class="tight">
+                <li><code>videoProcessingStatus == "VIDEO_PROCESSING_STATUS_EDITED"</code></li>
+                <li><code>lastPublishedEditVersion &gt; 提交时用的 baseVersion</code>（本次 1 → 2）</li>
+            </ul>
+            只判状态字符串在「连续编辑第二次」时可能撞上上一轮的残留 <code>EDITED</code>；加版本号比较可以排除。<span class="ev ev-infer">合理推断</span>（本次只做了一轮编辑，未实测连续两轮）
+        </div>
+    </div>
+
+    <!-- 阶段 4 -->
+    <div class="card">
+        <div class="step-head"><div class="step-num">4</div><h3 style="margin:0;">资源重建 —— 编辑完成后的连锁刷新</h3></div>
+        <p>t+218.3s（<code>EDITED</code> 之后 0.2 秒）编辑器发起<b>同一秒内的 4 个并发请求</b>，随后拉新缩略图与新转码流：</p>
+        <div class="scroll-x">
+        <table>
+            <tr><th>时刻</th><th>请求</th><th>说明</th><th>响应体</th></tr>
+            <tr><td>t+218.3s</td><td><code>POST /video_editor/get_audio_waveform_url</code></td><td>取新音轨波形地址</td><td><span class="ev ev-none">未验证</span> 未在 saveBodies 白名单内</td></tr>
+            <tr><td>t+218.3s</td><td><code>POST /creator/list_creator_info_cards</code></td><td>信息卡重载（时间轴变了要重定位）</td><td><span class="ev ev-none">未验证</span></td></tr>
+            <tr><td>t+218.3s</td><td><code>POST /creator/get_creator_endscreens</code></td><td>片尾重载</td><td><span class="ev ev-none">未验证</span></td></tr>
+            <tr><td>t+218.3s</td><td><code>POST /video_editor/get_last_published_edits</code></td><td><b>拉「已发布的编辑」——极可能是下次 <code>baseVersion</code> 的来源</b></td><td><span class="ev ev-none">未验证</span></td></tr>
+            <tr><td>t+219.0s</td><td><code>GET i9.ytimg.com/…/mqdefault.jpg</code></td><td>新封面，<code>sqp</code> 参数由 <code>CNiO5tMG…</code> 变为 <code>CISR5tMG…</code></td><td>—</td></tr>
+            <tr><td>t+219.1s</td><td><code>GET rr4---sn-npoeeney…/videoplayback</code></td><td>新转码流（CDN 节点由 rr5 变 rr4，<code>ei</code>/<code>expire</code> 全新）</td><td>—</td></tr>
+            <tr><td>t+219.2s</td><td><code>GET www.youtube.com/api/editor/waveform</code></td><td><code>editlist=Chl3YXZlZm9ybS00ZmFhYjU4Mzk0OGYxYTli…</code> → 1,825ms</td><td>—</td></tr>
+            <tr style="background:#fff6f2;"><td>t+258.1s</td><td><code>POST /creator/get_creator_videos</code></td><td><b>缩略图候选帧 3 个 <code>externalImageId</code> 全部换新</b>（见下）</td><td><span class="ev ev-real">抓包实证</span></td></tr>
+        </table>
+        </div>
+
+        <div class="callout c-key">
+            <b>画面确实被重新编码的硬证据（比 URL 参数变化有力得多）：</b><br>
+            <code>thumbnailEditorState.stills[].externalImageId</code> 在编辑前后<b>三个候选帧 ID 全部改变</b>：
+            <pre style="margin:8px 0 0;">编辑前 (t+3.2s / t+13.1s):  IMFOWkrBTV8e4 , IMKqLuYxsvVWs , IMQcJqUyYPM9M
+编辑后 (t+258.1s / t+260.2s): IMQBJVxJeSRDs , IMaPYo7qKFiyU , IMIjW_p-guDrs</pre>
+            候选帧是<b>从视频流里抽取的实体图片</b>，ID 全换说明源画面被重新解码抽帧——不是缓存刷新或 URL 签名更换。<span class="ev ev-real">抓包实证</span>
+        </div>
+        <div class="callout c-warn">
+            <b><code>get_last_published_edits</code> 只抓到请求行、没抓到响应体</b>（不在本次 <code>saveBodies</code> 白名单）。因此「<code>baseVersion</code> 从哪来」这一环<b>尚未闭环</b>——它可能来自该端点，也可能来自 <code>get_video_processing_status</code> 的 <code>lastPublishedEditVersion</code>。后者本次已实证可用，建议自动化<b>直接用后者</b>，避免依赖未验证端点。<span class="ev ev-none">未验证</span>
+        </div>
+
+        <h3>4.5 编辑能力清单（<code>videoEditorProject.videoEditEligibility</code>）</h3>
+        <p class="muted">来自 <code>get_creator_videos</code> 响应（<code>dumps/rec-1786349518630-interception_job_5_0-res.json</code>），说明该视频当前允许哪些编辑：</p>
+        <div class="scroll-x">
+        <table>
+            <tr><th>能力字段</th><th>本次取值</th><th>含义</th></tr>
+            <tr><td><code>blurEligibility</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td>打码 —— <b>本次实测走通</b></td></tr>
+            <tr><td><code>trimEligibility</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td>裁剪时长</td></tr>
+            <tr><td><code>audioswapEligibility</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td>替换音轨</td></tr>
+            <tr><td><code>muteEligibility</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td>静音</td></tr>
+            <tr><td><code>revertToOriginal</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td><b>撤销所有编辑、回到原片</b>（回滚通道存在）</td></tr>
+            <tr><td><code>postClaimEligibility</code></td><td style="color:#10683c;"><b>ELIGIBLE</b></td><td>版权声明后的编辑</td></tr>
+            <tr><td><code>compositingEligibility</code></td><td style="color:#8a5800;">INCOMPATIBLE_PUBLISHED_EFFECTS</td><td>合成 —— 因已有已发布特效而不可用</td></tr>
+            <tr><td><code>audiovisionEligibility</code></td><td style="color:#8a5800;">INCOMPATIBLE_PUBLISHED_EFFECTS</td><td>同上</td></tr>
+            <tr><td><code>autocroppedHighlightEligibility</code></td><td style="color:#8a5800;">INCOMPATIBLE_PUBLISHED_EFFECTS</td><td>同上</td></tr>
+            <tr><td><code>trimmedHighlightEligibility</code></td><td style="color:#8a5800;">INCOMPATIBLE_PUBLISHED_EFFECTS</td><td>同上</td></tr>
+        </table>
+        </div>
+        <p class="muted">同一对象另含 <code>shotBoundaryMs: [0]</code>（镜头切分点）、<code>accurateMaxFps: 60.00000099833613</code>、<code>videoDimensions: {width:640, height:360}</code>、<b><code>editWillDowngrade: false</code></b>（本次编辑不会降低画质）。<span class="ev ev-real">抓包实证</span></p>
+    </div>
+</section>
+
+<!-- ========== blur 数据结构 ========== -->
+<section>
+    <h2>五、blur 编辑数据结构详解</h2>
+
+    <div class="card">
+        <p><span class="tag t-req">原始请求体片段</span>（<code>videoEdit.blurEdit.edit.blurRegions</code>，逐字，未截断）</p>
+        <pre>[
+  {                                                    <span class="c"># ── 区域 1 ──</span>
+    <span class="k">"trackedRegionCheckpoints"</span>: {
+      <span class="k">"checkpoints"</span>: [
+        { <span class="k">"rectangle"</span>: { <span class="k">"top"</span>:    0.498448388469308,
+                        <span class="k">"left"</span>:   0.466251575123034,
+                        <span class="k">"right"</span>:  0.666251575123034,
+                        <span class="k">"bottom"</span>: 0.698448388469308 },
+          <span class="k">"timestamp"</span>: { <span class="k">"millis"</span>: 0 } }
+      ],
+      <span class="k">"externalTrackId"</span>: <span class="s">"hblXuO"</span>                  <span class="c"># ★ 区域 1 有追踪 ID</span>
+    },
+    <span class="k">"blurShape"</span>: <span class="s">"BLUR_SHAPE_RECTANGLE"</span>,
+    <span class="k">"start"</span>: { <span class="k">"millis"</span>: -1 },                       <span class="c"># -1 = 从头</span>
+    <span class="k">"end"</span>:   { <span class="k">"millis"</span>: -1 }                        <span class="c"># -1 = 到尾</span>
+  },
+  {                                                    <span class="c"># ── 区域 2 ──</span>
+    <span class="k">"start"</span>: { <span class="k">"millis"</span>: -1 },
+    <span class="k">"end"</span>:   { <span class="k">"millis"</span>: -1 },
+    <span class="k">"blurShape"</span>: <span class="s">"BLUR_SHAPE_RECTANGLE"</span>,
+    <span class="k">"trackedRegionCheckpoints"</span>: {
+      <span class="k">"checkpoints"</span>: [
+        { <span class="k">"rectangle"</span>: { <span class="k">"top"</span>:    0.47916789918254854,
+                        <span class="k">"left"</span>:   0.202592012150701,
+                        <span class="k">"right"</span>:  0.4026164277034081,
+                        <span class="k">"bottom"</span>: 0.6791923147352555 },
+          <span class="k">"timestamp"</span>: { <span class="k">"millis"</span>: 0 } }
+      ]
+    }                                                  <span class="c"># ★ 区域 2 无 externalTrackId</span>
+  }
+]</pre>
+
+        <h3>5.1 字段语义逐项</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>字段</th><th>类型 / 取值</th><th>语义</th><th>证据</th></tr>
+            <tr><td><code>rectangle.{top,left,right,bottom}</code></td><td>float ∈ [0,1]</td><td><b>归一化坐标</b>，相对画面宽高的比例，非像素。<code>left/right</code> 对 width，<code>top/bottom</code> 对 height。原点在左上。</td><td><span class="ev ev-real">抓包实证</span></td></tr>
+            <tr><td>—（推算）</td><td>区域 1 = <b>0.200000</b>²<br>区域 2 = <b>0.200024</b>²</td><td>两区域的 <code>right−left</code> 与 <code>bottom−top</code> 都 ≈ <b>0.2</b>（归一化边长相等）。但因分别除以 640 与 360，<b>实际像素是 128×72 的矩形、不是正方形</b>。区域 2 的 0.200024 偏差说明它是<b>鼠标拖拽产生</b>（像素对齐后的浮点残差），区域 1 的整值则来自默认框。</td><td><span class="ev ev-real">抓包实证</span></td></tr>
+            <tr><td><code>timestamp.millis</code></td><td>0</td><td>该关键帧对应的<b>视频内时刻</b>。本次两区域各只有 1 个 checkpoint 且都在 0ms → 静态框，不随画面移动。</td><td><span class="ev ev-real">抓包实证</span></td></tr>
+            <tr><td><code>checkpoints[]</code></td><td>数组</td><td><b>多个 checkpoint = 移动追踪</b>：每个元素给出某时刻的框位置，服务端在关键帧之间插值。本次数组长度为 1。</td><td><span class="ev ev-infer">合理推断</span></td></tr>
+            <tr><td><code>externalTrackId</code></td><td><code>"hblXuO"</code> / 缺失</td><td>6 位随机串。<b>区域 1 有、区域 2 完全没有该键</b> → <b>可选字段</b>，缺失不影响提交（本次 200 成功）。推测用于「自动追踪目标」的会话关联。</td><td><span class="ev ev-real">抓包实证</span>（可选性）</td></tr>
+            <tr><td><code>blurShape</code></td><td><code>BLUR_SHAPE_RECTANGLE</code></td><td>形状枚举。命名带 <code>RECTANGLE</code> 暗示存在其它形状（UI 提供「模糊人脸」等），但<b>本次未抓到其它取值</b>。</td><td><span class="ev ev-none">未验证</span>（其它枚举值）</td></tr>
+            <tr><td><code>start/end.millis</code></td><td><b>-1</b></td><td><b>-1 是哨兵值 = 整片生效</b>（不是「0 毫秒」）。若要限定时段，此处应填真实毫秒区间。</td><td><span class="ev ev-real">抓包实证</span>（-1 与整片行为）</td></tr>
+        </table>
+        </div>
+
+        <div class="callout c-info">
+            <b>两个区域的字段顺序不同</b>（区域 1 是 <code>trackedRegionCheckpoints → blurShape → start → end</code>，区域 2 是 <code>start → end → blurShape → trackedRegionCheckpoints</code>），说明<b>服务端按键名解析、不依赖顺序</b>——构造请求时无需模仿字段排列。<span class="ev ev-real">抓包实证</span>
+        </div>
+
+        <h3>5.2 像素坐标 ↔ 归一化坐标换算</h3>
+        <pre><span class="c"># 视频 640×360，想在 (x=298px, y=179px) 处打一个 128×72 的码：</span>
+left   = 298 / 640 = 0.4656…      right  = (298+128) / 640 = 0.6656…
+top    = 179 / 360 = 0.4972…      bottom = (179+72)  / 360 = 0.6972…
+
+<span class="c"># 与实抓值对照（区域 1）：left=0.46625, right=0.66625, top=0.49845, bottom=0.69845 ✓</span></pre>
+        <p class="muted">换算关系吻合，确认坐标系为「左上原点、除以画面宽高」。<span class="ev ev-real">抓包实证</span></p>
+    </div>
+</section>
+
+<!-- ========== 状态源对比 ========== -->
+<section>
+    <h2>六、五个状态源对比 —— 该信谁</h2>
+
+    <div class="card">
+        <p>编辑期间共有 <b>5 个字段</b>在报告「视频状态」，分散在 3 个端点里，<b>口径互不一致、翻转时刻各不相同</b>。这是本次抓包最有价值的发现。</p>
+        <div class="scroll-x">
+        <table>
+            <tr><th>状态源</th><th>字段</th><th>编辑进行中（t+5s ~ 214s）</th><th>翻转时刻</th><th>可用性</th></tr>
+            <tr>
+                <td><code>get_video_processing_status</code></td>
+                <td><code>videoProcessingStatus</code><br><code>lastPublishedEditVersion</code></td>
+                <td><code>PROCESSING</code> / <code>1</code><br><span class="muted">58 次字节级相同</span></td>
+                <td style="background:#eefaf2;"><b>t+218.1s</b><br><code>EDITED</code> / <code>2</code></td>
+                <td style="background:#eefaf2;"><b>✅ 唯一可靠</b><br>与真实完成同刻</td>
+            </tr>
+            <tr>
+                <td><code>get_creator_videos</code></td>
+                <td><code>inlineEditProcessingStatus</code></td>
+                <td><code>VIDEO_PROCESSING_STATUS_PROCESSING</code></td>
+                <td style="background:#fff8e8;"><b>t+219.0s</b><br><code>…_PROCESSING_NON_PRIMARY_ASSETS</code></td>
+                <td style="background:#fff8e8;">⚠️ 可用但滞后 0.9s<br><b>且完成后仍不是终态</b></td>
+            </tr>
+            <tr>
+                <td><code>upload/feedback</code></td>
+                <td><code>uploadStatus</code><br><code>processingProgressBar</code></td>
+                <td style="background:#fdeeee;"><code>SUCCESS</code> + <code>fractionCompleted: 1</code><br>「已处理 100%。」「视频已就绪」<br><b>全程如此</b></td>
+                <td style="background:#fdeeee;"><b>t+256.1s</b><br>360p → <code>AVAILABLE</code><br>checks → <code>COMPLETED</code></td>
+                <td style="background:#fdeeee;"><b>❌ 对编辑失灵</b><br>谎报 100%，且晚 38s</td>
+            </tr>
+            <tr>
+                <td><code>get_creator_videos</code></td>
+                <td><code>videoPrechecks.videoUploadChecks*<br>.checksSummary.status</code></td>
+                <td><code>INLINE_EDIT_IN_PROGRESS</code><br><span class="muted">t+3.2s 时还是 COMPLETED</span></td>
+                <td style="background:#eefaf2;"><b>t+258.1s</b><br>回到 <code>COMPLETED</code></td>
+                <td style="background:#eefaf2;"><b>✅ 唯一完整闭环</b><br>终态→进行中→终态</td>
+            </tr>
+            <tr>
+                <td><code>get_creator_videos</code></td>
+                <td><code>videoResolutions.statusSd</code></td>
+                <td><code>RESOLUTION_STATUS_DONE</code><br><span class="muted">全程不变</span></td>
+                <td style="background:#fdeeee;"><b>从不翻转</b></td>
+                <td style="background:#fdeeee;"><b>❌ 对编辑完全无感</b></td>
+            </tr>
+        </table>
+        </div>
+
+        <div class="callout c-key">
+            <b>被低估的一个：<code>videoPrechecks</code> 是唯一「有起点」的状态源。</b>
+            <ul class="tight">
+                <li>其余 4 个在编辑开始时<b>已经处于「进行中」或「无感」</b>——你观测到时无从判断编辑是否真的被受理。</li>
+                <li><code>videoPrechecks</code> 走完整三段：<b>t+3.2s <code>COMPLETED</code> → t+13.1s <code>INLINE_EDIT_IN_PROGRESS</code> → t+258.1s <code>COMPLETED</code></b>。</li>
+                <li>因此它能回答另一个问题：<b>「我的 <code>edit_video</code> 到底被受理了没有」</b>——<code>SCHEDULED</code> 只说排期，这个字段翻转才说明服务端真的动了。代价是它比 <code>EDITED</code> <b>晚 40 秒</b>才回终态（要等非主资产），不适合当「编辑完成」的判据。</li>
+            </ul>
+            <b>组合用法</b>：<code>videoPrechecks</code> 判「受理」，<code>get_video_processing_status</code> 判「完成」。<span class="ev ev-real">抓包实证</span>
+        </div>
+
+        <div class="callout c-bad">
+            <b>feedback 为什么会谎报？</b> 它是<b>上传</b>反馈通道，continuation token 绑定的是<b>上传期的 <code>frontendUploadId</code></b>。从「上传」的视角看，这个视频<b>确实早就传完并可播放了</b>——所以它一直说 SUCCESS / 100%。编辑是在一个已完成上传的实体上做二次加工，feedback 的语义域根本不覆盖它。<span class="ev ev-infer">合理推断</span>（行为为实证，成因为推断）
+        </div>
+
+        <h3>6.1 feedback 5 次心跳的实际内容</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>时刻</th><th><code>uploadStatus</code></th><th>进度条</th><th>分辨率状态</th><th><code>uploadChecks</code> 汇总</th></tr>
+            <tr><td>t+13.7s</td><td>SUCCESS「视频已就绪」</td><td>1.0「已处理 100%。」</td><td>1080p:UNAVAILABLE 4k:UNAVAILABLE <b>360p:PROCESSING</b></td><td><code>INLINE_EDIT_IN_PROGRESS</code></td></tr>
+            <tr><td>t+74.3s</td><td>同上</td><td>同上</td><td>同上</td><td>同上</td></tr>
+            <tr><td>t+134.7s</td><td>同上</td><td>同上</td><td>同上</td><td>同上</td></tr>
+            <tr><td>t+195.2s</td><td>同上</td><td>同上</td><td>同上</td><td>同上</td></tr>
+            <tr style="background:#eefaf2;"><td><b>t+256.1s</b></td><td>同上</td><td>同上</td><td>1080p:UNAVAILABLE 4k:UNAVAILABLE <b>360p:AVAILABLE</b></td><td><b><code>COMPLETED</code></b></td></tr>
+        </table>
+        </div>
+        <div class="callout c-ok">
+            <b>feedback 里唯一有价值的两个信号</b>（都不在 <code>uploadStatus</code> 里）：
+            <ul class="tight">
+                <li><code>uploadChecksRenderer.*.checksSummary.status</code> 有专门的 <b><code>UPLOAD_CHECKS_DATA_SUMMARY_STATUS_INLINE_EDIT_IN_PROGRESS</code></b> 枚举 —— 服务端<b>知道</b>正在内联编辑，只是没反映到进度条上。</li>
+                <li><code>processingResolutionsStatusRenderer.resolutionData360p.status</code> 的 <code>PROCESSING → AVAILABLE</code> 标志<b>非主资产（其它分辨率）转码完成</b>，比 <code>EDITED</code> 晚 38 秒。</li>
+            </ul>
+            1080p / 4k 全程 <code>UNAVAILABLE</code> 是因为<b>源视频本身就是 360p</b>，不是编辑导致的降级（<code>editWillDowngrade: false</code> 印证）。<span class="ev ev-real">抓包实证</span>
+        </div>
+
+        <h3>6.2 枚举速查</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>枚举</th><th>已观测取值</th><th>出现处</th></tr>
+            <tr><td><code>videoProcessingStatus</code></td><td><code>VIDEO_PROCESSING_STATUS_PROCESSING</code><br><code>VIDEO_PROCESSING_STATUS_EDITED</code></td><td><code>get_video_processing_status</code> 响应</td></tr>
+            <tr><td><code>inlineEditProcessingStatus</code></td><td><code>VIDEO_PROCESSING_STATUS_PROCESSING</code><br><code>VIDEO_PROCESSING_STATUS_PROCESSING_NON_PRIMARY_ASSETS</code></td><td><code>get_creator_videos</code> 响应（需 mask 声明）</td></tr>
+            <tr><td><code>executionStatus</code></td><td><code>EDIT_EXECUTION_STATUS_SCHEDULED</code></td><td><code>edit_video</code> 响应</td></tr>
+            <tr><td><code>status</code>（视频总态）</td><td><code>VIDEO_STATUS_PROCESSED</code>（编辑全程不变）</td><td><code>get_creator_videos</code> 响应</td></tr>
+            <tr><td><code>uploadChecks…SUMMARY_STATUS</code></td><td><code>INLINE_EDIT_IN_PROGRESS</code> → <code>COMPLETED</code></td><td><code>upload/feedback</code> 响应</td></tr>
+            <tr><td><code>PROCESSING_RESOLUTION_STATUS</code></td><td><code>UNAVAILABLE</code> / <code>PROCESSING</code> / <code>AVAILABLE</code></td><td><code>upload/feedback</code> 响应</td></tr>
+        </table>
+        </div>
+        <p class="muted">注意 <code>videoProcessingStatus</code> 与 <code>inlineEditProcessingStatus</code> <b>共用同一套 <code>VIDEO_PROCESSING_STATUS_*</code> 前缀但取值域不同</b>——前者会给出 <code>EDITED</code>，后者给出 <code>PROCESSING_NON_PRIMARY_ASSETS</code>，本次未见交集。<span class="ev ev-real">抓包实证</span></p>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">6.3 <code>mask</code> 字段掩码机制（顺带记录）</h3>
+        <p><code>get_creator_videos</code> 的 9 次请求用了 <b>5 种不同 mask</b>，客户端<b>按需声明要哪些字段</b>，服务端只返回被声明的：</p>
+        <pre><span class="c"># 轮询用的最小 mask（1.8s / 9.5s）</span>
+{ <span class="k">"failOnError"</span>: true, <span class="k">"videoIds"</span>: [<span class="s">"T6q1g5SPGps"</span>], <span class="k">"criticalRead"</span>: false,
+  <span class="k">"mask"</span>: { <span class="k">"inlineEditProcessingStatus"</span>: true, <span class="k">"videoId"</span>: true,
+            <span class="k">"responseStatus"</span>: {<span class="k">"all"</span>: true}, <span class="k">"permissions"</span>: {<span class="k">"all"</span>: true} } }
+
+<span class="c"># 编辑完成后的重载 mask（218.2s，含编辑器项目信息）</span>
+{ …, <span class="k">"mask"</span>: { <span class="k">"title"</span>: true, <span class="k">"videoDurationMs"</span>: true, <span class="k">"videoStreamUrl"</span>: true,
+            <span class="k">"videoEditorProject"</span>: { <span class="k">"shotBoundaryMs"</span>: true, <span class="k">"videoDimensions"</span>: {<span class="k">"all"</span>: true},
+                                   <span class="k">"accurateMaxFps"</span>: true, <span class="k">"videoEditEligibility"</span>: {…} }, … } }</pre>
+        <p class="muted"><code>mask</code> 里没声明的字段在响应里<b>直接不存在</b>（不是 null）。这解释了为何同一端点不同次响应的字段集差异很大——解析时必须容忍字段缺失。<span class="ev ev-real">抓包实证</span></p>
+    </div>
+</section>
+
+<!-- ========== 编辑 vs 上传 ========== -->
+<section>
+    <h2>七、编辑 vs 上传：同一视频的两条改动路径</h2>
+    <div class="card">
+        <div class="scroll-x">
+        <table>
+            <tr><th>维度</th><th>上传创建（<a href="YouTube上传流程分析.html">上一篇</a>）</th><th>编辑（本篇）</th></tr>
+            <tr><td>入口端点</td><td><code>/upload/studio</code> → 字节上传 → <code>/upload/createvideo</code>（3 个）</td><td><code>/video_editor/edit_video</code>（<b>1 个</b>）</td></tr>
+            <tr><td>是否产生新 videoId</td><td><b>是</b>，createvideo 后才有</td><td><b>否</b>，<code>T6q1g5SPGps</code> 全程不变</td></tr>
+            <tr><td>核心标识</td><td><code>frontendUploadId</code>（前端生成）+ <code>scottyResourceId</code>（服务端返回），成对绑定</td><td><code>externalVideoId</code> + <b><code>baseVersion</code></b>（乐观锁版本号）</td></tr>
+            <tr><td>标识复用</td><td>—</td><td><b>复用上传期的 <code>frontendUploadId</code></b>（feedback continuation 里可解出）</td></tr>
+            <tr><td>时间开销在哪</td><td><b>字节上传</b>（26.75MB 用 32 秒）</td><td><b>服务端重转码</b>（提交仅 1.74 秒，等待 216 秒）</td></tr>
+            <tr><td>进度判定源</td><td><code>upload/feedback</code>（<b>有效</b>，能给百分比）</td><td><code>get_video_processing_status</code>（<b>feedback 失灵</b>，只有二值状态）</td></tr>
+            <tr><td>并发控制</td><td>scotty 资源槽位配对校验</td><td><code>baseVersion</code> 乐观锁，成功后 +1</td></tr>
+            <tr><td>回滚通道</td><td>删除视频（<code>/video/delete</code>，硬删除）</td><td><code>revertToOriginal</code>（能力清单里为 ELIGIBLE）<span class="ev ev-none">未验证</span></td></tr>
+            <tr><td>本次总耗时</td><td>约 66 秒</td><td>约 <b>218 秒</b>（20 秒的 360p 短片）</td></tr>
+        </table>
+        </div>
+        <div class="callout c-key">
+            <b>一个反直觉的对比：</b>编辑一个 <b>20 秒 / 640×360</b> 的短片（218 秒），比上传一个 <b>26.75MB</b> 的新视频（66 秒）<b>慢 3.3 倍</b>。原因在于编辑要走完整的<b>重转码</b>流水线，而上传的耗时主要是网络传输——转码是编辑的必经成本，与文件大小的关系远不如与「要重编码多少帧」直接。<span class="ev ev-infer">合理推断</span>（耗时为实证，归因为推断，详见<a href="YouTube视频生命周期与转码存储.html">《视频生命周期与转码存储》</a>）
+        </div>
+    </div>
+</section>
+
+<!-- ========== 自动化配方 ========== -->
+<section>
+    <h2>八、用 macro 拦截器自动化该链路</h2>
+
+    <div class="callout c-warn">
+        <b>前置检查：</b>当前 <code>config/request-rules.json</code> 里 <code>sections.resends</code> 与 <code>sections.blocks</code> 均为 <code>false</code>（分闸关闭），下面第 2、3 段配方生效前需要把对应分闸打开或删掉该键。<code>record</code> 支路独立于顶层 <code>enabled</code>，单独由 <code>record.enabled</code> 控制。
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">配方 1 · 复现本次抓包（只观测、不改写）</h3>
+        <p class="muted">这就是本次用的配置，写下来便于复现。<b>4 个端点的完整请求体 + 响应体</b>会各落成独立文件到 <code>dumps/</code>，并生成可与时间线 join 的索引。</p>
+        <pre>{
+  <span class="k">"record"</span>: {
+    <span class="k">"enabled"</span>: true,
+    <span class="k">"urlPattern"</span>: <span class="s">"*"</span>,
+    <span class="k">"includeBody"</span>: true,
+    <span class="k">"saveBodies"</span>: [
+      { <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/video_editor/edit_video?alt=json"</span>,
+        <span class="k">"request"</span>: true, <span class="k">"response"</span>: true },
+      { <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/video_editor/get_video_processing_status?alt=json"</span>,
+        <span class="k">"request"</span>: true, <span class="k">"response"</span>: true },
+      { <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/creator/get_creator_videos?alt=json"</span>,
+        <span class="k">"request"</span>: true, <span class="k">"response"</span>: true },
+      { <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/upload/feedback?alt=json"</span>,
+        <span class="k">"request"</span>: true, <span class="k">"response"</span>: true }
+    ]
+  }
+}</pre>
+        <p class="muted">产物：<code>timelines/timeline-replay-*.jsonl</code>（全站被动记录）+ <code>dumps/rec-*-{req,res}.json</code> + <code>dumps/rec-index-*.jsonl</code>。索引行的 <code>networkId</code> 与时间线的 <code>id</code> 相同，可精确 join。</p>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">配方 2 · 被动捕获版本号（<code>captures</code> 支路）</h3>
+        <p class="muted">把轮询响应里的 <code>lastPublishedEditVersion</code> 存进回放期变量池，供后续重发注入 <code>baseVersion</code>。<b>不重发、不改响应</b>，纯捕获。</p>
+        <pre>{
+  <span class="k">"captures"</span>: [
+    {
+      <span class="k">"_注"</span>: <span class="s">"轮询响应里拿当前已发布版本号，作下次编辑的 baseVersion"</span>,
+      <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/video_editor/get_video_processing_status?alt=json"</span>,
+      <span class="k">"extract"</span>: {
+        <span class="k">"pubVersion"</span>: { <span class="k">"fromBody"</span>: <span class="s">"lastPublishedEditVersion"</span> },
+        <span class="k">"procStatus"</span>: { <span class="k">"fromBody"</span>: <span class="s">"videoProcessingStatus"</span> }
+      }
+    }
+  ]
+}</pre>
+        <div class="callout c-info" style="margin-bottom:0;">
+            变量池的生命周期是<b>单次 runId</b>，后到覆盖先到。因为轮询会打 59 次，<code>pubVersion</code> 会被反复覆写——<b>这正是想要的</b>：任何时刻读到的都是最新版本号。<span class="ev ev-infer">合理推断</span>（机制见《拦截器规则配置手册》，本配方未实跑）
+        </div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">配方 3 · 编辑完成时自动触发下一步（<code>resends</code> + <code>responseTrigger.when</code>）</h3>
+        <p class="muted">利用 <code>when</code> 表达式引擎在<b>轮询响应变成 <code>EDITED</code> 的那一刻</b>触发一次重发。下例演示「编辑完成后自动发起第二轮打码」，<code>baseVersion</code> 用配方 2 捕获的变量注入。</p>
+        <pre>{
+  <span class="k">"resends"</span>: [
+    {
+      <span class="k">"_注"</span>: <span class="s">"检测到 EDITED 后，用新版本号发起第二轮 blur 编辑"</span>,
+      <span class="k">"urlPattern"</span>: <span class="s">"https://studio.youtube.com/youtubei/v1/video_editor/edit_video?alt=json"</span>,
+      <span class="k">"setHeaders"</span>: { <span class="k">"x-macro"</span>: <span class="s">"edit2"</span> },
+      <span class="k">"set"</span>: {
+        <span class="k">"baseVersion"</span>: <span class="s">"{{pubVersion}}"</span>,          <span class="c"># ← 配方 2 捕获的最新版本号</span>
+        <span class="k">"videoEdit"</span>: { <span class="k">"blurEdit"</span>: { <span class="k">"edit"</span>: { <span class="k">"blurRegions"</span>: [
+          { <span class="k">"blurShape"</span>: <span class="s">"BLUR_SHAPE_RECTANGLE"</span>,
+            <span class="k">"start"</span>: { <span class="k">"millis"</span>: -1 }, <span class="k">"end"</span>: { <span class="k">"millis"</span>: -1 },
+            <span class="k">"trackedRegionCheckpoints"</span>: { <span class="k">"checkpoints"</span>: [
+              { <span class="k">"rectangle"</span>: { <span class="k">"top"</span>: 0.1, <span class="k">"left"</span>: 0.1, <span class="k">"right"</span>: 0.3, <span class="k">"bottom"</span>: 0.3 },
+                <span class="k">"timestamp"</span>: { <span class="k">"millis"</span>: 0 } } ] } }
+        ] } } }
+      },
+      <span class="k">"responseTrigger"</span>: {
+        <span class="k">"triggerUrl"</span>: <span class="s">"**/video_editor/get_video_processing_status*"</span>,
+        <span class="k">"when"</span>: <span class="s">"hop == 0 &amp;&amp; contains(text, 'VIDEO_PROCESSING_STATUS_EDITED')"</span>
+      },
+      <span class="k">"dedupeMs"</span>: 600000                            <span class="c"># 10 分钟内只触发一次，防轮询重复命中</span>
+    }
+  ]
+}</pre>
+        <div class="callout c-key">
+            <b>三个必须注意的点：</b>
+            <ul class="tight">
+                <li><b><code>hop == 0</code> 不能省。</b> 它保证只在<b>真实响应</b>上触发，从根上切断「重发又触发重发」的连环（<code>maxResendHops</code> 缺省 5 是熔断兜底，不是设计）。</li>
+                <li><b><code>dedupeMs</code> 不能省。</b> 编辑完成后前端可能还会补打几次轮询，每次响应都含 <code>EDITED</code>，不去重会触发多轮编辑。</li>
+                <li><b><code>baseVersion</code> 必须用捕获值，不能写死。</b> 服务端按乐观锁校验，用过期版本号提交预期会被拒。<span class="ev ev-none">未验证</span>（本次未实测版本冲突的错误码）</li>
+            </ul>
+        </div>
+        <div class="callout c-ok" style="margin-bottom:0;">
+            <b>若只想「等编辑完成」而不重发</b>，更轻的做法是只用配方 1 + 配方 2，然后在宏步骤里轮询变量池——或者干脆用 <code>blocks</code> 的 <code>mode: "hold"</code> 把 <code>edit_video</code> 挂起，在暂停模态框里人工确认参数后再放行。
+        </div>
+    </div>
+</section>
+
+<!-- ========== 边界 ========== -->
+<section>
+    <h2>九、边界与未验证项</h2>
+    <div class="card">
+        <div class="scroll-x">
+        <table>
+            <tr><th>项</th><th>状态</th><th>说明 / 后续怎么验</th></tr>
+            <tr><td>blur 编辑的完整链路与耗时</td><td><span class="ev ev-real">抓包实证</span></td><td>本次 90 请求 0 失败，全程可逐字复核</td></tr>
+            <tr><td><code>EDITED</code> + 版本号 +1 作为终止条件</td><td><span class="ev ev-real">抓包实证</span></td><td>单轮编辑已证实；<b>连续两轮</b>是否会撞上残留 <code>EDITED</code> 未测</td></tr>
+            <tr><td>trim / audioswap / mute 等其它编辑类型</td><td><span class="ev ev-none">未验证</span></td><td>能力清单显示 ELIGIBLE，推测共用 <code>edit_video</code> 端点、仅 <code>videoEdit</code> 子键不同。<b>验证法</b>：对同一视频各做一次并开配方 1 抓包，比对请求体骨架</td></tr>
+            <tr><td><code>baseVersion</code> 的原始来源</td><td><span class="ev ev-none">未验证</span></td><td><code>get_last_published_edits</code> 只抓到请求行。<b>验证法</b>：把该端点加进 <code>saveBodies</code> 重抓一次</td></tr>
+            <tr><td>版本号冲突时的错误响应</td><td><span class="ev ev-none">未验证</span></td><td><b>验证法</b>：用配方 3 故意写死一个过期 <code>baseVersion</code>，看返回码与错误体</td></tr>
+            <tr><td><code>blurShape</code> 的其它枚举值</td><td><span class="ev ev-none">未验证</span></td><td>UI 有「模糊人脸」等选项，走同一字段的可能性大。<b>验证法</b>：用非矩形工具打一次码</td></tr>
+            <tr><td>移动追踪（多 checkpoint）的数据形态</td><td><span class="ev ev-infer">合理推断</span></td><td>本次只有 1 个 checkpoint。<b>验证法</b>：在编辑器里拖动模糊框跟随物体，再抓一次</td></tr>
+            <tr><td><code>revertToOriginal</code> 撤销编辑</td><td><span class="ev ev-none">未验证</span></td><td>能力清单里为 ELIGIBLE，端点与请求体形态未知</td></tr>
+            <tr><td>长视频 / 高分辨率的耗时规模</td><td><span class="ev ev-none">未验证</span></td><td>本次样本仅 20 秒 360p 即耗时 218 秒；更大素材的耗时曲线未测，自动化超时设置需留足余量</td></tr>
+            <tr><td>1080p/4k 全程 UNAVAILABLE 的原因</td><td><span class="ev ev-infer">合理推断</span></td><td>归因于源视频本身是 360p（<code>videoDimensions 640×360</code> + <code>editWillDowngrade: false</code>），非编辑导致</td></tr>
+        </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;">9.1 数据利用率自查 —— 本文档用掉了多少抓到的数据</h3>
+        <div class="scroll-x">
+        <table>
+            <tr><th>端点</th><th>落盘</th><th>字节</th><th>本文档挖掘深度</th></tr>
+            <tr><td><code>edit_video</code></td><td>2 文件</td><td>5.4 KB</td><td style="background:#eefaf2;"><b>100%</b> —— 请求体逐字段拆解、响应体全部 2 个有效字段均已解释</td></tr>
+            <tr><td><code>get_video_processing_status</code></td><td>118 文件</td><td>285 KB</td><td style="background:#eefaf2;"><b>100%</b> —— 响应仅 3 个字段，59 次演进全覆盖（体量大但信息熵极低，58 次字节级重复）</td></tr>
+            <tr><td><code>upload/feedback</code></td><td>10 文件</td><td>47.7 KB</td><td style="background:#fff8e8;"><b>约 60%</b> —— 4 个顶层渲染器已覆盖，但 <code>watchEndpoint</code> / <code>shortWatchUrl</code> / <code>uploadChecks</code> 的细分子项未展开</td></tr>
+            <tr><td><code>get_creator_videos</code></td><td>18 文件</td><td>163 KB</td><td style="background:#fff8e8;"><b>约 15%</b> —— 响应中出现过 <b>75 个 video 字段</b>，本文档引用约 12 个</td></tr>
+        </table>
+        </div>
+        <div class="callout c-info" style="margin-bottom:0;">
+            <b>已核查过、确认与编辑无关因而未展开的字段</b>（避免下次重复排查）：<code>publishing</code>（全程 <code>NOTIFICATION_NONE</code> 不变）· <code>features</code>（创作者功能开关，不变）· <code>originalFilename</code>（<code>"A.mp4"</code>，不变）· <code>videoResolutions</code>（全程 <code>statusSd: DONE</code>，对编辑无感，已收进第六章作反面例子）· <code>downloadUrl</code>（每次响应令牌都不同，是短时效签名而非状态）。<br>
+            <b>确认未核查的</b>：<code>monetization</code> / <code>claimDetails</code> / <code>copyrightSummary</code> / <code>music</code> / <code>remix</code> / <code>shorts</code> 等约 55 个字段——本次编辑未触及变现与版权维度，但<b>不排除 blur 打码会影响版权比对结果</b>（Content ID 需重新扫描新画面），这是一条值得单独抓包的线。<span class="ev ev-none">未验证</span>
+        </div>
+    </div>
+
+    <div class="callout c-info">
+        <b>相关文档：</b>
+        <ul class="tight">
+            <li><a href="YouTube上传流程分析.html">《YouTube 上传流程分析》</a> —— 本篇的前置篇，讲视频如何产生（<code>frontendUploadId</code> ↔ <code>scottyResourceId</code> 配对）</li>
+            <li><a href="YouTube视频生命周期与转码存储.html">《YouTube 视频生命周期与转码存储》</a> —— 解释本篇 216 秒等待背后的转码流水线</li>
+            <li><a href="黑盒逆向分析方法论.html">《黑盒逆向分析方法论》</a> —— 本篇采用的 8 步方法</li>
+            <li><a href="拦截器规则配置手册.html">《拦截器规则配置手册》</a> —— 第八章配方涉及的全部字段速查</li>
+        </ul>
+    </div>
+</section>
+
+<div class="foot">
+    生成于 2026-08-10 · 数据源 <code>timeline-replay-20260810-161150948.jsonl</code> + <code>rec-index-20260810-161150948.jsonl</code><br>
+    所有字段值均从真实抓包记录逐字提取，未经推断的内容一律标注证据级
+</div>
+
+</div>
+</body>
+</html>
