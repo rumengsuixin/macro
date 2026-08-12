@@ -28,7 +28,7 @@ const ORDERS_HTML = `<!doctype html><meta charset="utf-8"><body>
     <div>${标签('Sipariş Durumu:')}<span>Başarılı</span></div>
     <div>${标签('Sipariş Tarihi:')} 18 Mayıs 2026 19:05</div>
     <div>${标签('Onay Tarihi:')} 19 Mayıs 2026 00:54</div>
-    <div>${标签('Sipariş No:')}<a href="/siparis/1430658">#1430645-nolu-islemden-kalan-18.05.2026 19:05:46</a></div>
+    <div>${标签('Sipariş No:')}<a href="javascript:void(0);" onclick="siparisAra('1430645-nolu-islemden-kalan-18.05.2026 19:05:46')">#1430645-nolu-islemden-kalan-18.05.2026 19:05:46</a></div>
     <div style="color:#3c9b49">400 adetli siparişin (#1430645) 200 adetine ait işlem</div>
   </td>
   <td>
@@ -45,7 +45,10 @@ const ORDERS_HTML = `<!doctype html><meta charset="utf-8"><body>
     <div>${标签('Önce:')}<span title="2875.1723556 USD">2875.17 USD</span></div>
     <div>${标签('Sonra:')}<span title="2023.1741123 USD">2023.17 USD</span></div>
   </td>
-  <td><span style="color:#7CFC00">0</span> / <span style="color:#FFD700">200</span></td>
+  <td>
+    <a href="/siparis/1430658" class="woocommerce-button button view">Görüntüle</a>
+    <span style="color:#7CFC00">0</span> / <span style="color:#FFD700">200</span>
+  </td>
 </tr>
 <tr><td colspan="6">暂无记录</td></tr>
 </tbody></table>
