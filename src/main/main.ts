@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { MacroRunner } from '../core/macro-runner';
 import { exportToExcel } from '../core/excel-exporter';
-import { fieldsToColumnSpecs } from '../core/field-transform';
+import { fieldsToColumnSpecs, collectExtractFields } from '../core/field-transform';
 import { setLogSink, logInfo, logError } from '../core/logger';
 import { saveMacro, loadMacro, saveMacroCaptures, loadMacroCaptures, listMacros } from '../storage/macro-store';
 import { loadBrowserConfig, saveBrowserConfig } from '../storage/browser-config-store';
@@ -511,6 +511,7 @@ function registerIpc(): void {
             }
             // 回放成功且配置了后处理器时执行(如 list-action 下载后合并 zip 内 excel)
             if (result.ok && macro.postProcess && macro.postProcess.length > 0) {
+                const fields = collectExtractFields(macro.extract);
                 const postProcessed = await runPostProcessors(macro.postProcess, {
                     downloads: result.downloads ?? [],
                     downloadDir: downloadsDir,
@@ -519,6 +520,10 @@ function registerIpc(): void {
                     dataRoot,
                     configDir,
                     bankTemplatePath,
+                    // 数据行 + 列规格 + 宏名:供 export-rows-excel 等「导出数据」型后处理器
+                    rows: result.rows ?? [],
+                    columns: fields.length > 0 ? fieldsToColumnSpecs(fields) : undefined,
+                    macroName: macro.name,
                 });
                 result.postProcessed = postProcessed;
             }

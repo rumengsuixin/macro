@@ -737,6 +737,75 @@
             line-height: 1.5;
         }
 
+        /* 无「直接运行」的插件(输入来自回放本身):在按钮位置标一句来源说明 */
+        .plugin-auto-note {
+            font-size: 11px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        /* 插件可配选项(如导出文件名模板):与描述同缩进,未勾选该插件时输入置灰 */
+        .plugin-options {
+            margin: 0 0 8px 24px;
+        }
+
+        .plugin-option-line {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .plugin-option-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-soft);
+            white-space: nowrap;
+        }
+
+        /* 选择器带上 .plugin-options 与元素名提权:全局 input[type="text"](0,1,1)是给深色顶栏配的
+           深底浅字,纯类选择器(0,1,0)压不过它,会被染成深底 + 灰蓝占位字。同 .la-row input 的处置。 */
+        .plugin-options input.plugin-option-input {
+            flex: 1;
+            min-width: 0;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-xs);
+            background: var(--surface);
+            color: var(--text);
+        }
+
+        .plugin-options input.plugin-option-input::placeholder {
+            color: var(--muted);
+        }
+
+        .plugin-options input.plugin-option-input:focus {
+            outline: none;
+            /* 再锁一次:全局 input[type="text"]:focus 会把背景压得更深 */
+            background: #fff;
+            color: var(--text);
+            border-color: var(--plugin);
+            box-shadow: 0 0 0 2px var(--plugin-soft);
+        }
+
+        .plugin-options input.plugin-option-input:disabled {
+            background: var(--surface-3);
+            color: var(--muted);
+            cursor: not-allowed;
+        }
+
+        .plugin-options input.plugin-option-input:disabled::placeholder {
+            color: var(--border-strong);
+        }
+
+        .plugin-option-hint {
+            margin: 3px 0 0 0;
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
         /* 示例文件名 chip:点一下复制文件名(整行 flex 换行) */
         .plugin-examples {
             display: flex;

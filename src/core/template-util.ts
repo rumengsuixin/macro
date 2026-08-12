@@ -1,5 +1,6 @@
-// 通用 {{var}} 模板渲染 + 文件名消毒。纯字符串处理,无 Electron / fs 依赖。
-// 块七 payload / status-file 模板、以及日后 merge 的 {stamp}/{date} 可共用。
+// 通用 {{var}} 模板渲染 + 输出文件名模板渲染 / 消毒。纯字符串处理,无 Electron / fs 依赖。
+// 两套语法各司其职:双花括号 {{var}} 用于钩子 payload / status-file;
+// 单花括号 {stamp} 用于输出文件名(merge-zip-excel、export-rows-excel 共用 renderFileNameTemplate)。
 
 /** 按点路径(如 error.message)从对象取值;任一层缺失返回 undefined */
 function getByPath(obj: unknown, dotted: string): unknown {
@@ -47,8 +48,66 @@ export function renderTemplate(
 
 /**
  * 文件名非法字符消毒(非路径):路径分隔 / 盘符冒号 / 通配 / 控制字符 → 下划线。
- * 与 merge-config 输出名消毒口径一致。
+ * 结果恒为**单层文件名**——因为两种路径分隔符本身都被替换掉了,故
+ * `path.join(某目录, sanitizeFilename(x))` 无法逃出该目录(防目录穿越)。
  */
 export function sanitizeFilename(name: string): string {
-    return name.replace(/[/\<>:"|?*]/g, '_');
+    // eslint-disable-next-line no-control-regex
+    return name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
+}
+
+/** 文件名模板可用的占位符变量(未提供的键渲染为空串) */
+export interface FileNameVars {
+    /** 运行时间戳 YYYYMMDD-HHMMSS(由主进程传入,core 层不调时间 API) */
+    stamp: string;
+    /** 宏名称 */
+    macro?: string;
+    /** 产出该文件的插件 type */
+    plugin?: string;
+    /** 本次数据行数 */
+    rows?: number;
+}
+
+/**
+ * 渲染「输出文件名模板」:替换占位符 → 消毒 → 保证扩展名。
+ * 占位符:{stamp} {date} {time} {macro} {plugin} {rows};{date}/{time} 由 stamp 派生
+ * (stamp 不合 YYYYMMDD-HHMMSS 格式时,{date} 整段回退为 stamp、{time} 回退空串)。
+ * 模板缺省 / trim 后为空 / 消毒后为空 → 一律用 fallback(fallback 自身也会被补扩展名)。
+ * @param template 模板串(可为 undefined)
+ * @param vars 占位符取值
+ * @param fallback 模板不可用时的缺省文件名
+ * @param ext 强制扩展名(含前导点,大小写不敏感判定);缺省 '.xlsx'
+ */
+export function renderFileNameTemplate(
+    template: string | undefined,
+    vars: FileNameVars,
+    fallback: string,
+    ext = '.xlsx'
+): string {
+    const { stamp } = vars;
+    const dm = /^(\d{4})(\d{2})(\d{2})/.exec(stamp);
+    const date = dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : stamp;
+    const tm = /-(\d{2})(\d{2})(\d{2})$/.exec(stamp);
+    const time = tm ? `${tm[1]}${tm[2]}${tm[3]}` : '';
+    const table: Record<string, string> = {
+        stamp,
+        date,
+        time,
+        macro: vars.macro ?? '',
+        plugin: vars.plugin ?? '',
+        rows: vars.rows === undefined ? '' : String(vars.rows),
+    };
+
+    const tpl = typeof template === 'string' && template.trim() ? template : fallback;
+    // 只替换已知占位符;未知的 {xxx} 原样保留(它本身是合法文件名字符)
+    let name = tpl.replace(/\{(stamp|date|time|macro|plugin|rows)\}/g, (_m, k: string) => table[k]);
+    name = sanitizeFilename(name).trim();
+    if (!name) {
+        name = sanitizeFilename(fallback).trim() || `output-${stamp}${ext}`;
+    }
+    const extRe = new RegExp(`${ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    if (!extRe.test(name)) {
+        name += ext;
+    }
+    return name;
 }

@@ -1,6 +1,6 @@
 // 字段清洗引擎:声明式 transform 链施加 + 导出列规格推导。
 // 纯函数,无 Electron / Playwright 依赖,可被 core(extractor)与主进程(export)复用。
-import type { ExtractField, TransformOp, ColumnSpec } from './macro-types';
+import type { ExtractConfig, ExtractField, TransformOp, ColumnSpec } from './macro-types';
 
 /** 补零到两位 */
 function pad2(n: number): string {
@@ -95,8 +95,23 @@ function excelDateFmt(to: string): string {
 }
 
 /**
+ * 从提取规则里收集全部导出字段:fields + list-detail 的 detailFields(按此序,与提取产出的
+ * 行对象一致)。list-action 无字段 → 空数组。结果直接喂 fieldsToColumnSpecs。
+ * 与渲染端 currentExportFields() 同口径,但放在 core 供主进程组装后处理器上下文时用。
+ */
+export function collectExtractFields(extract: ExtractConfig | undefined): ExtractField[] {
+    if (!extract || typeof extract !== 'object') {
+        return [];
+    }
+    const cfg = extract as { fields?: unknown; detailFields?: unknown };
+    const fields = Array.isArray(cfg.fields) ? (cfg.fields as ExtractField[]) : [];
+    const detail = Array.isArray(cfg.detailFields) ? (cfg.detailFields as ExtractField[]) : [];
+    return [...fields, ...detail];
+}
+
+/**
  * 由字段定义推导导出列规格(列名 / 排序 / 隐藏 / 数字日期格式)。
- * list-detail 场景由调用方把 fields.concat(detailFields) 一并传入。
+ * list-detail 场景由调用方把 fields.concat(detailFields) 一并传入(见 collectExtractFields)。
  */
 export function fieldsToColumnSpecs(fields: ExtractField[]): ColumnSpec[] {
     return fields.map((f, i) => {

@@ -201,7 +201,17 @@ const handler: PostProcessHandler = async (
         return { type: spec.type, message: '本次下载中没有可合并的表格(csv/xls/xlsx)。' };
     }
 
-    const output = path.join(ctx.exportsDir, resolveOutputFileName(config, ctx.stamp));
+    // 产物名优先级:本宏 options.fileName > merge-config.json 的 output.fileName > 内置 merged-{stamp}.xlsx
+    const override = typeof spec.options?.fileName === 'string' ? spec.options.fileName : undefined;
+    const output = path.join(
+        ctx.exportsDir,
+        resolveOutputFileName(config, ctx.stamp, {
+            override,
+            macro: ctx.macroName,
+            plugin: spec.type,
+            rows: allRows.length,
+        })
+    );
     await exportToExcel(allRows, output);
     const fileName = path.basename(output);
     return {
@@ -216,7 +226,17 @@ registerPostProcessor(
         type: 'merge-zip-excel',
         label: '批量下载表格合并',
         description:
-            '把下载的表格堆叠为一张总表:支持 zip 内表格 或 直接下载的单个表格(csv/xls/xlsx)。带标题块/说明面板的模板可用 merge-config.json 指定表头行/裁列/工作表(按文件名或工作表名匹配),并可配派生列与输出文件名。产出于 exports/(文件名由 merge-config 的 output.fileName 控,缺省 merged-*.xlsx)',
+            '把下载的表格堆叠为一张总表:支持 zip 内表格 或 直接下载的单个表格(csv/xls/xlsx)。带标题块/说明面板的模板可用 merge-config.json 指定表头行/裁列/工作表(按文件名或工作表名匹配),并可配派生列。产出于 exports/,文件名优先用下面这一栏(本宏专属),其次 merge-config.json 的 output.fileName,缺省 merged-*.xlsx',
+        optionFields: [
+            {
+                key: 'fileName',
+                label: '文件名',
+                placeholder: '合并-{macro}-{date}.xlsx',
+                hint:
+                    '可用占位符:{macro} 宏名 · {date} 日期 · {time} 时分秒 · {stamp} 完整时间戳 · {rows} 行数。' +
+                    '留空则沿用 merge-config.json 里的设置(多个宏共用)。',
+            },
+        ],
     },
     handler
 );

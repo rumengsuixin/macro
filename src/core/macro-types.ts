@@ -391,6 +391,31 @@ export interface PostProcessorManifest {
     standalone?: boolean;
     /** 示例文件名列表(供 UI 渲染成可点复制的示例 chip,方便用户照着命名输入文件);缺省则不展示 */
     examples?: string[];
+    /**
+     * 是否支持「直接运行」(不跑宏、弹文件多选后直接处理)。缺省 true = 渲染该按钮(现状)。
+     * 设 false 用于**输入来自回放本身、而非人工选文件**的后处理器(如 export-rows-excel 吃的是
+     * 回放提取的数据行):`run-plugin` 通道不跑宏、ctx 无 rows,点了只会弹一个无意义的文件框再报
+     * 「已跳过」。此时面板不渲染该按钮,只保留复选框。standalone 独立工具勿设 false——那按钮是其唯一入口。
+     */
+    directRun?: boolean;
+    /**
+     * 该插件可配的选项字段:驱动「附加处理」面板在其复选框下渲染一行文本输入,
+     * 填的值存进该宏 `PostProcessSpec.options[key]` 随宏保存,回放时由 handler 自取。
+     * 缺省 = 该插件无可配项(现状,面板只有复选框)。
+     */
+    optionFields?: PostProcessorOptionField[];
+}
+
+/** 插件可配选项的单个字段描述(纯文本输入,值恒为字符串) */
+export interface PostProcessorOptionField {
+    /** 存进 PostProcessSpec.options 的键名 */
+    key: string;
+    /** 输入框前的标签 */
+    label: string;
+    /** 输入框 placeholder(常用于给出模板示例) */
+    placeholder?: string;
+    /** 输入框下的一句话说明 */
+    hint?: string;
 }
 
 /** 宏定义 */

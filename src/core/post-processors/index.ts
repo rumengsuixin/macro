@@ -2,7 +2,13 @@
 // 设计取向:不搭通用插件框架,只用一个「type → {元数据, handler}」Map;新增定制后处理需求时
 // 增加一个 handler 并自注册即可,UI 的可选插件列表由本注册表驱动(热插拔,前端零改动)。
 // core 层不依赖 Electron。
-import type { PostProcessSpec, PostProcessResult, PostProcessorManifest } from '../macro-types';
+import type {
+    PostProcessSpec,
+    PostProcessResult,
+    PostProcessorManifest,
+    ExtractRow,
+    ColumnSpec,
+} from '../macro-types';
 import { logInfo, logError } from '../logger';
 
 /** 后处理器执行上下文(由主进程组装传入) */
@@ -25,6 +31,15 @@ export interface PostProcessContext {
      * 供 bank-integrate 首次生成 bank-integrate.json 时优先拷贝此模板(见 loadBankIntegrateConfig)。
      */
     bankTemplatePath?: string;
+    /**
+     * 本次回放提取到的数据行(list / list-detail / single 等模式)。缺省 / 空数组表示本次
+     * 没有数据行(如 list-action 只下载文件)。`run-plugin`(独立工具,不跑宏)通道不传。
+     */
+    rows?: ExtractRow[];
+    /** 由宏 extract 字段推导的导出列规格(列名 / 排序 / 隐藏 / 数字日期格式);缺省则按行 key 并集出表 */
+    columns?: ColumnSpec[];
+    /** 宏名称,供输出文件名模板的 {macro} 占位符;`run-plugin` 通道不传 */
+    macroName?: string;
 }
 
 /** 后处理器处理函数签名 */
@@ -77,4 +92,5 @@ export async function runPostProcessors(
 
 // 自注册内置后处理器(import 即触发其 registerPostProcessor 调用)
 import './merge-zip-excel';
+import './export-rows-excel';
 import './bank-integrate';

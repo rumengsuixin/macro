@@ -45,6 +45,10 @@ interface PostProcessorManifest {
     standalone?: boolean;
     /** 示例文件名列表(渲染成可点复制的示例 chip);缺省则不展示 */
     examples?: string[];
+    /** false=不渲染「直接运行」按钮(输入来自回放本身、非人工选文件);缺省 true */
+    directRun?: boolean;
+    /** 该插件可配的选项字段(渲染成文本输入,值随宏存进 postProcess[].options);缺省则无可配项 */
+    optionFields?: Array<{ key: string; label: string; placeholder?: string; hint?: string }>;
 }
 
 interface RunResult {
@@ -1812,10 +1816,10 @@ function buildMacro(): Macro {
     if (raw) {
         macro.extract = JSON.parse(raw); // 解析失败由调用方捕获
     }
-    // 勾选的插件写入 postProcess(随宏保存),回放产出后由主进程依次执行
-    const picked = selectedPluginTypes();
+    // 勾选的插件(连同其可配选项,如导出文件名模板)写入 postProcess(随宏保存),回放产出后由主进程依次执行
+    const picked = selectedPluginSpecs();
     if (picked.length > 0) {
-        macro.postProcess = picked.map((type) => ({ type }));
+        macro.postProcess = picked;
     }
     return macro;
 }
@@ -3367,11 +3371,12 @@ async function renderBankForm(host: HTMLElement): Promise<void> {
  */
 function renderPluginRow(
     container: HTMLElement,
-    p: { type: string; label: string; description: string; examples?: string[] },
+    p: PostProcessorManifest,
     withCheckbox: boolean
 ): void {
     const row = document.createElement('div');
     row.className = 'plugin-row';
+    let checkbox: HTMLInputElement | null = null;
     if (withCheckbox) {
         // 附加处理:左侧勾选(随「运行」执行)+ 名称,右侧「直接运行」按钮
         const label = document.createElement('label');
@@ -3379,6 +3384,12 @@ function renderPluginRow(
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.dataset.pluginType = p.type;
+        checkbox = cb;
+        // 勾选变化:联动该插件选项输入的可用性,并随宏自动保存(与提取规则等其它改动一致)
+        cb.addEventListener('change', () => {
+            syncPluginOptionEnabled(p.type);
+            scheduleAutosave();
+        });
         const name = document.createElement('span');
         name.textContent = p.label;
         label.appendChild(cb);
@@ -3391,23 +3402,63 @@ function renderPluginRow(
         name.textContent = p.label;
         row.appendChild(name);
     }
-    const runNow = document.createElement('button');
-    runNow.className = 'plugin-run-now';
-    runNow.textContent = withCheckbox ? '直接运行' : '运行';
-    runNow.title = withCheckbox
-        ? '不跑宏,直接选文件处理'
-        : '选文件直接运行,产出整合/对账结果(与录制的宏无关)';
-    // 独立工具行(withCheckbox=false)透传板块共用的输出目录(点击时读 localStorage,选目录后无需重渲染即生效);
-    // 附加处理行传 undefined,产物仍落默认 exports。
-    runNow.addEventListener('click', () =>
-        void runPluginDirect(p.type, p.label, withCheckbox ? undefined : getToolOutputDir())
-    );
-    row.appendChild(runNow);
+    if (p.directRun === false) {
+        // 输入来自回放本身(如采集数据行),没有「选文件直接处理」这回事 → 不给按钮,改标一句说明来源
+        const only = document.createElement('span');
+        only.className = 'plugin-auto-note';
+        only.textContent = '随「运行宏」自动执行';
+        only.title = '本插件处理的是回放采集到的数据,不能脱离宏单独选文件运行';
+        row.appendChild(only);
+    } else {
+        const runNow = document.createElement('button');
+        runNow.className = 'plugin-run-now';
+        runNow.textContent = withCheckbox ? '直接运行' : '运行';
+        runNow.title = withCheckbox
+            ? '不跑宏,直接选文件处理'
+            : '选文件直接运行,产出整合/对账结果(与录制的宏无关)';
+        // 独立工具行(withCheckbox=false)透传板块共用的输出目录(点击时读 localStorage,选目录后无需重渲染即生效);
+        // 附加处理行传 undefined,产物仍落默认 exports。
+        runNow.addEventListener('click', () =>
+            void runPluginDirect(p.type, p.label, withCheckbox ? undefined : getToolOutputDir())
+        );
+        row.appendChild(runNow);
+    }
     const desc = document.createElement('div');
     desc.className = 'plugin-desc';
     desc.textContent = p.description;
     container.appendChild(row);
     container.appendChild(desc);
+    // 可配选项:仅附加处理板块渲染(独立工具不随宏保存,没有 options 的归宿)。
+    // 值随宏存进 postProcess[].options,未勾选该插件时输入禁用(避免填了却不生效的错觉)。
+    if (withCheckbox && p.optionFields?.length) {
+        const box = document.createElement('div');
+        box.className = 'plugin-options';
+        for (const f of p.optionFields) {
+            const line = document.createElement('div');
+            line.className = 'plugin-option-line';
+            const lab = document.createElement('span');
+            lab.className = 'plugin-option-label';
+            lab.textContent = f.label;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'plugin-option-input';
+            input.dataset.pluginType = p.type;
+            input.dataset.optionKey = f.key;
+            input.placeholder = f.placeholder ?? '';
+            input.disabled = !checkbox?.checked;
+            input.addEventListener('input', () => scheduleAutosave());
+            line.appendChild(lab);
+            line.appendChild(input);
+            box.appendChild(line);
+            if (f.hint) {
+                const hint = document.createElement('div');
+                hint.className = 'plugin-option-hint';
+                hint.textContent = f.hint;
+                box.appendChild(hint);
+            }
+        }
+        container.appendChild(box);
+    }
     // 示例文件名:每个渲染成可点复制的 chip(点击复制文件名 → 按钮短暂显示「✓ 已复制」)
     if (p.examples?.length) {
         const box = document.createElement('div');
@@ -3509,17 +3560,64 @@ function selectedPluginTypes(): string[] {
     return picked;
 }
 
-/** 依据宏的 postProcess 回显勾选(宏里有但当前未注册的 type 忽略) */
-function refreshPluginSelection(postProcess: Macro['postProcess']): void {
-    const wanted = new Set<string>(
-        (Array.isArray(postProcess) ? postProcess : [])
-            .map((p) => p?.type)
-            .filter((t): t is string => !!t)
+/** 取某插件的全部选项输入框 */
+function pluginOptionInputs(type: string): NodeListOf<HTMLInputElement> {
+    return pluginList.querySelectorAll<HTMLInputElement>(
+        `input.plugin-option-input[data-plugin-type="${type}"]`
     );
+}
+
+/** 未勾选该插件时禁用其选项输入,避免「填了却不生效」的错觉 */
+function syncPluginOptionEnabled(type: string): void {
+    const cb = pluginList.querySelector<HTMLInputElement>(
+        `input[type="checkbox"][data-plugin-type="${type}"]`
+    );
+    pluginOptionInputs(type).forEach((input) => {
+        input.disabled = !cb?.checked;
+    });
+}
+
+/**
+ * 组装写入宏的 postProcess:勾选的插件 + 其非空选项值。
+ * 选项全空则不写 options 键,保持宏 JSON 干净、且与旧宏(只有 type)完全同形。
+ */
+function selectedPluginSpecs(): NonNullable<Macro['postProcess']> {
+    return selectedPluginTypes().map((type) => {
+        const options: Record<string, unknown> = {};
+        pluginOptionInputs(type).forEach((input) => {
+            const key = input.dataset.optionKey;
+            const value = input.value.trim();
+            if (key && value) {
+                options[key] = value;
+            }
+        });
+        return Object.keys(options).length > 0 ? { type, options } : { type };
+    });
+}
+
+/** 依据宏的 postProcess 回显勾选与选项值(宏里有但当前未注册的 type 忽略) */
+function refreshPluginSelection(postProcess: Macro['postProcess']): void {
+    const specs = Array.isArray(postProcess) ? postProcess : [];
+    const byType = new Map<string, Record<string, unknown>>();
+    for (const s of specs) {
+        if (s?.type) {
+            byType.set(s.type, (s.options ?? {}) as Record<string, unknown>);
+        }
+    }
     const boxes = pluginList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-plugin-type]');
     boxes.forEach((cb) => {
         const type = cb.dataset.pluginType;
-        cb.checked = !!type && wanted.has(type);
+        cb.checked = !!type && byType.has(type);
+        if (!type) {
+            return;
+        }
+        const options = byType.get(type) ?? {};
+        pluginOptionInputs(type).forEach((input) => {
+            const key = input.dataset.optionKey;
+            const v = key ? options[key] : undefined;
+            input.value = typeof v === 'string' ? v : ''; // 宏里没有 → 清空,防上个宏残留
+        });
+        syncPluginOptionEnabled(type);
     });
 }
 

@@ -5,6 +5,7 @@
 // 加载惯例照抄 request-rules-store 的「代码内联模板」变体:首次不存在写文档化模板、坏 JSON 兜底默认。
 // 纯 node:fs/path,不依赖 Electron(与其它 core 层 loader 同风格)。
 import fs from 'fs';
+import { renderFileNameTemplate } from '../template-util';
 
 /**
  * 派生列:合并时凭「文件名等来源」现算一列并塞进每行(数据本身没有的信息,如日期藏在文件名里)。
@@ -286,28 +287,43 @@ export function deriveColumnValue(col: DerivedColumn, fileName: string): string 
     }
 }
 
+/** resolveOutputFileName 的可选入参:宏级覆盖 + 额外占位符取值 */
+export interface OutputNameOpts {
+    /**
+     * **宏级**文件名模板(该宏 `postProcess[].options.fileName`)。非空时**优先于**
+     * merge-config.json 的 `output.fileName`——让每个宏各配各的产物名,而不是全局共用一个。
+     */
+    override?: string;
+    /** 宏名称,供 {macro} */
+    macro?: string;
+    /** 插件 type,供 {plugin} */
+    plugin?: string;
+    /** 合并后的总行数,供 {rows} */
+    rows?: number;
+}
+
 /**
- * 解析合并产物文件名:模板 config.output.fileName 替换占位符 {stamp}/{date} → 消毒 → 保证 .xlsx。
- * {stamp}=传入 stamp(YYYYMMDD-HHMMSS);{date}=从 stamp 前 8 位派生的 YYYY-MM-DD(不合规则整段回退)。
- * 消毒:去掉路径分隔符与 Windows 非法字符(防目录穿越/非法名);空 → 缺省名。
+ * 解析合并产物文件名。模板取值优先级:**宏级 opts.override > merge-config.json 的
+ * output.fileName > 内置 merged-{stamp}.xlsx**;随后交 renderFileNameTemplate 统一
+ * 替换占位符({stamp}/{date}/{time}/{macro}/{plugin}/{rows})→ 消毒(防目录穿越/非法名)
+ * → 保证 .xlsx。
  * @param stamp 运行时间戳(主进程传入,core 不调时间 API)
+ * @param opts 可选;不传 = 纯按 merge-config.json 解析(历史行为)
  */
-export function resolveOutputFileName(config: MergeConfig, stamp: string): string {
-    const dm = /^(\d{4})(\d{2})(\d{2})/.exec(stamp);
-    const date = dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : stamp;
-    const template =
+export function resolveOutputFileName(
+    config: MergeConfig,
+    stamp: string,
+    opts: OutputNameOpts = {}
+): string {
+    const configured =
         typeof config.output?.fileName === 'string' && config.output.fileName.trim()
             ? config.output.fileName
             : DEFAULT_OUTPUT_NAME;
-    let name = template.replace(/\{stamp\}/g, stamp).replace(/\{date\}/g, date);
-    // 消毒:路径分隔符与 <>:"|?* 及控制字符 → '_'(防写到 exportsDir 之外 / 非法文件名)
-    // eslint-disable-next-line no-control-regex
-    name = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_').trim();
-    if (!name) {
-        name = `merged-${stamp}.xlsx`;
-    }
-    if (!/\.xlsx$/i.test(name)) {
-        name += '.xlsx';
-    }
-    return name;
+    const template =
+        typeof opts.override === 'string' && opts.override.trim() ? opts.override : configured;
+    return renderFileNameTemplate(
+        template,
+        { stamp, macro: opts.macro, plugin: opts.plugin, rows: opts.rows },
+        `merged-${stamp}.xlsx`
+    );
 }
