@@ -231,10 +231,11 @@ registerPostProcessor(
             {
                 key: 'fileName',
                 label: '文件名',
-                placeholder: '合并-{macro}-{date}.xlsx',
+                // 同 export-rows-excel:后缀不由用户决定,placeholder 不带、hint 里说清
+                placeholder: '合并-{macro}-{date}',
                 hint:
                     '可用占位符:{macro} 宏名 · {date} 日期 · {time} 时分秒 · {stamp} 完整时间戳 · {rows} 行数。' +
-                    '留空则沿用 merge-config.json 里的设置(多个宏共用)。',
+                    '产物固定为 .xlsx,后缀无需填写;留空则沿用 merge-config.json 里的设置(多个宏共用)。',
             },
         ],
     },

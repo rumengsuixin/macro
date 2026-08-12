@@ -61,11 +61,12 @@ registerPostProcessor(
             {
                 key: 'fileName',
                 label: '文件名',
-                placeholder: '数据-{macro}-{date}.xlsx',
+                // placeholder 只示范用户能决定的部分:后缀由插件写盘格式决定,带上会误导成「可自选」
+                placeholder: '数据-{macro}-{date}',
                 hint:
                     '可用占位符:{macro} 宏名 · {date} 日期(2026-08-12) · {time} 时分秒(143005) · ' +
-                    '{stamp} 完整时间戳 · {rows} 行数。留空则用 result-<时间戳>.xlsx;' +
-                    '不写 .xlsx 会自动补上;同名会覆盖,建议带 {date} 或 {stamp}。',
+                    '{stamp} 完整时间戳 · {rows} 行数。产物固定为 .xlsx,后缀无需填写;' +
+                    '留空则用 result-<时间戳>.xlsx。同名会覆盖,建议带 {date} 或 {stamp}。',
             },
         ],
     },

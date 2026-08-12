@@ -56,6 +56,13 @@ export function sanitizeFilename(name: string): string {
     return name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
 }
 
+/**
+ * 与目标格式易混淆的表格类扩展名。产物格式由插件的写盘逻辑决定(exceljs → xlsx),不由用户
+ * 填的后缀决定;但用户会按直觉填 `报表.csv`,无条件追加就得到 `报表.csv.xlsx` 这种双后缀。
+ * 故补扩展名前先剥掉这一类冗余尾巴。只认表格类——避免吃掉文件名里有意义的部分。
+ */
+const REDUNDANT_TABLE_EXT_RE = /\.(csv|xls|xlsx|xlsm|xlsb|ods)$/i;
+
 /** 文件名模板可用的占位符变量(未提供的键渲染为空串) */
 export interface FileNameVars {
     /** 运行时间戳 YYYYMMDD-HHMMSS(由主进程传入,core 层不调时间 API) */
@@ -73,6 +80,8 @@ export interface FileNameVars {
  * 占位符:{stamp} {date} {time} {macro} {plugin} {rows};{date}/{time} 由 stamp 派生
  * (stamp 不合 YYYYMMDD-HHMMSS 格式时,{date} 整段回退为 stamp、{time} 回退空串)。
  * 模板缺省 / trim 后为空 / 消毒后为空 → 一律用 fallback(fallback 自身也会被补扩展名)。
+ * 补扩展名前会剥掉误填的表格类后缀(见 REDUNDANT_TABLE_EXT_RE),`报表.csv` → `报表.xlsx`
+ * 而非 `报表.csv.xlsx`。
  * @param template 模板串(可为 undefined)
  * @param vars 占位符取值
  * @param fallback 模板不可用时的缺省文件名
@@ -107,7 +116,17 @@ export function renderFileNameTemplate(
     }
     const extRe = new RegExp(`${ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     if (!extRe.test(name)) {
-        name += ext;
+        // 先剥掉误填的表格类后缀(容忍叠了多层),再补目标扩展名;
+        // 若剥到空(模板本身就只有一个后缀,如 ".csv")则放弃剥,保留原名再补。
+        let base = name;
+        for (;;) {
+            const stripped = base.replace(REDUNDANT_TABLE_EXT_RE, '');
+            if (stripped === base || !stripped) {
+                break;
+            }
+            base = stripped;
+        }
+        name = base + ext;
     }
     return name;
 }

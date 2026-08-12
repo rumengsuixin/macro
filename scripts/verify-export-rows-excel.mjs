@@ -2,7 +2,8 @@
 // 不需网络、不起浏览器:直接构造 PostProcessContext 喂 runPostProcessors,断言产物名与内容;
 // 另单测 renderFileNameTemplate / sanitizeFilename / resolveOutputFileName 的纯逻辑。
 // 覆盖:占位符渲染 · {date}/{time} 从 stamp 派生 · 未提供变量渲染空串 · 消毒防目录穿越 ·
-//       空模板/纯非法字符回退 · 扩展名自动补(且不重复补) · 无数据行安全跳过 ·
+//       空模板/纯非法字符回退 · 扩展名自动补(且不重复补、误填其它表格后缀先剥再补) ·
+//       无数据行安全跳过 ·
 //       ColumnSpec 驱动列名列序隐藏列 · merge 产物名优先级链(宏级 > 配置 > 内置)。
 // 用法:npm run build && node scripts/verify-export-rows-excel.mjs
 import { createRequire } from 'node:module';
@@ -117,6 +118,37 @@ check(
 check(
     renderFileNameTemplate('数据.XLSX', { stamp: STAMP }, 'fb.xlsx') === '数据.XLSX',
     '已有 .XLSX(大写)→ 不重复补'
+);
+
+// 误填其它表格后缀:剥掉再补,不留 `报表.csv.xlsx` 这种双后缀
+check(
+    renderFileNameTemplate('报表-{date}.csv', { stamp: STAMP }, 'fb.xlsx') === '报表-2026-08-12.xlsx',
+    '误填 .csv → 剥掉后补 .xlsx(不产生双后缀)'
+);
+check(
+    renderFileNameTemplate('报表.XLS', { stamp: STAMP }, 'fb.xlsx') === '报表.xlsx',
+    '误填 .XLS(大写)→ 同样剥掉'
+);
+check(
+    renderFileNameTemplate('报表.csv.xls', { stamp: STAMP }, 'fb.xlsx') === '报表.xlsx',
+    '叠了多层表格后缀 → 全部剥掉'
+);
+check(
+    renderFileNameTemplate('.csv', { stamp: STAMP }, 'fb.xlsx') === '.csv.xlsx',
+    '模板只有一个后缀(剥完为空)→ 放弃剥、保留原名再补'
+);
+check(
+    renderFileNameTemplate('2026.08.12-数据', { stamp: STAMP }, 'fb.xlsx') === '2026.08.12-数据.xlsx',
+    '名字里的普通点号不被误剥'
+);
+check(
+    renderFileNameTemplate('归档.json', { stamp: STAMP }, 'fb.xlsx') === '归档.json.xlsx',
+    '非表格类后缀(.json)不剥,视作名字的一部分'
+);
+// ext 可配:剥除逻辑跟着目标扩展名走,而非写死 .xlsx
+check(
+    renderFileNameTemplate('报表.xlsx', { stamp: STAMP }, 'fb.csv', '.csv') === '报表.csv',
+    '目标扩展名为 .csv 时,反过来剥掉 .xlsx'
 );
 
 console.log('\n========== ③ export-rows-excel 端到端 ==========');
