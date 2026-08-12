@@ -749,7 +749,7 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
         const badge = document.createElement('span');
         badge.className = 'pagination-badge';
         const pages = typeof step.pageCount === 'number' ? step.pageCount : 1;
-        badge.textContent = `翻页 · 共${pages}页`;
+        badge.textContent = pages === 0 ? '翻页 · 不限页数' : `翻页 · 共${pages}页`;
         div.appendChild(badge);
     }
     // 人工介入暂停步骤:加高亮 class 与行尾徽标
@@ -1062,7 +1062,8 @@ function showStepContextMenu(x: number, y: number, index: number): void {
     } else if (step.pagination === true) {
         // 已标记:提供「修改总页数」与「取消翻页标记」
         const current = typeof step.pageCount === 'number' ? step.pageCount : 1;
-        const editItem = makeMenuItem('✏️', `修改翻页总页数(当前 ${current})`, () => {
+        const currentText = current === 0 ? '不限' : String(current);
+        const editItem = makeMenuItem('✏️', `修改翻页总页数(当前 ${currentText})`, () => {
             showPageCountInput(menu, index);
         });
         const unmarkItem = makeMenuItem('❌', '取消翻页标记', () => {
@@ -1190,21 +1191,28 @@ function showPageCountInput(menu: HTMLDivElement, index: number): void {
 
     const label = document.createElement('div');
     label.className = 'ctx-menu-label';
-    label.textContent = '总页数(共采集 N 页):';
+    label.textContent = '总页数(0 = 不限,翻不动为止):';
 
     const input = document.createElement('input');
     input.type = 'number';
-    input.min = '1';
+    input.min = '0';
     const existing = typeof steps[index].pageCount === 'number' ? (steps[index].pageCount as number) : 2;
     input.value = String(existing);
 
     const confirm = (): void => {
-        const n = Math.max(1, Math.floor(Number(input.value) || 1));
+        // 不能再用 `Number(v) || 1`:那会把用户输入的 0(不限)吃成 1。空/非数字才回落 1。
+        const raw = input.value.trim();
+        const parsed = Number(raw);
+        const n = raw === '' || !Number.isFinite(parsed) ? 1 : Math.max(0, Math.floor(parsed));
         steps[index].pagination = true;
         steps[index].pageCount = n;
         closeStepContextMenu();
         renderSteps();
-        logLocal(`步骤 #${index + 1} 已标记为翻页,总页数 ${n}。`);
+        logLocal(
+            n === 0
+                ? `步骤 #${index + 1} 已标记为翻页,不限页数(一直翻到翻不动为止)。`
+                : `步骤 #${index + 1} 已标记为翻页,总页数 ${n}。`
+        );
     };
 
     const okBtn = document.createElement('button');

@@ -142,7 +142,7 @@ export interface PauseStep {
 export interface StepFlags {
     /** 标记为翻页动作:正常回放时跳过;提取翻页时按序执行 */
     pagination?: boolean;
-    /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次);仅 pagination=true 时有效 */
+    /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次);**0 = 不限页数,一直翻到翻不动为止**;仅 pagination=true 时有效 */
     pageCount?: number;
     /** 录制此步骤时所在页面 URL(仅用于步骤列表按来源分组显示,回放忽略) */
     recordedUrl?: string;

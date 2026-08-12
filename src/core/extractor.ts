@@ -18,10 +18,19 @@ import { cleanFieldValue } from './field-transform';
 
 /** 翻页上下文:由回放引擎构造,提取流程在采完一页后驱动翻页 */
 export interface PaginationContext {
-    /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次) */
+    /**
+     * 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次)。
+     * **0 = 不限页数**:一直翻到翻不动为止(下一页按钮消失/点击抛错,或点后列表内容未变 = 已到末页)。
+     */
     totalPages: number;
     /** 执行一次翻页(按序执行所有被标记的翻页步骤) */
     turnPage: () => Promise<void>;
+    /**
+     * 是否已被用户停止(由回放引擎注入)。无界翻页没有计数封顶,
+     * 只能靠它把「用户停止」与「已到末页」区分开:前者必须原样抛错冒泡,
+     * 否则会被当成正常采完,回放结果误报成功。
+     */
+    isCancelled?: () => boolean;
     /** 等列表就绪/换页的上限(毫秒);缺省走 PAGE_SETTLE_TIMEOUT(由回放档 pagination.settleTimeoutMs 注入) */
     settleTimeoutMs?: number;
     /** 每页处理后额外停顿(毫秒;缺省 0,由回放档 pagination.perPageDelayMs 注入) */
@@ -55,35 +64,53 @@ async function waitListReady(
  * 翻页并等内容真正切换(三种翻页模式共用)。
  * SPA 翻页(纯 JS 换内容)后旧行常仍在 DOM,单纯 waitForSelector 会立即通过→下一轮读到旧页/重复处理。
  * 比较翻页前后「首个列表项文本」是否变化来确认换页;换页后的就绪等待由下一轮循环顶部的 waitListReady 承接。
+ *
+ * 返回「是否确认换页成功」:
+ * - **有界模式忽略此返回值**(页数由用户配的 totalPages 封顶,行为与历史一致:确认不到也继续)。
+ * - **无界模式(totalPages=0)靠它判定到底**:翻页抛错(末页按钮已消失)/内容未变 → false → 结束循环。
+ * 唯一不吞的例外是用户停止:此时原样抛错,避免「被停止」被当成「已翻完」。
  */
 async function turnPageAndSettle(
     page: Page,
     pagination: PaginationContext,
     listSelector: string
-): Promise<void> {
+): Promise<boolean> {
     const before = await page
         .locator(listSelector)
         .first()
         .textContent()
         .catch(() => null);
-    await pagination.turnPage();
-    if (before != null) {
-        await page
-            .waitForFunction(
-                ([sel, prev]: readonly [string, string]) => {
-                    let el: Element | null = null;
-                    try {
-                        el = document.querySelector(sel); // 非 CSS 选择器会抛→放行,交回 waitListReady
-                    } catch {
-                        return true;
-                    }
-                    return !!el && el.textContent !== prev;
-                },
-                [listSelector, before] as const,
-                { timeout: pagination.settleTimeoutMs ?? PAGE_SETTLE_TIMEOUT }
-            )
-            .catch(() => undefined); // 两页首行恰好相同/超时:放行,靠下一轮 waitListReady 兜底
+    try {
+        await pagination.turnPage();
+    } catch (err) {
+        if (pagination.isCancelled?.()) {
+            throw err; // 用户停止(context 已关)→ 冒泡回回放引擎判为 cancelled,不可吞
+        }
+        return false; // 下一页按钮不存在/点击失败 = 已到末页
     }
+    if (before == null) {
+        return false; // 翻页前首行就取不到(页面已无列表项)→ 无从确认,按到底处理
+    }
+    const changed = await page
+        .waitForFunction(
+            ([sel, prev]: readonly [string, string]) => {
+                let el: Element | null = null;
+                try {
+                    el = document.querySelector(sel); // 非 CSS 选择器会抛→放行,交回 waitListReady
+                } catch {
+                    return true;
+                }
+                return !!el && el.textContent !== prev;
+            },
+            [listSelector, before] as const,
+            { timeout: pagination.settleTimeoutMs ?? PAGE_SETTLE_TIMEOUT }
+        )
+        .then(() => true)
+        .catch(() => false); // 两页首行恰好相同/超时:有界模式放行靠 waitListReady 兜底,无界模式据此收尾
+    if (!changed && pagination.isCancelled?.()) {
+        throw new Error('回放已被用户停止。');
+    }
+    return changed;
 }
 
 /**
@@ -91,25 +118,35 @@ async function turnPageAndSettle(
  * 把等待/翻页/翻页日志收敛成单一事实来源——新模式只需提供「处理本页」回调,
  * 避免接线遗漏(此前三处复制粘贴,首页缺等待的 bug 即因此三发)。
  * 累加(rows/collected/clicked)由调用方在闭包里维护;pagination 缺省 → 单页(totalPages=1)。
+ * totalPages=0 → **不限页数**:无计数上限,翻不动(按钮消失/内容未变)即止。
+ * 回调第二参是「总页数显示文案」而非数字——无界时为「不限」,便于三处日志统一打印。
  */
 async function paginatedCollect(
     page: Page,
     listSelector: string,
     pagination: PaginationContext | undefined,
-    processPage: (pageIndex: number, totalPages: number) => Promise<void>
+    processPage: (pageIndex: number, totalLabel: string) => Promise<void>
 ): Promise<void> {
     const totalPages = pagination ? pagination.totalPages : 1;
+    const unlimited = !!pagination && totalPages === 0; // 无 pagination 绝不进无界分支(否则会原地死循环)
+    const totalLabel = unlimited ? '不限' : String(totalPages);
     const settleMs = pagination?.settleTimeoutMs ?? PAGE_SETTLE_TIMEOUT;
     const perPageDelay = pagination?.perPageDelayMs ?? 0;
-    for (let p = 1; p <= totalPages; p += 1) {
+    for (let p = 1; unlimited || p <= totalPages; p += 1) {
         await waitListReady(page, listSelector, settleMs);
-        await processPage(p, totalPages);
+        await processPage(p, totalLabel);
         if (perPageDelay > 0) {
             await page.waitForTimeout(perPageDelay); // 每页处理后拟人化停顿(回放档 perPageDelayMs)
         }
-        if (p < totalPages && pagination) {
+        if (unlimited && pagination) {
+            logInfo(`执行翻页(前往第 ${p + 1} 页,不限页数)……`);
+            if (!(await turnPageAndSettle(page, pagination, listSelector))) {
+                logInfo(`未检测到下一页,翻页结束(共处理 ${p} 页)。`);
+                break;
+            }
+        } else if (p < totalPages && pagination) {
             logInfo(`执行翻页(前往第 ${p + 1}/${totalPages} 页)……`);
-            await turnPageAndSettle(page, pagination, listSelector);
+            await turnPageAndSettle(page, pagination, listSelector); // 有界:返回值不参与判定
         }
     }
 }
@@ -147,10 +184,10 @@ export async function extract(
 
     // list 模式:逐页采集
     const rows: ExtractRow[] = [];
-    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalLabel) => {
         const pageRows = await collectListRows(page, config);
         rows.push(...pageRows);
-        logInfo(`第 ${p}/${totalPages} 页采集到 ${pageRows.length} 行,累计 ${rows.length} 行。`);
+        logInfo(`第 ${p}/${totalLabel} 页采集到 ${pageRows.length} 行,累计 ${rows.length} 行。`);
     });
     return rows;
 }
@@ -384,11 +421,11 @@ async function extractListAction(
             }
         }
     };
-    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalLabel) => {
         const items = page.locator(config.listSelector);
         const count = await items.count();
         logInfo(
-            `第 ${p}/${totalPages} 页发现 ${count} 个列表项,每项 ${actions.length || 1} 个动作,开始逐项执行……`
+            `第 ${p}/${totalLabel} 页发现 ${count} 个列表项,每项 ${actions.length || 1} 个动作,开始逐项执行……`
         );
         let matched = 0;
         let skipped = 0;
@@ -537,10 +574,10 @@ async function extractListDetail(
 ): Promise<ExtractRow[]> {
     // ===== 阶段一:跨所有页收集列表(必须先收集完整列表,再导航进详情;否则列表 DOM 丢失) =====
     const collected: { row: ExtractRow; detailUrl: string }[] = [];
-    await paginatedCollect(page, config.listSelector, pagination, async (p, totalPages) => {
+    await paginatedCollect(page, config.listSelector, pagination, async (p, totalLabel) => {
         const pageItems = await collectListDetailPage(page, config);
         collected.push(...pageItems);
-        logInfo(`第 ${p}/${totalPages} 页采集到 ${pageItems.length} 项,累计 ${collected.length} 项。`);
+        logInfo(`第 ${p}/${totalLabel} 页采集到 ${pageItems.length} 项,累计 ${collected.length} 项。`);
     });
 
     logInfo(`列表全部采集完成,共 ${collected.length} 项,开始逐个进入详情页抓取……`);

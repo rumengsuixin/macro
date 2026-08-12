@@ -642,12 +642,20 @@ export class MacroRunner {
                 const paginationSteps = macro.steps.filter((s) => s.pagination);
                 let pagination: PaginationContext | undefined;
                 if (paginationSteps.length > 0) {
-                    const totalPages = Math.max(
-                        1,
-                        ...paginationSteps.map((s) => s.pageCount ?? 1)
-                    );
+                    // 归一每个 pageCount:非有限数/负数(手改 JSON)按 1;0 = 不限页数,
+                    // 任一步骤标 0 即整体不限(不限是「更大」的意图,不该被另一步的有限值封顶)。
+                    const counts = paginationSteps.map((s) => {
+                        const raw = s.pageCount;
+                        return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+                            ? Math.floor(raw)
+                            : 1;
+                    });
+                    const totalPages = counts.includes(0) ? 0 : Math.max(1, ...counts);
                     logInfo(
-                        `检测到 ${paginationSteps.length} 个翻页步骤,总页数设为 ${totalPages}。`
+                        `检测到 ${paginationSteps.length} 个翻页步骤,` +
+                            (totalPages === 0
+                                ? '总页数不限(一直翻到翻不动为止)。'
+                                : `总页数设为 ${totalPages}。`)
                     );
                     const runPage = activePage;
                     const runContext = context; // 闭包内 context 收窄丢失,捕获非空引用
@@ -656,6 +664,8 @@ export class MacroRunner {
                         // 翻页节奏来自当前回放档(缺省 = 现状:settle 30s、每页间隔 0)
                         settleTimeoutMs: this.replay.pagination.settleTimeoutMs,
                         perPageDelayMs: this.replay.pagination.perPageDelayMs,
+                        // 无界翻页没有计数封顶,提取端靠它区分「用户停止」与「已到末页」
+                        isCancelled: (): boolean => this.cancelled,
                         turnPage: async (): Promise<void> => {
                             for (const s of paginationSteps) {
                                 await this.executeStep(runPage, s, -1, runContext);
