@@ -18,8 +18,8 @@
         },
         "bank-integrate-payout": {
             "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\代付订单对账.exe",
-            "description": "格式:仅 .xls / .xlsx(不接受 .csv / .pdf)\n必需:admin 主表(文件名以 admin- 开头)\n平台文件(文件名前缀,不分大小写):ibfpay- 或 ibf平台 / superpay- / wangupay- 或 wangguypay- / okey话费卡结算 / EPIN 三件套 epin_siparisler_ + epin_pinler_ + epin_odemeler_ / Binance:usdt奖品发放信息 或 binance- 或 merged-\n提示:只认 xls/xlsx;EPIN 需三个文件配套;admin 缺失会中止。",
-            "examples": ["admin-Okey兑换202604.xls", "superpay-2026.xls", "ibfpay-2026.xls", "wangupay-2026.xls", "okey话费卡结算2026.xls", "epin_siparisler_2026.xls", "epin_pinler_2026.xls", "epin_odemeler_2026.xls", "binance-2026.xls"]
+            "description": "格式:仅 .xls / .xlsx(不接受 .csv / .pdf)\n必需:admin 主表(文件名以 admin- 开头)\n平台文件(文件名前缀,不分大小写):ibfpay- 或 ibf平台 / superpay- / wangupay- 或 wangguypay- / okey话费卡结算 / epay(无分隔符,如 Epay兑换明细) / EPIN 三件套 epin_siparisler_ + epin_pinler_ + epin_odemeler_ / Binance:usdt奖品发放信息 或 binance- 或 merged-\n提示:只认 xls/xlsx;EPIN 需三个文件配套;admin 缺失会中止。",
+            "examples": ["admin-Okey兑换202604.xls", "superpay-2026.xls", "ibfpay-2026.xls", "wangupay-2026.xls", "okey话费卡结算2026.xls", "Epay兑换明细202607.xlsx", "epin_siparisler_2026.xls", "epin_pinler_2026.xls", "epin_odemeler_2026.xls", "binance-2026.xls"]
         },
         "bank-integrate-collection-payout": {
             "executable": "D:\\git_object\\xlsxIntgration\\dist\\银行流水整合\\代收代付对账.exe",
