@@ -2107,6 +2107,23 @@
             padding: 5px 14px;
         }
 
+        /* 「追加式加载更多」勾选行:与数字输入同在 .ctx-menu-input 内,须覆盖上面 input 的固定宽度 */
+        .ctx-menu-check {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-soft);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .ctx-menu-input .ctx-menu-check input[type="checkbox"] {
+            width: auto;
+            flex: none;
+            padding: 0;
+        }
+
         /* ============================ 日志区 ============================ */
         /* 上下分隔条:拖动调整日志区高度(与左右分隔条 .main-divider 同款) */
         .log-divider {

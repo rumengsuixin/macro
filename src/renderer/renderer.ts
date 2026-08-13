@@ -761,7 +761,11 @@ function createStepLine(step: Step, i: number): HTMLDivElement {
         const badge = document.createElement('span');
         badge.className = 'pagination-badge';
         const pages = typeof step.pageCount === 'number' ? step.pageCount : 1;
-        badge.textContent = pages === 0 ? '翻页 · 不限页数' : `翻页 · 共${pages}页`;
+        if (step.paginationAppend === true) {
+            badge.textContent = pages === 0 ? '加载更多 · 不限次数' : `加载更多 · 共${pages}批`;
+        } else {
+            badge.textContent = pages === 0 ? '翻页 · 不限页数' : `翻页 · 共${pages}页`;
+        }
         div.appendChild(badge);
     }
     // 人工介入暂停步骤:加高亮 class 与行尾徽标
@@ -1075,12 +1079,14 @@ function showStepContextMenu(x: number, y: number, index: number): void {
         // 已标记:提供「修改总页数」与「取消翻页标记」
         const current = typeof step.pageCount === 'number' ? step.pageCount : 1;
         const currentText = current === 0 ? '不限' : String(current);
-        const editItem = makeMenuItem('✏️', `修改翻页总页数(当前 ${currentText})`, () => {
+        const modeText = step.paginationAppend === true ? '加载更多' : '翻页';
+        const editItem = makeMenuItem('✏️', `修改翻页设置(当前 ${modeText}·${currentText})`, () => {
             showPageCountInput(menu, index);
         });
         const unmarkItem = makeMenuItem('❌', '取消翻页标记', () => {
             delete steps[index].pagination;
             delete steps[index].pageCount;
+            delete steps[index].paginationAppend;
             closeStepContextMenu();
             renderSteps();
             logLocal(`步骤 #${index + 1} 已取消翻页标记。`);
@@ -1203,7 +1209,6 @@ function showPageCountInput(menu: HTMLDivElement, index: number): void {
 
     const label = document.createElement('div');
     label.className = 'ctx-menu-label';
-    label.textContent = '总页数(0 = 不限,翻不动为止):';
 
     const input = document.createElement('input');
     input.type = 'number';
@@ -1211,19 +1216,47 @@ function showPageCountInput(menu: HTMLDivElement, index: number): void {
     const existing = typeof steps[index].pageCount === 'number' ? (steps[index].pageCount as number) : 2;
     input.value = String(existing);
 
+    // 追加式勾选:「加载更多」类按钮点了旧行不消失、新行追加在末尾,
+    // 勾上后只采本轮新增的行(否则每点一次都会把前几批重采一遍 → 行数 20+40+60 膨胀)。
+    const appendWrap = document.createElement('label');
+    appendWrap.className = 'ctx-menu-check';
+    const appendBox = document.createElement('input');
+    appendBox.type = 'checkbox';
+    appendBox.checked = steps[index].paginationAppend === true;
+    const appendText = document.createElement('span');
+    appendText.textContent = '追加式加载更多(旧行不消失,只采新增行)';
+    appendWrap.appendChild(appendBox);
+    appendWrap.appendChild(appendText);
+
+    // 说明文案随勾选态切换:追加式论「批」(N 批 = 点 N-1 次),整页替换论「页」
+    const syncLabel = (): void => {
+        label.textContent = appendBox.checked
+            ? '采集批数(0 = 不限,点到点不动为止):'
+            : '总页数(0 = 不限,翻不动为止):';
+    };
+    syncLabel();
+    appendBox.addEventListener('change', syncLabel);
+
     const confirm = (): void => {
         // 不能再用 `Number(v) || 1`:那会把用户输入的 0(不限)吃成 1。空/非数字才回落 1。
         const raw = input.value.trim();
         const parsed = Number(raw);
         const n = raw === '' || !Number.isFinite(parsed) ? 1 : Math.max(0, Math.floor(parsed));
+        const append = appendBox.checked;
         steps[index].pagination = true;
         steps[index].pageCount = n;
+        if (append) {
+            steps[index].paginationAppend = true;
+        } else {
+            delete steps[index].paginationAppend; // 不写 false,保持宏 JSON 干净
+        }
         closeStepContextMenu();
         renderSteps();
+        const mode = append ? '加载更多(追加式)' : '翻页';
         logLocal(
             n === 0
-                ? `步骤 #${index + 1} 已标记为翻页,不限页数(一直翻到翻不动为止)。`
-                : `步骤 #${index + 1} 已标记为翻页,总页数 ${n}。`
+                ? `步骤 #${index + 1} 已标记为${mode},不限次数(一直到${append ? '点不动' : '翻不动'}为止)。`
+                : `步骤 #${index + 1} 已标记为${mode},共采集 ${n} ${append ? '批' : '页'}。`
         );
     };
 
@@ -1240,6 +1273,7 @@ function showPageCountInput(menu: HTMLDivElement, index: number): void {
     wrap.appendChild(label);
     wrap.appendChild(input);
     wrap.appendChild(okBtn);
+    wrap.appendChild(appendWrap);
     menu.appendChild(wrap);
     input.focus();
     input.select();

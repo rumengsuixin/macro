@@ -144,6 +144,13 @@ export interface StepFlags {
     pagination?: boolean;
     /** 总页数 N(共采集 N 页 → 翻页序列执行 N-1 次);**0 = 不限页数,一直翻到翻不动为止**;仅 pagination=true 时有效 */
     pageCount?: number;
+    /**
+     * 追加式翻页(「加载更多」按钮):点击后**旧行仍留在 DOM、新行追加在末尾**,列表只增不换。
+     * 置 true 后提取端只采本轮**新增**的行(按行数偏移),不再重采已采过的 → 消除重复
+     * (此前 pageCount>1 时行数按 20+40+60 膨胀);换页确认也从「首行文本变化」改判「列表项数增加」。
+     * 缺省(不存在/false)= 整页替换,与历史语义逐字节一致。仅 pagination=true 时有效。
+     */
+    paginationAppend?: boolean;
     /** 录制此步骤时所在页面 URL(仅用于步骤列表按来源分组显示,回放忽略) */
     recordedUrl?: string;
 }

@@ -665,16 +665,23 @@ export class MacroRunner {
                             : 1;
                     });
                     const totalPages = counts.includes(0) ? 0 : Math.max(1, ...counts);
+                    // 追加式(「加载更多」):任一翻页步骤标了即整体按追加式处理——
+                    // 提取端只采本轮新增的行,换页确认改判「项数增加」。
+                    const appendMode = paginationSteps.some((s) => s.paginationAppend === true);
                     logInfo(
                         `检测到 ${paginationSteps.length} 个翻页步骤,` +
+                            (appendMode ? '方式为追加式(加载更多,只采新增行),' : '') +
                             (totalPages === 0
-                                ? '总页数不限(一直翻到翻不动为止)。'
-                                : `总页数设为 ${totalPages}。`)
+                                ? appendMode
+                                    ? '次数不限(一直点到点不动为止)。'
+                                    : '总页数不限(一直翻到翻不动为止)。'
+                                : `共采集 ${totalPages} ${appendMode ? '批' : '页'}。`)
                     );
                     const runPage = activePage;
                     const runContext = context; // 闭包内 context 收窄丢失,捕获非空引用
                     pagination = {
                         totalPages,
+                        appendMode,
                         // 翻页节奏来自当前回放档(缺省 = 现状:settle 30s、每页间隔 0)
                         settleTimeoutMs: this.replay.pagination.settleTimeoutMs,
                         perPageDelayMs: this.replay.pagination.perPageDelayMs,
