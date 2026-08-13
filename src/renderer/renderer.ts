@@ -63,6 +63,14 @@ interface RunResult {
     stepUrls?: (string | null)[];
 }
 
+/** 单次运行的选项(每次运行的意图,不随宏文件走;与主进程 RunMacroOptions 对应) */
+interface RunMacroOptions {
+    /** 宏文件绝对路径:给补抓快照定唯一键(宏名会重复);未保存过的宏为空 */
+    macroPath?: string;
+    /** 本次是否复用补抓快照跳过已抓成功的详情项;缺省 false = 全量抓 */
+    resume?: boolean;
+}
+
 /** 宏库列表项摘要(与主进程 MacroSummary 对应) */
 interface MacroSummary {
     filePath: string;
@@ -164,7 +172,7 @@ interface ElectronAPI {
     listMacros(): Promise<MacroSummary[]>;
     readMacro(filePath: string): Promise<{ macro: Macro; captures: MacroCaptures | null; filePath: string } | null>;
     openMacrosDir(): Promise<string>;
-    runMacro(macro: Macro): Promise<RunResult>;
+    runMacro(macro: Macro, options?: RunMacroOptions): Promise<RunResult>;
     exportExcel(rows: Record<string, string>[], fields?: Array<Record<string, unknown>>): Promise<string>;
     getReplayProfiles(): Promise<{ names: string[]; active: string }>;
     setActiveReplayProfile(name: string): Promise<{ names: string[]; active: string }>;
@@ -1924,6 +1932,41 @@ function scheduleAutosave(): void {
     }, 600);
 }
 
+// ===== 补抓模式开关 + 运行宏统一入口 =====
+// 开关:初值读 localStorage(默认关,同 HTML 的未 checked);切换时存回。
+// 只影响「是否复用快照跳过已抓成功的详情项」——快照本身每次回放都会落,不受此开关影响。
+const RESUME_LS_KEY = 'macro.resume';
+const resumeToggle = byId<HTMLInputElement>('resume-mode');
+try {
+    resumeToggle.checked = localStorage.getItem(RESUME_LS_KEY) === '1';
+} catch {
+    // localStorage 不可用:沿用 HTML 默认(未勾选)
+}
+resumeToggle.addEventListener('change', () => {
+    try {
+        localStorage.setItem(RESUME_LS_KEY, resumeToggle.checked ? '1' : '0');
+    } catch {
+        // 忽略存储失败
+    }
+    logLocal(
+        resumeToggle.checked
+            ? '已开启补抓模式:下次运行只补上次没抓到的详情项,已成功的直接复用上次结果(不重新打开详情页)。'
+            : '已关闭补抓模式:下次运行会完整抓取每一项。'
+    );
+});
+
+/**
+ * **唯一的 runMacro 调用入口**:统一附带 per-run 选项(补抓开关 + 宏文件路径)。
+ * 收口而非各调用点分别传参 —— 此前三处(主按钮 / 宏库后台运行 / 宏库批量运行)各自调用,
+ * 只改一处就会让另两处静默漏掉新选项。**新增运行入口必须走这里。**
+ */
+function invokeRunMacro(macro: Macro, filePath?: string | null): Promise<RunResult> {
+    return window.electronAPI.runMacro(macro, {
+        macroPath: filePath ?? undefined,
+        resume: resumeToggle.checked,
+    });
+}
+
 // 自动保存开关:初值读 localStorage(默认开,同 HTML 的 checked);切换时存回,打开时立即落一次当前状态
 const AUTOSAVE_LS_KEY = 'macro.autosave';
 try {
@@ -2776,7 +2819,7 @@ runBtn.addEventListener('click', async () => {
     setBusy(true);
     logLocal('提交运行宏……(将弹出 Playwright 浏览器窗口)');
     try {
-        const result = await window.electronAPI.runMacro(macro);
+        const result = await invokeRunMacro(macro, currentMacroPath);
         reportRunResult(result);
     } catch (e) {
         logLocal('运行宏异常:' + (e as Error).message, 'error');
@@ -3739,7 +3782,7 @@ async function runMacroFromLibrary(summary: MacroSummary): Promise<void> {
     setMacroLibButtonsDisabled(true);
     logLocal(`后台运行宏「${summary.name}」……(将弹出 Playwright 浏览器窗口,当前编辑区不受影响)`);
     try {
-        const result = await window.electronAPI.runMacro(loaded.macro);
+        const result = await invokeRunMacro(loaded.macro, loaded.filePath);
         reportRunResult(result, { fromEditor: false });
     } catch (e) {
         logLocal('运行宏异常:' + (e as Error).message, 'error');
@@ -3789,7 +3832,7 @@ async function runSelectedMacros(): Promise<void> {
             const label = loaded.macro.name || filePath;
             logLocal(`[${k + 1}/${picked.length}] 运行「${label}」……`);
             try {
-                const result = await window.electronAPI.runMacro(loaded.macro);
+                const result = await invokeRunMacro(loaded.macro, filePath);
                 reportRunResult(result, { fromEditor: false });
                 if (result.ok) {
                     okCount += 1;

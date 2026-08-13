@@ -5,7 +5,10 @@ import './runtime-bootstrap';
 import { app, BrowserWindow, ipcMain, dialog, shell, session, Notification, type Cookie, type WebContents } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { MacroRunner } from '../core/macro-runner';
+import { createResumeStore } from '../core/resume-store';
+import { sanitizeFilename } from '../core/template-util';
 import { exportToExcel } from '../core/excel-exporter';
 import { fieldsToColumnSpecs, collectExtractFields } from '../core/field-transform';
 import { setLogSink, logInfo, logError } from '../core/logger';
@@ -30,6 +33,7 @@ import type {
     ExtractRow,
     ExtractField,
     RunResult,
+    RunMacroOptions,
     PostProcessResult,
     OnPause,
     PauseInfo,
@@ -64,6 +68,11 @@ const errorsDir = path.join(dataRoot, 'errors');
 const downloadsDir = path.join(dataRoot, 'downloads');
 const timelinesDir = path.join(dataRoot, 'timelines'); // 「只记录不修改」支路的请求时间线 JSONL 输出
 const dumpsDir = path.join(dataRoot, 'dumps'); // 「请求体落盘」支路的二进制请求体输出(如上传视频落成 mp4)
+// list-detail 补抓快照(每项一行 JSONL)。**刻意不进 ensureDirs()**:那里的 mkdirSync 没有 try/catch,
+// 而 ensureDirs 在每次 run-macro 开头都跑——只读目录/磁盘满时会让**所有**回放一起抛错失败。
+// 改由 resume-store 懒建 + 写失败熔断(同 timeline-recorder/record-body-index 的铁律),
+// 顺带让非 list-detail 的宏连这个目录都不会创建。
+const resumeDir = path.join(dataRoot, 'resume');
 const examplesDir = path.join(projectRoot, 'examples'); // 只读示例,留在程序目录内
 
 // 运行时配置统一目录:全部 7 个 *.json 收拢到 dataRoot/config/,与运行时输出目录(macros/exports/…)分离,保持根整洁。
@@ -167,6 +176,21 @@ let recordingWebContents: WebContents | null = null;
 
 // 每次运行宏分配递增 runId,用于隔离不同次运行的「继续」信号,避免串信号/误触发
 let runSeq = 0;
+
+/**
+ * 补抓快照的文件名主键。
+ * 用「宏文件名 + 绝对路径短摘要」而非宏名:宏名会重复(不同目录可以有同叫「订单列表」的宏),
+ * 只按名字存会让它们互相污染快照;保留 basename 是为了人能一眼看出属于哪个宏。
+ * 宏未保存过(无路径)时退化为宏名,并由调用方日志提示先保存宏。
+ */
+function resumeKeyFor(macro: Macro, macroPath?: string): string {
+    if (macroPath) {
+        const base = path.basename(macroPath).replace(/\.json$/i, '');
+        const digest = crypto.createHash('sha1').update(macroPath).digest('hex').slice(0, 8);
+        return sanitizeFilename(`${base}-${digest}`);
+    }
+    return sanitizeFilename(macro.name?.trim() || 'unnamed');
+}
 
 /** 确保运行时目录存在 */
 function ensureDirs(): void {
@@ -372,7 +396,7 @@ function registerIpc(): void {
         }
     );
 
-    ipcMain.handle('run-macro', async (e, macro: Macro): Promise<RunResult> => {
+    ipcMain.handle('run-macro', async (e, macro: Macro, options?: RunMacroOptions): Promise<RunResult> => {
         const runId = ++runSeq;
         const wc = e.sender;
         // 本次运行注册的 resume 监听器,finally 统一移除,防泄漏/串信号
@@ -465,6 +489,26 @@ function registerIpc(): void {
         // 注入挂起放行回调(setter 而非构造入参,避免动构造签名)
         runner.setOnHold(onHold);
 
+        // 补抓快照:仅 list-detail 且有 detailFields 时才建(否则 createResumeStore 返回 null、彻底不接线)。
+        // 「写恒开、读按开关」——不勾补抓也照样落快照,否则「第一次跑完才想到要补抓」就永远补不了。
+        const resumeStore = createResumeStore({
+            dir: resumeDir,
+            key: resumeKeyFor(macro, options?.macroPath),
+            config: macro.extract,
+            reuse: options?.resume === true,
+            macroName: macro.name,
+            macroPath: options?.macroPath,
+        });
+        if (resumeStore) {
+            runner.setResume(resumeStore);
+            logInfo(
+                `补抓快照:${resumeStore.reuseEnabled ? '已开启复用(跳过上次已抓成功的详情项)' : '仅记录(未勾选补抓,本次全量抓取)'};文件 ${resumeStore.file}`
+            );
+            if (!options?.macroPath) {
+                logInfo('提示:当前宏尚未保存到文件,快照按宏名定位;建议先保存宏,避免同名宏共用快照。');
+            }
+        }
+
         // 「停止回放」信号:匹配 runId 时调用 runner.cancel() 主动中止(与 resume 同一 runId 隔离机制)
         const stopListener = (_ev: unknown, id: number): void => {
             if (id !== runId) {
@@ -506,6 +550,11 @@ function registerIpc(): void {
 
         try {
             const result = await runner.run(macro);
+            // 补抓统计:**成功/失败/被停止都要打**——「已抓的项已存进快照、勾补抓可续上」这条退路
+            // 恰恰在失败与中途停止时最该被用户看到(此时既无 Excel 也无弹窗,否则会以为白跑了)。
+            if (resumeStore) {
+                logInfo(resumeStore.summary());
+            }
             if (result.ok && result.downloads && result.downloads.length > 0) {
                 logInfo(`已下载 ${result.downloads.length} 个文件到:${downloadsDir}`);
             }

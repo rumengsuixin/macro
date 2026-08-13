@@ -8,6 +8,7 @@ macros/
 downloads/
 timelines/
 dumps/
+resume/
 browser-profile/
 # 运行时配置:现全部收在 dataRoot/config/(首次运行自动生成;不含 git 追踪的 config-templates/)。
 # 根目录旧位置的遗留文件(旧版本生成)一并忽略,防误提交(尤其 ai-config.json 可能含凭据)。

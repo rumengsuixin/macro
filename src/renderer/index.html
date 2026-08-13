@@ -2517,6 +2517,7 @@
                 <button id="run" class="ok" title="自动重放刚才的操作并采集数据">运行宏</button>
                 <button id="stop-run" class="danger" disabled title="中止正在自动运行的任务">停止回放</button>
                 <select id="replay-profile" title="回放行为档:超时/重试/步骤间延时/翻页节奏。可切 slow-site(慢站)/anti-bot(防风控);下次回放生效。细调改 replay-profile.json"></select>
+                <label id="resume-mode-label" title="补抓模式:只抓上次没抓到(失败/为空)的详情项,上次已抓成功的直接复用上次结果、不再重新打开详情页。按详情链接识别,适合「列表几百项、有几个详情页没打开」时补齐数据。第一次跑请保持关闭;快照每次回放都会自动保存,所以中途停止或失败后也能勾上它续抓"><input type="checkbox" id="resume-mode"> ♻️ 补抓</label>
                 <label id="hooks-enabled-label" hidden title="事件钩子:回放开始/完成/失败时触发 webhook / 外部命令 / 状态文件 / 桌面通知(下次回放生效)。细节编辑 hooks.json"><input type="checkbox" id="hooks-enabled"> 🔔 钩子</label>
                 <button id="hooks-import" hidden title="导入 hooks.json 配置文件(覆盖当前配置,下次回放生效)">导入钩子</button>
                 <button id="save" title="把操作 + 采集配置存成文件,下次可复用">保存宏</button>

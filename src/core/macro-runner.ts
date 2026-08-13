@@ -42,6 +42,7 @@ import type {
     RequestRulesConfig,
 } from './macro-types';
 import { extract, type PaginationContext } from './extractor';
+import type { ResumeStore } from './resume-store';
 import { DownloadManager } from './download-manager';
 import {
     matchRule,
@@ -189,6 +190,11 @@ export class MacroRunner {
      * 由主进程经 setOnHold 注入;缺省(无头/单测)立即 continue,避免永久挂死回放。
      */
     private onHold: OnHold = async (): Promise<HoldDecision> => 'continue';
+    /**
+     * 补抓快照读写器(list-detail 增量重抓);由主进程经 setResume 注入。
+     * 缺省 null = 不复用也不落快照,提取行为与历史一字不差(无头/单测/非 list-detail 均走此路)。
+     */
+    private resume: ResumeStore | null = null;
     /** 会话选项:持久化目录 / 注入的 cookies;由主进程组装,缺省则用临时 profile、不注入 */
     private session: SessionOptions;
     /** 下载文件保存目录;缺省回退到 errorDir 同级的 downloads */
@@ -345,6 +351,14 @@ export class MacroRunner {
      */
     setOnHold(cb: OnHold): void {
         this.onHold = cb;
+    }
+
+    /**
+     * 注入「补抓快照」读写器(主进程在 new 之后调用)。同 setOnHold:用 setter 而非动 7 个位置参数
+     * 的构造签名,以免破坏所有既有 new MacroRunner 调用点。缺省 null = 不复用不落快照。
+     */
+    setResume(store: ResumeStore): void {
+        this.resume = store;
     }
 
     /**
@@ -680,7 +694,20 @@ export class MacroRunner {
                     };
                 }
                 logInfo('开始按提取规则提取数据……');
-                rows = await extract(activePage, macro.extract, pagination, downloadManager);
+                rows = await extract(
+                    activePage,
+                    macro.extract,
+                    pagination,
+                    downloadManager,
+                    this.resume ?? undefined
+                );
+                // 提取阶段结束后必须再验一次「是否已被用户停止」——:635 那次只挡提取**之前**,
+                // 而 cancel() 靠关 context 让操作抛错冒泡的假设,会被 list-detail / list-action 里
+                // 「单项失败不致命」的内层 catch 吞掉(它分不清"这页打不开"和"浏览器已被关"),
+                // 于是 extract 正常返回、这里若不复查就会误报 ok:true 并导出一份详情列全空的表。
+                if (this.cancelled) {
+                    throw new Error('回放已被用户停止。');
+                }
                 logInfo(`数据提取完成,共 ${rows.length} 行。`);
             } else {
                 logInfo('未配置提取规则,跳过数据提取。');

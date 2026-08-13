@@ -491,6 +491,23 @@ export interface RunResult {
 }
 
 /**
+ * 单次运行的选项(由渲染层随「运行宏」传入;缺省 = 现状行为)。
+ * 与宏 JSON 里的配置区分开:这里放的是**每次运行的意图**,不随宏文件走。
+ */
+export interface RunMacroOptions {
+    /**
+     * 宏文件绝对路径。仅用于给补抓快照定唯一键(宏名会重复,不同目录的同名宏不能共用快照)。
+     * 未保存过的宏为空,此时退化为按宏名定位。
+     */
+    macroPath?: string;
+    /**
+     * 本次是否复用补抓快照、跳过上次已抓成功的详情项(list-detail 专用)。
+     * 缺省 false = 全量抓取(但仍会落快照,供下次补抓用)。
+     */
+    resume?: boolean;
+}
+
+/**
  * 录制端请求改写规则:命中 urlPattern 的 POST 请求,按 set/remove 改写其 body 顶层字段。
  * 存于 request-rules.json(项目根/打包 userData);仅作用于录制阶段的 Electron webview。
  */

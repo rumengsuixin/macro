@@ -1,7 +1,7 @@
 // 主窗口 preload:通过 contextBridge 向渲染进程安全地暴露 electronAPI。
 // 渲染进程只能通过这些方法与主进程通信,Playwright 等对象不会暴露给渲染进程。
 import { contextBridge, ipcRenderer } from 'electron';
-import type { Macro, MacroCaptures, MacroSummary, ExtractRow, ExtractField, RunResult, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
+import type { Macro, MacroCaptures, MacroSummary, ExtractRow, ExtractField, RunResult, RunMacroOptions, BrowserConfig, PostProcessorManifest, PostProcessResult } from '../core/macro-types';
 import type { LogMessage } from '../core/logger';
 import type { GenerateInput, GenerateResult, ProfileSummary, FixSelectorInput, FixSelectorResult } from '../core/ai-extract';
 import type { BankIntegrateConfig } from '../core/post-processors/bank-integrate-config';
@@ -68,8 +68,13 @@ const api = {
     /** 用系统文件管理器打开默认加载宏的目录(宏库面板「打开文件夹」) */
     openMacrosDir: (): Promise<string> => ipcRenderer.invoke('open-macros-dir'),
 
-    /** 运行宏,返回结构化结果 */
-    runMacro: (macro: Macro): Promise<RunResult> => ipcRenderer.invoke('run-macro', macro),
+    /**
+     * 运行宏,返回结构化结果。
+     * options 为**本次运行的意图**(不随宏文件走):补抓开关 + 宏文件路径(给补抓快照定唯一键);
+     * 缺省 = 现状行为(全量抓取)。
+     */
+    runMacro: (macro: Macro, options?: RunMacroOptions): Promise<RunResult> =>
+        ipcRenderer.invoke('run-macro', macro, options),
 
     /** 导出 Excel(弹出保存对话框);fields=当前宏字段定义,用于按 label/order/hidden/格式 出表 */
     exportExcel: (rows: ExtractRow[], fields?: ExtractField[]): Promise<string | null> =>

@@ -12,6 +12,7 @@ import type {
     ExtractRow,
 } from './macro-types';
 import type { DownloadManager } from './download-manager';
+import type { ResumeStore, ResumeStatus } from './resume-store';
 import { logInfo, logError } from './logger';
 import { evalBoolExpr, checkExprSyntax } from './expr-eval';
 import { cleanFieldValue } from './field-transform';
@@ -159,12 +160,14 @@ async function paginatedCollect(
  * - list-action:逐页遍历列表项,逐项点击其中按钮(常用于每点一次触发一次下载),无数据行。
  * pagination 缺省时按单页处理(totalPages=1),行为与无翻页一致。
  * downloads 仅 list-action 用到(逐项节流);其它 mode 忽略。
+ * resume 仅 list-detail 用到(补抓快照:跳过上次已抓成功的项);其它 mode 忽略,缺省 = 全量抓 + 不落快照。
  */
 export async function extract(
     page: Page,
     config: ExtractConfig,
     pagination?: PaginationContext,
-    downloads?: DownloadManager
+    downloads?: DownloadManager,
+    resume?: ResumeStore
 ): Promise<ExtractRow[]> {
     if (config.mode === 'single') {
         const row: ExtractRow = {};
@@ -175,7 +178,7 @@ export async function extract(
     }
 
     if (config.mode === 'list-detail') {
-        return extractListDetail(page, config, pagination);
+        return extractListDetail(page, config, pagination, resume);
     }
 
     if (config.mode === 'list-action') {
@@ -566,11 +569,16 @@ async function collectListDetailPage(
  * 阶段一:先跨所有页采集每项基础字段 + 详情链接(绝对化),全部收集完;
  * 阶段二:逐个进入详情页抓取详情字段并合并进对应行。
  * 单个详情页失败不致命:该行详情字段留空并记录日志,继续下一条。
+ *
+ * resume(补抓快照,可选):阶段二逐项先查快照 —— 上次已抓成功的项**不再导航**、直接复用其
+ * 详情侧字段值;其余照常抓并把结论记回快照。阶段一始终照常重跑(detailUrl 清单只能从列表页
+ * 得到,且顺便刷新了列表字段),故产出天然是「完整合并结果」、顺序也天然正确。
  */
 async function extractListDetail(
     page: Page,
     config: ListDetailExtractConfig,
-    pagination?: PaginationContext
+    pagination?: PaginationContext,
+    resume?: ResumeStore
 ): Promise<ExtractRow[]> {
     // ===== 阶段一:跨所有页收集列表(必须先收集完整列表,再导航进详情;否则列表 DOM 丢失) =====
     const collected: { row: ExtractRow; detailUrl: string }[] = [];
@@ -587,20 +595,39 @@ async function extractListDetail(
     const detailListSelector =
         typeof config.detailListSelector === 'string' ? config.detailListSelector.trim() : '';
     const rows: ExtractRow[] = [];
+    let reusedCount = 0;
+    let fetchedCount = 0;
     for (let i = 0; i < collected.length; i += 1) {
+        // 用户中途点「停止」:提前退出,免得剩余项被下面的 catch 逐个吞成 failed 写脏快照
+        // (正确性由 runner 在 extract 返回后的 cancelled 检查兜底;此处只为不白跑、不污染快照)
+        if (pagination?.isCancelled?.()) {
+            throw new Error('回放已被用户停止。');
+        }
         const { row, detailUrl } = collected[i];
         let produced: ExtractRow[];
-        if (detailUrl) {
+        // 补抓:上次已抓成功的项直接复用其详情侧值,不再导航(省时,也避开再次失败)。
+        // 复用值取自快照、**已是清洗后的结果,绝不能再过一遍 cleanFieldValue**(会让 replace/日期
+        // 这类 transform 二次应用、静默改错值);外层 defaultDetailRow 只填缺失键,是安全的零成本保险。
+        const cached = detailUrl ? resume?.get(detailUrl) ?? null : null;
+        if (cached) {
+            produced = cached.map((d) => defaultDetailRow(config, { ...row, ...d }));
+            reusedCount += 1;
+        } else if (detailUrl) {
+            let status: ResumeStatus;
             try {
                 await page.goto(detailUrl, { waitUntil: 'domcontentloaded' });
                 produced = detailListSelector
                     ? await collectDetailListRows(page, config, row, detailListSelector)
                     : [await fillDetailFields(page, config, row)];
+                status = detailAllEmpty(config, produced) ? 'empty' : 'ok';
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 logError(`详情页抓取失败(${detailUrl}):${message},该行详情字段留空。`);
                 produced = [defaultDetailRow(config, row)];
+                status = 'failed';
             }
+            fetchedCount += 1;
+            resume?.record(detailUrl, status, detailValuesOf(config, produced));
         } else {
             // 无详情链接:详情字段填默认值(缺省空串),保证列对齐
             produced = [defaultDetailRow(config, row)];
@@ -608,8 +635,12 @@ async function extractListDetail(
         rows.push(...produced);
         logInfo(
             `详情进度 ${i + 1}/${collected.length}` +
+                (cached ? '(复用快照,未重访)' : '') +
                 (detailListSelector ? `(本项产出 ${produced.length} 行,累计 ${rows.length} 行)` : '')
         );
+    }
+    if (resume) {
+        logInfo(`详情阶段完成:复用 ${reusedCount} 项,实抓 ${fetchedCount} 项,共 ${rows.length} 行。`);
     }
     return rows;
 }
@@ -634,6 +665,35 @@ function defaultDetailRow(config: ListDetailExtractConfig, row: ExtractRow): Ext
         }
     }
     return row;
+}
+
+/**
+ * 从产出行里抽出「详情侧」的值(按 detailFields 顺序,保 key 序),供补抓快照落盘。
+ * 只存详情侧是刻意的:列表字段下次会重新采,存了反而会让「复用行的列表字段」变成旧值。
+ */
+function detailValuesOf(config: ListDetailExtractConfig, rows: ExtractRow[]): ExtractRow[] {
+    return rows.map((r) => {
+        const out: ExtractRow = {};
+        for (const field of config.detailFields) {
+            out[field.name] = r[field.name] ?? '';
+        }
+        return out;
+    });
+}
+
+/**
+ * 判定「详情字段全空」——补抓的缺失判据。
+ * 与每个字段的**空基线** `cleanFieldValue(field, '')` 比较,而不是与 '' 比较:于是配了 `default`
+ * 的字段天然免疫(失败行的值就是 default,等于空基线 → 仍判为空),不会被误当成「抓到了」。
+ * 0 行(子列表 0 命中)也算空。
+ */
+function detailAllEmpty(config: ListDetailExtractConfig, rows: ExtractRow[]): boolean {
+    if (rows.length === 0) {
+        return true;
+    }
+    return rows.every((r) =>
+        config.detailFields.every((field) => (r[field.name] ?? '') === cleanFieldValue(field, ''))
+    );
 }
 
 /**
