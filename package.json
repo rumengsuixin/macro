@@ -84,8 +84,7 @@
         },
         "mac": {
             "target": [
-                "dmg",
-                "zip"
+                "dmg"
             ],
             "icon": "assets/icon.icns",
             "category": "public.app-category.productivity"
